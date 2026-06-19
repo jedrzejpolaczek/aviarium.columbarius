@@ -97,10 +97,12 @@ def _price_con(rows: list[dict]) -> duckdb.DuckDBPyConnection:
 
 class TestBuildCardFeatures:
     def test_excludes_null_uuid_rows(self) -> None:
-        con = _card_con([
-            {"uuid": None, "scryfall_id": "sf1", "name": "Scryfall Only"},
-            {"uuid": "u1", "scryfall_id": "sf2", "name": "Real Card"},
-        ])
+        con = _card_con(
+            [
+                {"uuid": None, "scryfall_id": "sf1", "name": "Scryfall Only"},
+                {"uuid": "u1", "scryfall_id": "sf2", "name": "Real Card"},
+            ]
+        )
         result = GoldFeatureBuilders(con).build_card_features()
         assert list(result["uuid"]) == ["u1"]
 
@@ -115,32 +117,38 @@ class TestBuildCardFeatures:
         assert result.iloc[0]["mana_value"] == 20.0
 
     def test_is_legendary_from_supertypes(self) -> None:
-        con = _card_con([
-            {"uuid": "u1", "original_supertypes": ["Legendary", "Basic"]},
-            {"uuid": "u2", "original_supertypes": ["Basic"]},
-            {"uuid": "u3", "original_supertypes": []},
-        ])
+        con = _card_con(
+            [
+                {"uuid": "u1", "original_supertypes": ["Legendary", "Basic"]},
+                {"uuid": "u2", "original_supertypes": ["Basic"]},
+                {"uuid": "u3", "original_supertypes": []},
+            ]
+        )
         result = GoldFeatureBuilders(con).build_card_features().set_index("uuid")
         assert result.loc["u1", "is_legendary"]
         assert not result.loc["u2", "is_legendary"]
         assert not result.loc["u3", "is_legendary"]
 
     def test_print_count_per_oracle_id(self) -> None:
-        con = _card_con([
-            {"uuid": "u1", "oracle_id": "oracle_a"},
-            {"uuid": "u2", "oracle_id": "oracle_a"},
-            {"uuid": "u3", "oracle_id": "oracle_b"},
-        ])
+        con = _card_con(
+            [
+                {"uuid": "u1", "oracle_id": "oracle_a"},
+                {"uuid": "u2", "oracle_id": "oracle_a"},
+                {"uuid": "u3", "oracle_id": "oracle_b"},
+            ]
+        )
         result = GoldFeatureBuilders(con).build_card_features().set_index("uuid")
         assert result.loc["u1", "print_count"] == 2
         assert result.loc["u2", "print_count"] == 2
         assert result.loc["u3", "print_count"] == 1
 
     def test_finish_count_and_has_etched(self) -> None:
-        con = _card_con([
-            {"uuid": "u1", "finishes": ["nonfoil", "etched"]},
-            {"uuid": "u2", "finishes": ["nonfoil"]},
-        ])
+        con = _card_con(
+            [
+                {"uuid": "u1", "finishes": ["nonfoil", "etched"]},
+                {"uuid": "u2", "finishes": ["nonfoil"]},
+            ]
+        )
         result = GoldFeatureBuilders(con).build_card_features().set_index("uuid")
         assert result.loc["u1", "finish_count"] == 2
         assert result.loc["u1", "has_etched_finish"]
@@ -162,44 +170,64 @@ class TestBuildLanguagePremiums:
 
 class TestBuildPriceFeatures:
     def test_lag_1d_is_previous_row_price(self) -> None:
-        con = _price_con([
-            {"uuid": "u1", "snapshot_date": "2026-01-01", "eur": 1.0},
-            {"uuid": "u1", "snapshot_date": "2026-01-02", "eur": 2.0},
-            {"uuid": "u1", "snapshot_date": "2026-01-03", "eur": 3.0},
-        ])
+        con = _price_con(
+            [
+                {"uuid": "u1", "snapshot_date": "2026-01-01", "eur": 1.0},
+                {"uuid": "u1", "snapshot_date": "2026-01-02", "eur": 2.0},
+                {"uuid": "u1", "snapshot_date": "2026-01-03", "eur": 3.0},
+            ]
+        )
         result = GoldFeatureBuilders(con).build_price_features()
-        rows = result[result["uuid"] == "u1"].sort_values("snapshot_date").reset_index(drop=True)
+        rows = (
+            result[result["uuid"] == "u1"]
+            .sort_values("snapshot_date")
+            .reset_index(drop=True)
+        )
         assert math.isnan(rows.loc[0, "price_change_1d_abs"])
         assert rows.loc[1, "price_change_1d_abs"] == pytest.approx(1.0)
         assert rows.loc[2, "price_change_1d_abs"] == pytest.approx(1.0)
 
     def test_is_price_spike_flags_over_300_pct_change(self) -> None:
-        con = _price_con([
-            {"uuid": "u1", "snapshot_date": "2026-01-01", "eur": 1.0},
-            {"uuid": "u1", "snapshot_date": "2026-01-02", "eur": 5.0},  # +400%
-            {"uuid": "u1", "snapshot_date": "2026-01-03", "eur": 5.5},  # +10%
-        ])
+        con = _price_con(
+            [
+                {"uuid": "u1", "snapshot_date": "2026-01-01", "eur": 1.0},
+                {"uuid": "u1", "snapshot_date": "2026-01-02", "eur": 5.0},  # +400%
+                {"uuid": "u1", "snapshot_date": "2026-01-03", "eur": 5.5},  # +10%
+            ]
+        )
         result = GoldFeatureBuilders(con).build_price_features()
-        rows = result[result["uuid"] == "u1"].sort_values("snapshot_date").reset_index(drop=True)
+        rows = (
+            result[result["uuid"] == "u1"]
+            .sort_values("snapshot_date")
+            .reset_index(drop=True)
+        )
         assert rows.loc[1, "is_price_spike"]
         assert not rows.loc[2, "is_price_spike"]
 
     def test_price_ath_does_not_use_future_rows(self) -> None:
         # w_hist is bounded to ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW.
         # On 2026-01-02 the ATH must be 2.0, not 5.0 (which is a future row).
-        con = _price_con([
-            {"uuid": "u1", "snapshot_date": "2026-01-01", "eur": 2.0},
-            {"uuid": "u1", "snapshot_date": "2026-01-02", "eur": 1.0},
-            {"uuid": "u1", "snapshot_date": "2026-01-03", "eur": 5.0},
-        ])
+        con = _price_con(
+            [
+                {"uuid": "u1", "snapshot_date": "2026-01-01", "eur": 2.0},
+                {"uuid": "u1", "snapshot_date": "2026-01-02", "eur": 1.0},
+                {"uuid": "u1", "snapshot_date": "2026-01-03", "eur": 5.0},
+            ]
+        )
         result = GoldFeatureBuilders(con).build_price_features()
-        rows = result[result["uuid"] == "u1"].sort_values("snapshot_date").reset_index(drop=True)
+        rows = (
+            result[result["uuid"] == "u1"]
+            .sort_values("snapshot_date")
+            .reset_index(drop=True)
+        )
         assert rows.loc[1, "price_ath"] == pytest.approx(2.0)
 
     def test_null_edhrec_rank_when_meta_history_absent(self) -> None:
-        con = _price_con([
-            {"uuid": "u1", "snapshot_date": "2026-01-01", "eur": 1.0},
-        ])
+        con = _price_con(
+            [
+                {"uuid": "u1", "snapshot_date": "2026-01-01", "eur": 1.0},
+            ]
+        )
         result = GoldFeatureBuilders(con).build_price_features()
         import pandas as pd
 
