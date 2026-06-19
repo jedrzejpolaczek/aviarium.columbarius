@@ -1,0 +1,31 @@
+{
+  "leakage": [
+    "price_ath",
+    "price_atl",
+    "days_with_price"
+  ],
+  "risky": [
+    "edhrec_rank",
+    "price_change_7d_pct",
+    "price_change_7d_abs",
+    "price_change_30d_pct",
+    "price_change_30d_abs",
+    "is_price_spike"
+  ],
+  "safe": [
+    "eur",
+    "eur_foil",
+    "cardmarket_eur",
+    "cardmarket_eur_foil",
+    "tcgplayer_usd",
+    "tcgplayer_usd_foil",
+    "price_7d_avg",
+    "price_30d_avg",
+    "price_change_1d_abs",
+    "price_change_1d_pct",
+    "price_volatility_30d",
+    "foil_premium",
+    "price_rank_global",
+    "days_since_last_real_price"
+  ]
+}

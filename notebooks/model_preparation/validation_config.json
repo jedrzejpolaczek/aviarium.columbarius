@@ -1,0 +1,8 @@
+{
+  "status": "DEFERRED",
+  "reason": "Only 5 snapshots; need \u226551",
+  "min_test_days": 14,
+  "min_train_days": 30,
+  "val_window": 7,
+  "step": 7
+}
