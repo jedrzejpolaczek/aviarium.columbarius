@@ -33,7 +33,7 @@ docker/.env
 
 # Misc
 *.db
-PORTFOLIO_OPIS.md
+_ADDONS/*
 README.md
 Makefile
 configs/
