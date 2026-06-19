@@ -162,21 +162,14 @@ data/silver/*
 data/gold/*
 
 # Specyfics
-mtg_ml_learning_plan.html
-linkedIn.txt
 mlruns/*
 **/mlruns/
 mlflow.db
-_TRAINING
-_TRAINING/*
-_AUDIT
-_AUDIT/*
-PORTFOLIO_OPIS.md
-smoke_test*
 .cloude
 .cloude/*
 .ruff_cache
 .ruff_cache/*
+_ADDONS/*
 docs/superpowers/*
 docs/superpowers
 docs/prompts/*
