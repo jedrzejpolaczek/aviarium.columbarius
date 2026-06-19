@@ -29,27 +29,26 @@ from src.logger import get_logger
 
 logger = get_logger(__name__)
 
-_FORMATS = ["commander", "standard", "modern", "legacy", "vintage"]
-
-_EVENTS_COLS = ["event_date", "format", "event_type", "card_count"]
-
-_BAN_IMPACT_COLS = [
-    "scryfall_id",
-    "format",
-    "event_type",
-    "event_date",
-    "price_30d_before",
-    "price_7d_before",
-    "price_at_event",
-    "price_7d_after",
-    "price_30d_after",
-    "price_change_7d_pct",
-    "price_change_30d_pct",
-]
-
 
 class GoldSignalBuilders:
     """Builds event-driven and time-series signal tables from Silver history data."""
+    _FORMATS = ["commander", "standard", "modern", "legacy", "vintage"]
+
+    _EVENTS_COLS = ["event_date", "format", "event_type", "card_count"]
+
+    _BAN_IMPACT_COLS = [
+        "scryfall_id",
+        "format",
+        "event_type",
+        "event_date",
+        "price_30d_before",
+        "price_7d_before",
+        "price_at_event",
+        "price_7d_after",
+        "price_30d_after",
+        "price_change_7d_pct",
+        "price_change_30d_pct",
+    ]
 
     def __init__(self, silver_con: duckdb.DuckDBPyConnection) -> None:
         self._silver_con = silver_con
@@ -76,7 +75,7 @@ class GoldSignalBuilders:
                 else (x if isinstance(x, dict) else {})
             )
         )
-        for fmt in _FORMATS:
+        for fmt in self._FORMATS:
             df[f"{fmt}_legality"] = df["legalities"].apply(lambda x, f=fmt: x.get(f))
         return df
 
@@ -114,7 +113,7 @@ class GoldSignalBuilders:
         if df.empty:
             return df
 
-        for fmt in _FORMATS:
+        for fmt in self._FORMATS:
             prev = df.groupby("id")[f"{fmt}_legality"].shift(1)
             df[f"{fmt}_banned"] = (prev == "legal") & (
                 df[f"{fmt}_legality"] == "banned"
@@ -142,7 +141,7 @@ class GoldSignalBuilders:
             One row per (event_date, format, event_type) with card_count.
             Empty DataFrame with correct schema if no transitions detected.
         """
-        empty = pd.DataFrame(columns=_EVENTS_COLS)
+        empty = pd.DataFrame(columns=self._EVENTS_COLS)
 
         if not self._has_legality_transitions():
             logger.info(
@@ -155,7 +154,7 @@ class GoldSignalBuilders:
             return empty
 
         chunks: list[pd.DataFrame] = []
-        for fmt in _FORMATS:
+        for fmt in self._FORMATS:
             col = f"{fmt}_legality"
             prev = meta_df.groupby("id")[col].shift(1)
             for mask, event_type in [
@@ -177,7 +176,7 @@ class GoldSignalBuilders:
             return empty
 
         return (
-            pd.concat(non_empty, ignore_index=True)[_EVENTS_COLS]
+            pd.concat(non_empty, ignore_index=True)[self._EVENTS_COLS]
             .sort_values(["event_date", "format", "event_type"])
             .reset_index(drop=True)
         )
@@ -233,7 +232,7 @@ class GoldSignalBuilders:
         Returns:
             One row per (scryfall_id, format, event_type, event_date).
         """
-        empty = pd.DataFrame(columns=_BAN_IMPACT_COLS)
+        empty = pd.DataFrame(columns=self._BAN_IMPACT_COLS)
 
         if not self._has_legality_transitions():
             logger.info(
@@ -246,7 +245,7 @@ class GoldSignalBuilders:
             return empty
 
         event_chunks: list[pd.DataFrame] = []
-        for fmt in _FORMATS:
+        for fmt in self._FORMATS:
             col = f"{fmt}_legality"
             prev = meta_df.groupby("id")[col].shift(1)
             for mask, event_type in [
@@ -273,18 +272,18 @@ class GoldSignalBuilders:
 
         silver_tables = get_tables(self._silver_con)
         if "silver_prices_history" not in silver_tables:
-            for c in _BAN_IMPACT_COLS[4:]:
+            for c in self._BAN_IMPACT_COLS[4:]:
                 events_df[c] = None
-            return events_df[_BAN_IMPACT_COLS]
+            return events_df[self._BAN_IMPACT_COLS]
 
         prices_df = self._silver_con.execute(
             "SELECT scryfall_id, snapshot_date, eur FROM silver_prices_history"
         ).df()
 
         if prices_df.empty:
-            for c in _BAN_IMPACT_COLS[4:]:
+            for c in self._BAN_IMPACT_COLS[4:]:
                 events_df[c] = None
-            return events_df[_BAN_IMPACT_COLS]
+            return events_df[self._BAN_IMPACT_COLS]
 
         merged = events_df.merge(prices_df, on="scryfall_id", how="left")
         merged["days_diff"] = (
@@ -321,7 +320,7 @@ class GoldSignalBuilders:
             result["price_30d_after"] - result["price_30d_before"]
         ) / result["price_30d_before"].replace(0, float("nan"))
 
-        return result[_BAN_IMPACT_COLS]
+        return result[self._BAN_IMPACT_COLS]
 
     def build_tournament_signals(self) -> pd.DataFrame:
         """Build gold_tournament_signals from silver_tournament_results_history.

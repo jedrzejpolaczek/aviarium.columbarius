@@ -17,9 +17,8 @@
 7. [Usage](#usage)
 8. [Model Training](#model-training)
 9. [API & UI](#api--ui)
-10. [Bronze Tables](#bronze-tables)
-11. [Silver Tables](#silver-tables)
-12. [Testing](#testing)
+10. [Data Catalog](#data-catalog)
+11. [Testing](#testing)
 13. [Architecture Decision Records](#architecture-decision-records)
 14. [References](#references)
 
@@ -115,7 +114,8 @@ aviarium.columbarius/
 │   ├── silver/                      # Silver DuckDB file (gitignored)
 │   └── gold/                        # Gold DuckDB file (gitignored)
 ├── docs/
-│   └── adr/                         # Architecture Decision Records
+│   ├── adr/                         # Architecture Decision Records
+│   └── architecture/                # C4 architecture docs + data catalog
 ├── notebooks/                       # Jupyter notebooks for exploration
 ├── src/
 │   └── data/
@@ -331,43 +331,11 @@ The API starts in degraded mode if `MODEL_RUN_ID` is not set — `/health` and `
 
 ---
 
-## Bronze Tables
+## Data Catalog
 
-| Table | Mode | Content |
-|---|---|---|
-| `bronze_scryfall_cards` | full replace / upsert | All Scryfall card records |
-| `bronze_mtgjson_cards` | upsert | All MTGJson card printings |
-| `bronze_mtgjson_prices` | full replace | Current MTGJson prices |
-| `bronze_scryfall_prices_history` | append (daily) | `id`, `snapshot_date`, `prices` |
-| `bronze_scryfall_meta_history` | append (daily) | `id`, `snapshot_date`, `legalities`, `edhrec_rank`, `reserved`, `promo_types`, `finishes` |
-| `bronze_mtgjson_prices_history` | append (daily) | Full `MtgjsonCardPrices` record + `snapshot_date` |
+Full column schemas for all 22 DuckDB tables (7 Bronze · 6 Silver · 9 Gold), domain glossary, and cross-layer data lineage are documented in the data catalog:
 
-Query example (DuckDB dot notation for nested structs):
-
-```sql
-SELECT id, snapshot_date, prices.usd, prices.usd_foil
-FROM bronze_scryfall_prices_history
-ORDER BY snapshot_date DESC;
-```
-
----
-
-## Silver Tables
-
-Silver reads from Bronze and applies a ten-step config-driven cleaning pipeline before writing its own tables. The main join merges `bronze_mtgjson_cards` and `bronze_scryfall_cards` on the Scryfall UUID embedded in MTGJson's `identifiers` field; MTGJson is the authoritative source for cards present in both.
-
-Cleaning steps (declared in `silver_config.json`):
-
-1. Filter rows — drop rows where a column matches a sentinel value
-2. Drop columns — remove unused raw columns
-3. Parse JSON columns — deserialize stored JSON strings back to objects
-4. Clean strings — strip, case-normalize, replace sentinels with `None`
-5. Clean numerics — coerce to numeric, `NaN` on failure
-6. Clean lists — fill `None` with `[]`, apply per-item transforms
-7. Clean booleans — fill `None` with `False`, cast to `bool`
-8. Normalize values — expand language codes, normalize legality strings to snake_case
-9. Add computed columns — derive `errata`, type lists from `original_type`, fill `ascii_name` nulls
-10. Rename columns — apply final column name mapping
+**[docs/architecture/data/README.md](docs/architecture/data/README.md)**
 
 ---
 
