@@ -1,0 +1,48 @@
+# docker-compose.yml — runs the MTG Price API locally with mounted data and MLflow volumes.
+#
+# Usage (from the project root, not docker/):
+#   docker compose -f docker/docker-compose.yml up --build
+#
+# MODEL_RUN_ID is read from docker/.env automatically.
+# To update after retraining: edit docker/.env and restart the container.
+#
+# Why no separate database container:
+#   DuckDB is a file — no server needed. We mount data/ as a read-only volume.
+
+services:
+  api:
+    build:
+      context: ..                       # project root (pyproject.toml lives here)
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env                            # reads MODEL_RUN_ID from docker/.env
+    volumes:
+      # DuckDB database — read-only: the API never writes to it
+      - ../data:/app/data:ro
+      # MLflow tracking database (SQLite) at project root
+      - ../mlflow.db:/app/mlflow.db:ro
+      # MLflow artifact store: model weights, pipelines, etc.
+      - ../notebooks/ml_models/mlruns:/app/mlruns:ro
+    environment:
+      - GOLD_DB_PATH=/app/data/gold/cards.duckdb
+      # SQLite tracking DB mounted at /app/mlflow.db
+      - MLFLOW_TRACKING_URI=sqlite:////app/mlflow.db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s                 # allow time for model load at startup
+
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        - VITE_API_URL=http://localhost:8000
+    ports:
+      - "3000:80"
+    depends_on:
+      - api

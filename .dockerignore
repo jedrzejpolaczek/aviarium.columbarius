@@ -1,0 +1,39 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Data (mounted as volumes in docker-compose)
+data/
+**/mlruns/
+mlflow.db
+
+# Development artefacts
+notebooks/
+docs/
+tests/
+.github/
+.vscode/
+scripts/
+
+# Frontend (separate service)
+frontend/
+
+# Secrets and local config
+docker/.env
+.env
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Misc
+*.db
+PORTFOLIO_OPIS.md
+README.md
+Makefile
+configs/
