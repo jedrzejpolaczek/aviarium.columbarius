@@ -165,8 +165,6 @@ data/gold/*
 mlruns/*
 **/mlruns/
 mlflow.db
-.cloude
-.cloude/*
 .ruff_cache
 .ruff_cache/*
 _ADDONS/*

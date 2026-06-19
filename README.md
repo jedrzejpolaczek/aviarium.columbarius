@@ -21,6 +21,7 @@
 11. [Silver Tables](#silver-tables)
 12. [Testing](#testing)
 13. [Architecture Decision Records](#architecture-decision-records)
+14. [References](#references)
 
 ---
 
@@ -33,7 +34,7 @@
 | Package manager | [uv](https://docs.astral.sh/uv/) |
 | Storage | DuckDB |
 | Validation | Pydantic v2 |
-| Status | Bronze complete · Silver implemented · Gold stub |
+| Status | Bronze complete · Silver complete · Gold complete · ML training complete |
 
 **Data sources:**
 
@@ -431,6 +432,12 @@ Design decisions are documented in `docs/adr/`:
 | [ADR-009](docs/adr/ADR-009-mtgjson-priority-card-join-strategy.md) | MTGJson-priority card join strategy |
 | [ADR-010](docs/adr/ADR-010-mypy-strict-mode-quality-gate.md) | mypy strict mode as a hard quality gate |
 | [ADR-011](docs/adr/ADR-011-uv-package-manager.md) | uv as the Python package manager |
+
+---
+
+## References
+
+- [ML Project Checklist](https://threere.com/notes/machine-learning/project-checklist/) — Aurélien Géron's 8-step ML project checklist, used as a structural reference for the data and modelling pipeline.
 
 ---
 
