@@ -1,6 +1,5 @@
-import math
-
 import duckdb
+import pandas as pd
 import pytest
 
 from src.data.cards.storage.gold.features import GoldFeatureBuilders
@@ -109,7 +108,7 @@ class TestBuildCardFeatures:
     def test_mana_value_above_20_becomes_null(self) -> None:
         con = _card_con([{"uuid": "u1", "mana_value": 1_000_000}])
         result = GoldFeatureBuilders(con).build_card_features()
-        assert math.isnan(result.iloc[0]["mana_value"])
+        assert pd.isna(result.iloc[0]["mana_value"])
 
     def test_mana_value_at_20_is_kept(self) -> None:
         con = _card_con([{"uuid": "u1", "mana_value": 20.0}])
@@ -183,7 +182,7 @@ class TestBuildPriceFeatures:
             .sort_values("snapshot_date")
             .reset_index(drop=True)
         )
-        assert math.isnan(rows.loc[0, "price_change_1d_abs"])
+        assert pd.isna(rows.loc[0, "price_change_1d_abs"])
         assert rows.loc[1, "price_change_1d_abs"] == pytest.approx(1.0)
         assert rows.loc[2, "price_change_1d_abs"] == pytest.approx(1.0)
 
@@ -229,7 +228,5 @@ class TestBuildPriceFeatures:
             ]
         )
         result = GoldFeatureBuilders(con).build_price_features()
-        import pandas as pd
-
         assert "edhrec_rank" in result.columns
         assert pd.isna(result.iloc[0]["edhrec_rank"])
