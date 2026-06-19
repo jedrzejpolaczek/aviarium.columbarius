@@ -1,0 +1,161 @@
+"""Logging configuration with a custom PROGRESS level and colour output.
+
+Exposes:
+    PROGRESS          — integer log level (15, between DEBUG and INFO) for
+                        ephemeral in-place status lines.
+    ProgressLogger    — logging.Logger subclass with a .progress() method.
+    ProgressStreamHandler — StreamHandler that renders PROGRESS records as
+                        overwriting terminal lines in a TTY; falls back to
+                        plain lines when output is redirected.
+    ColorFormatter    — Formatter that colourises level names via ANSI codes.
+    get_logger(name)  — typed drop-in for logging.getLogger(name); returns a
+                        ProgressLogger so .progress() is visible to mypy.
+    setup_logging()   — configure root logging with colour output and PROGRESS
+                        support (call once at application entry point).
+"""
+
+import logging
+import sys
+from typing import Any, TextIO
+
+# ── Colour palette (ANSI codes) ───────────────────────────────────────────────
+_RESET = "\033[0m"
+_CYAN = "\033[36m"
+_GREEN = "\033[32m"
+_YELLOW = "\033[33m"
+_RED = "\033[31m"
+_GREY = "\033[90m"
+_BRED = "\033[1;31m"
+_CLEAR = "\r\033[K"  # carriage-return + erase to end of line
+
+# ── PROGRESS level (between DEBUG=10 and INFO=20) ─────────────────────────────
+# Use for ephemeral status messages that overwrite each other on one terminal
+# line (e.g. "Downloading deck 3/8 — Burn").  INFO and above are persistent.
+PROGRESS = 15
+logging.addLevelName(PROGRESS, "PROGRESS")
+
+_LEVEL_COLOURS = {
+    logging.DEBUG: _GREY,
+    PROGRESS: _GREY,
+    logging.INFO: _GREEN,
+    logging.WARNING: _YELLOW,
+    logging.ERROR: _RED,
+    logging.CRITICAL: _BRED,
+}
+
+
+# ── Formatter ─────────────────────────────────────────────────────────────────
+
+
+class ColorFormatter(logging.Formatter):
+    """Formatter that colourises the level name and logger name via ANSI codes."""
+
+    _FMT = "%(asctime)s {lvl}%(levelname)-8s{rst} {name}%(name)s{rst} — %(message)s"
+    _DATE_FMT = "%Y-%m-%d %H:%M:%S"
+
+    def __init__(self) -> None:
+        """Pre-build per-level formatters so format() does not allocate on every call."""
+        super().__init__(fmt=self._FMT, datefmt=self._DATE_FMT)
+        self._formatters: dict[int, logging.Formatter] = {
+            level: logging.Formatter(
+                self._FMT.format(lvl=colour, rst=_RESET, name=_CYAN),
+                datefmt=self._DATE_FMT,
+            )
+            for level, colour in _LEVEL_COLOURS.items()
+        }
+        self._default_formatter = logging.Formatter(
+            self._FMT.format(lvl=_RESET, rst=_RESET, name=_CYAN),
+            datefmt=self._DATE_FMT,
+        )
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Return the formatted record with ANSI colour injected for the log level."""
+        formatter = self._formatters.get(record.levelno, self._default_formatter)
+        return formatter.format(record)
+
+
+# ── Handler ───────────────────────────────────────────────────────────────────
+
+
+class ProgressStreamHandler(logging.StreamHandler[TextIO]):
+    """StreamHandler that renders PROGRESS records as in-place overwriting lines.
+
+    In a real TTY:
+        PROGRESS messages overwrite the current line (no trailing newline, grey).
+        Any higher-level record first clears the progress line, then prints
+        normally with a newline.
+
+    When output is redirected (pipes, CI logs, file capture):
+        PROGRESS messages are printed as regular lines so the log is still
+        informative; the overwrite behaviour is suppressed because \\r and
+        \\033[K land in the file as raw bytes.
+    """
+
+    def __init__(self, stream: TextIO | None = None) -> None:
+        """Initialise the handler; defaults to stderr when no stream is given."""
+        super().__init__(stream or sys.stderr)
+        self._has_progress = False
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Write *record*, overwriting the current line for PROGRESS records in a TTY."""
+        try:
+            msg = self.format(record)
+            stream = self.stream
+            is_progress = record.levelno == PROGRESS
+            # Check if we straming to terminal
+            is_teletypewriter = getattr(stream, "isatty", lambda: False)()
+
+            if is_progress and is_teletypewriter:
+                # Overwrite current line in grey — no trailing newline.
+                stream.write(f"{_CLEAR}{_GREY}{msg}{_RESET}")
+                stream.flush()
+                self._has_progress = True
+            else:
+                if self._has_progress and is_teletypewriter:
+                    # Clear the lingering progress line before the real message.
+                    stream.write(_CLEAR)
+                    self._has_progress = False
+                stream.write(msg + self.terminator)
+                stream.flush()
+        except Exception:
+            self.handleError(record)
+
+
+# ── Logger subclass with .progress() ─────────────────────────────────────────
+
+
+class ProgressLogger(logging.Logger):
+    """logging.Logger subclass that exposes a .progress() convenience method."""
+
+    def progress(self, message: object, *args: object, **kwargs: Any) -> None:
+        """Log at PROGRESS level (ephemeral overwriting line)."""
+        if self.isEnabledFor(PROGRESS):
+            self._log(PROGRESS, message, args, **kwargs)
+
+
+logging.setLoggerClass(ProgressLogger)
+
+
+def get_logger(name: str) -> ProgressLogger:
+    """Return a ProgressLogger for *name*.
+
+    Drop-in replacement for ``logging.getLogger(name)`` that gives mypy a
+    typed handle with the .progress() method.
+    """
+    return logging.getLogger(name)  # type: ignore[return-value]
+
+
+# ── Public setup ──────────────────────────────────────────────────────────────
+
+
+def setup_logging(level: int = PROGRESS) -> None:
+    """Configure root logging with colour output and PROGRESS support.
+
+    The default level is PROGRESS (15) so both ephemeral progress lines and
+    persistent INFO/WARNING/ERROR messages are shown.  Pass logging.INFO to
+    suppress progress lines entirely (e.g. in automated tests).
+    """
+    handler = ProgressStreamHandler()
+    handler.setFormatter(ColorFormatter())
+    logging.basicConfig(level=level, handlers=[handler])
+    logging.getLogger("httpx").setLevel(logging.WARNING)

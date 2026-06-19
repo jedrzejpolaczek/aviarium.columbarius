@@ -1,0 +1,99 @@
+[project]
+name = "columbarius"
+version = "0.1.0"
+description = "Magic: The Gathering card price prediction using a Bronze/Silver/Gold medallion architecture and LightGBM."
+readme = "README.md"
+requires-python = ">=3.13, <3.15"
+authors = [{ name = "Jedrzej Polaczek", email = "jedrzej.polaczek@gmail.com" }]
+license = { text = "MIT" }
+keywords = ["magic the gathering", "mtg", "price prediction", "lightgbm", "duckdb"]
+classifiers = [
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: MIT License",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+]
+dependencies = [
+    "duckdb>=1.5.2",
+    "evidently>=0.4.36",
+    "httpx>=0.28.0",
+    "lightgbm>=4.6.0",
+    "matplotlib>=3.10.9",
+    "mlflow>=3.13",
+    "numpy>=2.2.0",
+    "optuna>=4.9.0",
+    "pandas==2.3.3",
+    "pydantic>=2.13.3",
+    "plotly>=6.7.0",
+    "scikit-learn>=1.9.0",
+    "shap",
+    "tenacity>=9.1.4",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore:.*httpx.*starlette.*deprecated",
+    "ignore:Downcasting object dtype arrays:FutureWarning",
+    "ignore::DeprecationWarning:evidently",
+    "ignore::DeprecationWarning:scipy",
+    "ignore::DeprecationWarning:numpy",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6.8",
+    "mypy>=1.11.0",
+    "pytest>=8.3.0",
+    "jupyterlab>=4.5.6",
+    "jupyterlab-git>=0.52.0",
+    "jupyterlab-lsp>=5.3.0",
+    "nbdime>=4.0.4",
+    "jupyterlab-code-formatter>=3.0.3",
+    "numpy>=2.4.4",
+    "pandas>=2.3.3",
+    "pandas-stubs>=2.0.0",
+    "pydantic>=2.13.3",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.0.0",
+    "types-PyYAML>=6.0.0",
+    "scipy>=1.15.0",
+    "statsmodels>=0.14.0",
+    "seaborn>=0.13.0",
+    "pytest-asyncio>=0.26.0",
+    "pytest-cov>=7.1.0",
+    "arviz>=1.1.0",
+    "pymc>=6.0.1",
+    "ruptures>=1.1.10",
+]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+mypy_path = "."
+plugins = ["pydantic.mypy"]
+exclude = ["^_TRAINING/", "^_AUDIT/"]
+
+[[tool.mypy.overrides]]
+module = ["shap", "shap.*", "evidently", "evidently.*", "sklearn", "sklearn.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+disallow_any_generics = false
+disallow_untyped_decorators = false
+
+
+[project.urls]
+Homepage = "https://github.com/jpolaczek/aviarium.columbarius"
+Repository = "https://github.com/jpolaczek/aviarium.columbarius"
+
+[project.scripts]
+run-pipeline = "scripts.run_pipeline:main"
