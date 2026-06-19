@@ -77,7 +77,7 @@ python_version = "3.13"
 strict = true
 mypy_path = "."
 plugins = ["pydantic.mypy"]
-exclude = ["^_TRAINING/", "^_AUDIT/"]
+exclude = ["^_ADDONS/"]
 
 [[tool.mypy.overrides]]
 module = ["shap", "shap.*", "evidently", "evidently.*", "sklearn", "sklearn.*"]
