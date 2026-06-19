@@ -1,0 +1,8 @@
+storage:
+  bronze_duckdb_path: "data/bronze/cards.duckdb"
+  silver_duckdb_path: "data/silver/cards.duckdb"
+  gold_duckdb_path: "data/gold/cards.duckdb"
+  silver_config_path: "configs/silver_config.json"
+  gold_config_path: "configs/gold_config.json"
+  bronze_config_path: "configs/bronze_config.json"
+  bronze_config_seed_path: "configs/bronze_config_seed.json"

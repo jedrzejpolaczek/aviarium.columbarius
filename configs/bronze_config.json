@@ -1,0 +1,43 @@
+{
+    "sources": [
+        {
+            "type": "scryfall",
+            "url": "https://api.scryfall.com/bulk-data/all-cards",
+            "path": "data/raw/scryfall_cards.json",
+            "flag": false
+        },
+        {
+            "type": "mtgjson_cards",
+            "url": "https://mtgjson.com/api/v5/AllPrintings.json",
+            "path": "data/raw/mtgjson_cards.json",
+            "flag": false
+        },
+        {
+            "type": "mtgjson_prices",
+            "url": "https://mtgjson.com/api/v5/AllPricesToday.json",
+            "path": "data/raw/mtgjson_prices.json",
+            "flag": false
+        }
+    ],
+
+    "format_staples": {
+        "formats": ["commander", "standard", "modern", "legacy", "vintage", "pioneer"],
+        "base_url": "https://www.mtggoldfish.com/format-staples/{format}/full/all",
+        "path": "data/raw/format_staples.json"
+    },
+
+    "tournament_results": {
+        "formats": ["modern", "legacy", "vintage", "standard", "pioneer"],
+        "list_url": "https://www.mtgtop8.com/format?f={code}",
+        "deck_url_prefix": "https://www.mtgtop8.com",
+        "format_codes": {
+            "modern":   "MO",
+            "legacy":   "LE",
+            "vintage":  "VI",
+            "standard": "ST",
+            "pioneer":  "PI"
+        },
+        "max_tournaments_per_format": 10,
+        "path": "data/raw/tournament_results.json"
+    }
+}

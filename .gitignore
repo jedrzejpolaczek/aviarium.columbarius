@@ -177,6 +177,10 @@ smoke_test*
 .cloude/*
 .ruff_cache
 .ruff_cache/*
+docs/superpowers/*
+docs/superpowers
+docs/prompts/*
+docs/prompts
 
 # Node
 node_modules/
