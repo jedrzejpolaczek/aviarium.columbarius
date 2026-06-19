@@ -1,0 +1,288 @@
+{
+    "language_map": {
+        "en":  "English",
+        "es":  "Spanish",
+        "fr":  "French",
+        "de":  "German",
+        "it":  "Italian",
+        "pt":  "Portuguese",
+        "Portuguese (Brazil)": "Portuguese (Brazil)",
+        "ja":  "Japanese",
+        "ko":  "Korean",
+        "ru":  "Russian",
+        "zhs": "Chinese Simplified",
+        "zht": "Chinese Traditional",
+        "he":  "Hebrew",
+        "la":  "Latin",
+        "grc": "Ancient Greek",
+        "ar":  "Arabic",
+        "sa":  "Sanskrit",
+        "ph":  "Phyrexian",
+        "qya": "Quenya"
+    },
+
+    "legality_map": {
+        "Legal":      "legal",
+        "Not Legal":  "not_legal",
+        "Banned":     "banned",
+        "Restricted": "restricted"
+    },
+
+    "supertypes": ["Legendary", "Basic", "Snow", "World", "Elite", "Host"],
+
+    "card_types": [
+        "Creature", "Instant", "Sorcery", "Artifact", "Enchantment",
+        "Planeswalker", "Land", "Battle", "Tribal", "Conspiracy", "Dungeon"
+    ],
+
+    "sources": {
+
+        "mtgjson_cards": {
+            "drop_entries": {
+                "is_online_only": true,
+                "is_funny":       true,
+                "is_oversized":   true
+            },
+            "drop_columns": [
+                "converted_mana_cost",
+                "face_converted_mana_cost",
+                "type",
+                "printed_type",
+                "original_type",
+                "attraction_lights",
+                "duel_deck",
+                "subsets",
+                "original_printings",
+                "rebalanced_printings",
+                "related_cards",
+                "source_products",
+                "sku_ids",
+                "purchase_urls",
+                "foreign_data",
+                "is_online_only",
+                "is_funny",
+                "is_oversized",
+                "signature",
+                "face_printed_name",
+                "face_flavor_name",
+                "hand",
+                "life",
+                "leadership_skills",
+                "original_release_date"
+            ],
+            "json_columns": [
+                "types", "supertypes", "subtypes",
+                "colors", "color_identity", "color_indicator",
+                "keywords", "produced_mana",
+                "legalities", "leadership_skills", "rulings",
+                "frame_effects", "finishes", "availability", "booster_types",
+                "artist_ids", "promo_types",
+                "other_face_ids", "card_parts",
+                "printings", "variations",
+                "identifiers", "original_type"
+            ],
+            "string_ops": {
+                "uuid":              ["strip"],
+                "name":              ["strip"],
+                "ascii_name":        ["strip"],
+                "set_code":          ["strip", "upper"],
+                "number":            ["strip", "replace_sentinel"],
+                "language":          ["strip", "title"],
+                "layout":            ["strip", "lower"],
+                "mana_cost":         ["strip", "upper", "replace_sentinel"],
+                "text":              ["strip", "replace_sentinel"],
+                "original_text":     ["strip", "replace_sentinel"],
+                "power":             ["strip", "replace_sentinel"],
+                "toughness":         ["strip", "replace_sentinel"],
+                "loyalty":           ["strip", "replace_sentinel"],
+                "defense":           ["strip", "replace_sentinel"],
+                "rarity":            ["strip", "lower"],
+                "border_color":      ["strip", "lower"],
+                "frame_version":     ["strip"],
+                "watermark":         ["strip", "lower", "replace_sentinel"],
+                "security_stamp":    ["strip", "lower", "replace_sentinel"],
+                "flavor_text":       ["strip", "replace_sentinel"],
+                "flavor_name":       ["strip", "replace_sentinel"],
+                "artist":            ["strip", "replace_sentinel"],
+                "printed_name":      ["strip", "replace_sentinel"],
+                "printed_text":      ["strip", "replace_sentinel"],
+                "face_name":         ["strip", "replace_sentinel"],
+                "side":              ["strip", "lower"]
+            },
+            "numeric_columns": [
+                "mana_value", "face_mana_value", "edhrec_rank", "edhrec_saltiness"
+            ],
+            "list_operations": {
+                "colors":          ["fill_empty", "upper"],
+                "color_identity":  ["fill_empty", "upper"],
+                "color_indicator": ["fill_empty", "upper"],
+                "produced_mana":   ["fill_empty", "upper"],
+                "printings":       ["fill_empty", "upper"],
+                "keywords":        ["fill_empty", "title"],
+                "types":           ["fill_empty", "title"],
+                "supertypes":      ["fill_empty", "title"],
+                "subtypes":        ["fill_empty", "title"],
+                "finishes":        ["fill_empty", "lower"],
+                "availability":    ["fill_empty", "lower"],
+                "frame_effects":   ["fill_empty", "lower"],
+                "booster_types":   ["fill_empty", "lower"],
+                "promo_types":     ["fill_empty", "lower"],
+                "rulings":         ["fill_empty"],
+                "artist_ids":      ["fill_empty"],
+                "other_face_ids":  ["fill_empty"],
+                "card_parts":      ["fill_empty"],
+                "variations":      ["fill_empty"]
+            },
+            "bool_columns": [
+                "is_reprint", "is_reserved", "is_promo", "is_full_art",
+                "is_textless", "is_alternative", "is_story_spotlight",
+                "is_timeshifted", "is_rebalanced", "is_game_changer",
+                "has_alternative_deck_limit", "has_content_warning"
+            ],
+            "rename_columns": {
+                "number": "collector_number"
+            }
+        },
+
+        "scryfall_cards": {
+            "drop_entries": {
+                "digital":   true,
+                "oversized": true,
+                "layout":    ["token", "double_faced_token", "emblem"]
+            },
+            "drop_columns": [
+                "object",
+                "prints_search_uri",
+                "rulings_uri",
+                "uri",
+                "scryfall_set_uri",
+                "set_search_uri",
+                "set_uri",
+                "related_uris",
+                "purchase_uris",
+                "resource_id",
+                "attraction_lights",
+                "highres_image",
+                "image_status",
+                "card_back_id",
+                "preview",
+                "digital",
+                "oversized",
+                "variation_of",
+                "life_modifier",
+                "hand_modifier",
+                "content_warning",
+                "tcgplayer_etched_id",
+                "arena_id",
+                "mtgo_id",
+                "mtgo_foil_id"
+            ],
+            "json_columns": [
+                "multiverse_ids",
+                "all_parts",
+                "card_faces",
+                "color_identity",
+                "color_indicator",
+                "colors",
+                "keywords",
+                "legalities",
+                "produced_mana",
+                "artist_ids",
+                "finishes",
+                "frame_effects",
+                "games",
+                "image_uris",
+                "prices",
+                "promo_types"
+            ],
+            "string_ops": {
+                "id":                 ["strip"],
+                "lang":               ["strip"],
+                "layout":             ["strip", "lower"],
+                "oracle_id":          ["strip"],
+                "name":               ["strip"],
+                "mana_cost":          ["strip", "upper", "replace_sentinel"],
+                "oracle_text":        ["strip", "replace_sentinel"],
+                "type_line":          ["strip"],
+                "power":              ["strip", "replace_sentinel"],
+                "toughness":          ["strip", "replace_sentinel"],
+                "loyalty":            ["strip", "replace_sentinel"],
+                "defense":            ["strip", "replace_sentinel"],
+                "artist":             ["strip", "replace_sentinel"],
+                "illustration_id":    ["strip"],
+                "border_color":       ["strip", "lower"],
+                "collector_number":   ["strip"],
+                "flavor_name":        ["strip", "replace_sentinel"],
+                "flavor_text":        ["strip", "replace_sentinel"],
+                "frame":              ["strip"],
+                "printed_name":       ["strip", "replace_sentinel"],
+                "printed_text":       ["strip", "replace_sentinel"],
+                "printed_type_line":  ["strip", "replace_sentinel"],
+                "rarity":             ["strip", "lower"],
+                "set":                ["strip", "upper"],
+                "set_id":             ["strip"],
+                "set_name":           ["strip"],
+                "set_type":           ["strip", "lower"],
+                "security_stamp":     ["strip", "lower", "replace_sentinel"],
+                "watermark":          ["strip", "lower", "replace_sentinel"],
+                "scryfall_uri":       ["strip"]
+            },
+            "numeric_columns": [
+                "tcgplayer_id", "cardmarket_id",
+                "cmc", "edhrec_rank", "penny_rank"
+            ],
+            "list_operations": {
+                "color_identity":  ["fill_empty", "upper"],
+                "color_indicator": ["fill_empty", "upper"],
+                "colors":          ["fill_empty", "upper"],
+                "produced_mana":   ["fill_empty", "upper"],
+                "keywords":        ["fill_empty", "title"],
+                "finishes":        ["fill_empty", "lower"],
+                "frame_effects":   ["fill_empty", "lower"],
+                "games":           ["fill_empty", "lower"],
+                "promo_types":     ["fill_empty", "lower"],
+                "artist_ids":      ["fill_empty"],
+                "multiverse_ids":  ["fill_empty"],
+                "all_parts":       ["fill_empty"],
+                "card_faces":      ["fill_empty"]
+            },
+            "bool_columns": [
+                "game_changer", "reserved", "booster",
+                "full_art", "promo", "reprint", "story_spotlight",
+                "textless", "variation"
+            ],
+            "rename_columns": {
+                "lang":   "language",
+                "set":    "set_code",
+                "reserved":        "is_reserved",
+                "reprint":         "is_reprint",
+                "promo":           "is_promo",
+                "full_art":        "is_full_art",
+                "textless":        "is_textless",
+                "variation":       "is_variation",
+                "booster":         "is_booster",
+                "story_spotlight": "is_story_spotlight"
+            }
+        },
+
+        "scryfall_meta_history": {
+            "drop_entries": {},
+            "drop_columns": [],
+            "json_columns": ["legalities", "promo_types", "finishes"],
+            "string_ops": {
+                "id":            ["strip"],
+                "snapshot_date": ["strip"]
+            },
+            "numeric_columns": ["edhrec_rank"],
+            "list_operations": {
+                "promo_types": ["fill_empty", "lower"],
+                "finishes":    ["fill_empty", "lower"]
+            },
+            "bool_columns": ["reserved"],
+            "rename_columns": {
+                "reserved": "is_reserved"
+            }
+        }
+
+    }
+}
