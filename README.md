@@ -400,6 +400,7 @@ Design decisions are documented in `docs/adr/`:
 | [ADR-009](docs/adr/ADR-009-mtgjson-priority-card-join-strategy.md) | MTGJson-priority card join strategy |
 | [ADR-010](docs/adr/ADR-010-mypy-strict-mode-quality-gate.md) | mypy strict mode as a hard quality gate |
 | [ADR-011](docs/adr/ADR-011-uv-package-manager.md) | uv as the Python package manager |
+| [ADR-024](docs/adr/ADR-024-duckdb-compute-layer.md) | DuckDB as the compute layer for large Silver history queries |
 
 ---
 

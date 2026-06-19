@@ -1,4 +1,5 @@
 import datetime
+import json
 import logging
 from pathlib import Path
 
@@ -586,13 +587,17 @@ class TestPipelineFormatStaples:
 
 
 def _make_meta_history(rows: list[dict]) -> pd.DataFrame:
-    """Build a silver_meta_history DataFrame from minimal row dicts."""
+    """Build a silver_meta_history DataFrame from minimal row dicts.
+
+    legalities is serialised as a JSON string to match how Silver stores it
+    (DuckDB serialises Python dicts back to VARCHAR when writing to the table).
+    """
     return pd.DataFrame(
         [
             {
                 "id": r["id"],
                 "snapshot_date": r["snapshot_date"],
-                "legalities": r.get("legalities", {}),
+                "legalities": json.dumps(r.get("legalities", {})),
                 "edhrec_rank": r.get("edhrec_rank", None),
             }
             for r in rows
@@ -1551,6 +1556,11 @@ class TestBuildDemandSignals:
         assert pd.isna(result.loc[0, "edhrec_rank_change"])
         # Day 02: 80 - 100 = -20
         assert result.loc[1, "edhrec_rank_change"] == pytest.approx(-20)
+
+    def test_returns_empty_when_meta_history_table_absent(self, tmp_path):
+        with _make_gold_storage(tmp_path, {}) as g:  # no silver tables at all
+            result = g._signals.build_demand_signals()
+        assert result.empty
 
 
 # ---------------------------------------------------------------------------

@@ -277,6 +277,7 @@ class SilverStorage(TransformStorage):
             "silver_meta_history",
             key_column="id",
         )
+        self._silver_con.execute("CHECKPOINT")
 
         # Prices history (canonical / English cards)
         today = datetime.date.today().isoformat()

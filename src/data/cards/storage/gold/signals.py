@@ -8,8 +8,6 @@ GoldSignalBuilders reads clean Silver tables and produces five Gold tables:
                               (event_date, format, event_type) with card_count.
                               Anchor table for Chow structural break tests and
                               days_since_last_ban/days_since_last_unban features.
-                              A SQL pre-check short-circuits before _load_and_parse_meta
-                              when no legality transitions exist.
     gold_format_staples     — per-(card, format, date) rolling deck-inclusion
                               averages and momentum signals.
     gold_ban_price_impact   — per-(card, format, event) EUR price windows before
@@ -17,8 +15,6 @@ GoldSignalBuilders reads clean Silver tables and produces five Gold tables:
     gold_tournament_signals — per-(oracle_id, format) top-8 appearance counts
                               and copy averages over 30-day and 90-day windows.
 """
-
-import json
 
 import duckdb
 import pandas as pd
@@ -53,39 +49,12 @@ class GoldSignalBuilders:
     def __init__(self, silver_con: duckdb.DuckDBPyConnection) -> None:
         self._silver_con = silver_con
 
-    def _load_and_parse_meta(self, extra_cols: tuple[str, ...] = ()) -> pd.DataFrame:
-        """Query silver_meta_history and expand to per-format columns.
-
-        Returns a DataFrame with columns: id, snapshot_date, legalities (dict),
-        one {fmt}_legality column per format in _FORMATS, plus any extra_cols requested.
-        Callers are responsible for dropping the legalities column if not needed.
-        """
-        # extra_cols must be hard-coded column names — not user input
-        select_cols = ", ".join(("id", "snapshot_date", "legalities") + extra_cols)
-        df = self._silver_con.execute(
-            f"SELECT {select_cols} FROM silver_meta_history"
-        ).df()
-        if df.empty:
-            return df
-        df = df.sort_values(["id", "snapshot_date"]).reset_index(drop=True)
-        df["legalities"] = df["legalities"].apply(
-            lambda x: (
-                json.loads(x)
-                if isinstance(x, str)
-                else (x if isinstance(x, dict) else {})
-            )
-        )
-        for fmt in self._FORMATS:
-            df[f"{fmt}_legality"] = df["legalities"].apply(lambda x, f=fmt: x.get(f))
-        return df
-
     def _has_legality_transitions(self) -> bool:
         """Return True if any card has more than one distinct legality value across snapshots.
 
-        Runs entirely in SQL (O(N) table scan with GROUP BY) so it avoids loading
-        silver_meta_history into Python when no transitions exist.
-        Called as a fast pre-check in build_events() and build_ban_price_impact()
-        before the expensive _load_and_parse_meta() + groupby-shift pipeline.
+        Fast SQL pre-check (O(N) GROUP BY) used by build_events() and
+        build_ban_price_impact() to skip the full window-function query when
+        the silver_meta_history table has no transitions at all.
         """
         row = self._silver_con.execute("""
             SELECT 1 FROM (
@@ -102,38 +71,65 @@ class GoldSignalBuilders:
     def build_demand_signals(self) -> pd.DataFrame:
         """Build gold_demand_signals from silver_meta_history.
 
-        Detects ban/unban events by comparing consecutive daily legality
-        snapshots per card, and computes EDHREC rank deltas as a proxy for
-        demand momentum.
-
-        Returns:
-            One row per (id, snapshot_date) with event flags and rank deltas.
+        Detects ban/unban events and EDHREC rank deltas entirely in DuckDB using
+        LAG() window functions and json_extract_string(). No data leaves DuckDB.
         """
-        df = self._load_and_parse_meta(extra_cols=("edhrec_rank",))
-        if df.empty:
-            return df
-
-        for fmt in self._FORMATS:
-            prev = df.groupby("id")[f"{fmt}_legality"].shift(1)
-            df[f"{fmt}_banned"] = (prev == "legal") & (
-                df[f"{fmt}_legality"] == "banned"
+        silver_tables = get_tables(self._silver_con)
+        if "silver_meta_history" not in silver_tables:
+            return pd.DataFrame()
+        return self._silver_con.execute("""
+            WITH lagged AS (
+                SELECT
+                    id,
+                    snapshot_date,
+                    edhrec_rank,
+                    LAG(edhrec_rank) OVER w                                          AS prev_rank,
+                    json_extract_string(legalities, '$.commander')                   AS commander_legality,
+                    LAG(json_extract_string(legalities, '$.commander')) OVER w       AS prev_commander,
+                    json_extract_string(legalities, '$.standard')                    AS standard_legality,
+                    LAG(json_extract_string(legalities, '$.standard'))  OVER w       AS prev_standard,
+                    json_extract_string(legalities, '$.modern')                      AS modern_legality,
+                    LAG(json_extract_string(legalities, '$.modern'))    OVER w       AS prev_modern,
+                    json_extract_string(legalities, '$.legacy')                      AS legacy_legality,
+                    LAG(json_extract_string(legalities, '$.legacy'))    OVER w       AS prev_legacy,
+                    json_extract_string(legalities, '$.vintage')                     AS vintage_legality,
+                    LAG(json_extract_string(legalities, '$.vintage'))   OVER w       AS prev_vintage
+                FROM silver_meta_history
+                WINDOW w AS (PARTITION BY id ORDER BY snapshot_date)
             )
-            df[f"{fmt}_unbanned"] = (prev == "banned") & (
-                df[f"{fmt}_legality"] == "legal"
-            )
-
-        prev_rank = df.groupby("id")["edhrec_rank"].shift(1)
-        df["edhrec_rank_change"] = df["edhrec_rank"] - prev_rank
-
-        return df.drop(columns=["legalities"])
+            SELECT
+                id,
+                snapshot_date,
+                edhrec_rank,
+                edhrec_rank - prev_rank                                              AS edhrec_rank_change,
+                commander_legality,
+                standard_legality,
+                modern_legality,
+                legacy_legality,
+                vintage_legality,
+                COALESCE(prev_commander = 'legal'  AND commander_legality = 'banned', FALSE) AS commander_banned,
+                COALESCE(prev_commander = 'banned' AND commander_legality = 'legal',  FALSE) AS commander_unbanned,
+                COALESCE(prev_standard  = 'legal'  AND standard_legality  = 'banned', FALSE) AS standard_banned,
+                COALESCE(prev_standard  = 'banned' AND standard_legality  = 'legal',  FALSE) AS standard_unbanned,
+                COALESCE(prev_modern    = 'legal'  AND modern_legality    = 'banned', FALSE) AS modern_banned,
+                COALESCE(prev_modern    = 'banned' AND modern_legality    = 'legal',  FALSE) AS modern_unbanned,
+                COALESCE(prev_legacy    = 'legal'  AND legacy_legality    = 'banned', FALSE) AS legacy_banned,
+                COALESCE(prev_legacy    = 'banned' AND legacy_legality    = 'legal',  FALSE) AS legacy_unbanned,
+                COALESCE(prev_vintage   = 'legal'  AND vintage_legality   = 'banned', FALSE) AS vintage_banned,
+                COALESCE(prev_vintage   = 'banned' AND vintage_legality   = 'legal',  FALSE) AS vintage_unbanned
+            FROM lagged
+            ORDER BY id, snapshot_date
+        """).df()
 
     def build_events(self) -> pd.DataFrame:
         """Build gold_events — format-level ban/unban event calendar.
 
-        Aggregates per-card legality transitions from silver_meta_history into
-        one row per (event_date, format, event_type), with a card_count of how
-        many cards were affected. Serves as the anchor table for Chow structural
-        break tests (NB06) and days_since_last_ban/days_since_last_unban features.
+        Detects legality transitions entirely in DuckDB using LAG() window
+        functions and json_extract_string(), then aggregates to one row per
+        (event_date, format, event_type) with card_count. No data leaves DuckDB.
+
+        Serves as the anchor table for Chow structural break tests (NB06) and
+        days_since_last_ban/days_since_last_unban features.
 
         event_type values: 'ban' (legal → banned), 'unban' (banned → legal).
 
@@ -149,37 +145,79 @@ class GoldSignalBuilders:
             )
             return empty
 
-        meta_df = self._load_and_parse_meta()
-        if meta_df.empty:
+        result = self._silver_con.execute("""
+            WITH lagged AS (
+                SELECT
+                    id,
+                    snapshot_date,
+                    json_extract_string(legalities, '$.commander') AS curr_commander,
+                    LAG(json_extract_string(legalities, '$.commander')) OVER w AS prev_commander,
+                    json_extract_string(legalities, '$.standard')  AS curr_standard,
+                    LAG(json_extract_string(legalities, '$.standard'))  OVER w AS prev_standard,
+                    json_extract_string(legalities, '$.modern')    AS curr_modern,
+                    LAG(json_extract_string(legalities, '$.modern'))    OVER w AS prev_modern,
+                    json_extract_string(legalities, '$.legacy')    AS curr_legacy,
+                    LAG(json_extract_string(legalities, '$.legacy'))    OVER w AS prev_legacy,
+                    json_extract_string(legalities, '$.vintage')   AS curr_vintage,
+                    LAG(json_extract_string(legalities, '$.vintage'))   OVER w AS prev_vintage
+                FROM silver_meta_history
+                WINDOW w AS (PARTITION BY id ORDER BY snapshot_date)
+            ),
+            transitions AS (
+                SELECT snapshot_date AS event_date, 'commander' AS format,
+                       CASE WHEN prev_commander = 'legal'  AND curr_commander = 'banned' THEN 'ban'
+                            WHEN prev_commander = 'banned' AND curr_commander = 'legal'  THEN 'unban'
+                       END AS event_type
+                FROM lagged
+                WHERE prev_commander IS NOT NULL
+                  AND (   (prev_commander = 'legal'  AND curr_commander = 'banned')
+                       OR (prev_commander = 'banned' AND curr_commander = 'legal'))
+                UNION ALL
+                SELECT snapshot_date, 'standard',
+                       CASE WHEN prev_standard = 'legal'  AND curr_standard = 'banned' THEN 'ban'
+                            WHEN prev_standard = 'banned' AND curr_standard = 'legal'  THEN 'unban'
+                       END
+                FROM lagged
+                WHERE prev_standard IS NOT NULL
+                  AND (   (prev_standard = 'legal'  AND curr_standard = 'banned')
+                       OR (prev_standard = 'banned' AND curr_standard = 'legal'))
+                UNION ALL
+                SELECT snapshot_date, 'modern',
+                       CASE WHEN prev_modern = 'legal'  AND curr_modern = 'banned' THEN 'ban'
+                            WHEN prev_modern = 'banned' AND curr_modern = 'legal'  THEN 'unban'
+                       END
+                FROM lagged
+                WHERE prev_modern IS NOT NULL
+                  AND (   (prev_modern = 'legal'  AND curr_modern = 'banned')
+                       OR (prev_modern = 'banned' AND curr_modern = 'legal'))
+                UNION ALL
+                SELECT snapshot_date, 'legacy',
+                       CASE WHEN prev_legacy = 'legal'  AND curr_legacy = 'banned' THEN 'ban'
+                            WHEN prev_legacy = 'banned' AND curr_legacy = 'legal'  THEN 'unban'
+                       END
+                FROM lagged
+                WHERE prev_legacy IS NOT NULL
+                  AND (   (prev_legacy = 'legal'  AND curr_legacy = 'banned')
+                       OR (prev_legacy = 'banned' AND curr_legacy = 'legal'))
+                UNION ALL
+                SELECT snapshot_date, 'vintage',
+                       CASE WHEN prev_vintage = 'legal'  AND curr_vintage = 'banned' THEN 'ban'
+                            WHEN prev_vintage = 'banned' AND curr_vintage = 'legal'  THEN 'unban'
+                       END
+                FROM lagged
+                WHERE prev_vintage IS NOT NULL
+                  AND (   (prev_vintage = 'legal'  AND curr_vintage = 'banned')
+                       OR (prev_vintage = 'banned' AND curr_vintage = 'legal'))
+            )
+            SELECT event_date, format, event_type, COUNT(*) AS card_count
+            FROM transitions
+            GROUP BY event_date, format, event_type
+            ORDER BY event_date, format, event_type
+        """).df()
+
+        if result.empty:
             return empty
-
-        chunks: list[pd.DataFrame] = []
-        for fmt in self._FORMATS:
-            col = f"{fmt}_legality"
-            prev = meta_df.groupby("id")[col].shift(1)
-            for mask, event_type in [
-                ((prev == "legal") & (meta_df[col] == "banned"), "ban"),
-                ((prev == "banned") & (meta_df[col] == "legal"), "unban"),
-            ]:
-                agg = (
-                    meta_df.loc[mask, ["snapshot_date"]]
-                    .assign(format=fmt, event_type=event_type)
-                    .groupby(["snapshot_date", "format", "event_type"])
-                    .size()
-                    .reset_index(name="card_count")
-                    .rename(columns={"snapshot_date": "event_date"})
-                )
-                chunks.append(agg)
-
-        non_empty = [c for c in chunks if not c.empty]
-        if not non_empty:
-            return empty
-
-        return (
-            pd.concat(non_empty, ignore_index=True)[self._EVENTS_COLS]
-            .sort_values(["event_date", "format", "event_type"])
-            .reset_index(drop=True)
-        )
+        return result[self._EVENTS_COLS]
 
     def build_format_staples(self) -> pd.DataFrame:
         """Build gold_format_staples from silver_format_staples_history.
@@ -218,19 +256,8 @@ class GoldSignalBuilders:
     def build_ban_price_impact(self) -> pd.DataFrame:
         """Build gold_ban_price_impact from silver_meta_history and silver_prices_history.
 
-        For each ban/unban event detected in daily legality snapshots, computes EUR
-        price windows (7d and 30d) before and after the event date. Useful for
-        correlating legality changes with price movements.
-
-        Event detection: a "banned" event fires when a format legality transitions
-        from "legal" → "banned" between two consecutive daily snapshots; "unbanned"
-        fires on the reverse transition.
-
-        Price columns are NULL when fewer than 7/30 days of price history exist
-        around the event — they fill in over time as the pipeline accumulates data.
-
-        Returns:
-            One row per (scryfall_id, format, event_type, event_date).
+        Event detection (legality transitions) runs in DuckDB SQL. Price window
+        averaging (merge + groupby) runs in pandas on the small events DataFrame.
         """
         empty = pd.DataFrame(columns=self._BAN_IMPACT_COLS)
 
@@ -240,29 +267,78 @@ class GoldSignalBuilders:
             )
             return empty
 
-        meta_df = self._load_and_parse_meta()
-        if meta_df.empty:
-            return empty
+        events_df = self._silver_con.execute("""
+            WITH lagged AS (
+                SELECT
+                    id,
+                    snapshot_date,
+                    json_extract_string(legalities, '$.commander') AS curr_commander,
+                    LAG(json_extract_string(legalities, '$.commander')) OVER w AS prev_commander,
+                    json_extract_string(legalities, '$.standard')  AS curr_standard,
+                    LAG(json_extract_string(legalities, '$.standard'))  OVER w AS prev_standard,
+                    json_extract_string(legalities, '$.modern')    AS curr_modern,
+                    LAG(json_extract_string(legalities, '$.modern'))    OVER w AS prev_modern,
+                    json_extract_string(legalities, '$.legacy')    AS curr_legacy,
+                    LAG(json_extract_string(legalities, '$.legacy'))    OVER w AS prev_legacy,
+                    json_extract_string(legalities, '$.vintage')   AS curr_vintage,
+                    LAG(json_extract_string(legalities, '$.vintage'))   OVER w AS prev_vintage
+                FROM silver_meta_history
+                WINDOW w AS (PARTITION BY id ORDER BY snapshot_date)
+            )
+            SELECT id AS scryfall_id, snapshot_date AS event_date, format, event_type
+            FROM (
+                SELECT id, snapshot_date, 'commander' AS format,
+                       CASE WHEN prev_commander = 'legal'  AND curr_commander = 'banned' THEN 'ban'
+                            WHEN prev_commander = 'banned' AND curr_commander = 'legal'  THEN 'unban'
+                       END AS event_type
+                FROM lagged
+                WHERE prev_commander IS NOT NULL
+                  AND (   (prev_commander = 'legal'  AND curr_commander = 'banned')
+                       OR (prev_commander = 'banned' AND curr_commander = 'legal'))
+                UNION ALL
+                SELECT id, snapshot_date, 'standard',
+                       CASE WHEN prev_standard = 'legal'  AND curr_standard = 'banned' THEN 'ban'
+                            WHEN prev_standard = 'banned' AND curr_standard = 'legal'  THEN 'unban'
+                       END
+                FROM lagged
+                WHERE prev_standard IS NOT NULL
+                  AND (   (prev_standard = 'legal'  AND curr_standard = 'banned')
+                       OR (prev_standard = 'banned' AND curr_standard = 'legal'))
+                UNION ALL
+                SELECT id, snapshot_date, 'modern',
+                       CASE WHEN prev_modern = 'legal'  AND curr_modern = 'banned' THEN 'ban'
+                            WHEN prev_modern = 'banned' AND curr_modern = 'legal'  THEN 'unban'
+                       END
+                FROM lagged
+                WHERE prev_modern IS NOT NULL
+                  AND (   (prev_modern = 'legal'  AND curr_modern = 'banned')
+                       OR (prev_modern = 'banned' AND curr_modern = 'legal'))
+                UNION ALL
+                SELECT id, snapshot_date, 'legacy',
+                       CASE WHEN prev_legacy = 'legal'  AND curr_legacy = 'banned' THEN 'ban'
+                            WHEN prev_legacy = 'banned' AND curr_legacy = 'legal'  THEN 'unban'
+                       END
+                FROM lagged
+                WHERE prev_legacy IS NOT NULL
+                  AND (   (prev_legacy = 'legal'  AND curr_legacy = 'banned')
+                       OR (prev_legacy = 'banned' AND curr_legacy = 'legal'))
+                UNION ALL
+                SELECT id, snapshot_date, 'vintage',
+                       CASE WHEN prev_vintage = 'legal'  AND curr_vintage = 'banned' THEN 'ban'
+                            WHEN prev_vintage = 'banned' AND curr_vintage = 'legal'  THEN 'unban'
+                       END
+                FROM lagged
+                WHERE prev_vintage IS NOT NULL
+                  AND (   (prev_vintage = 'legal'  AND curr_vintage = 'banned')
+                       OR (prev_vintage = 'banned' AND curr_vintage = 'legal'))
+            ) events
+        """).df()
 
-        event_chunks: list[pd.DataFrame] = []
-        for fmt in self._FORMATS:
-            col = f"{fmt}_legality"
-            prev = meta_df.groupby("id")[col].shift(1)
-            for mask, event_type in [
-                ((prev == "legal") & (meta_df[col] == "banned"), "ban"),
-                ((prev == "banned") & (meta_df[col] == "legal"), "unban"),
-            ]:
-                rows = meta_df.loc[mask, ["id", "snapshot_date"]].copy()
-                rows["format"] = fmt
-                rows["event_type"] = event_type
-                rows = rows.rename(
-                    columns={"id": "scryfall_id", "snapshot_date": "event_date"}
-                )
-                event_chunks.append(rows)
-
-        events_df = pd.concat(event_chunks, ignore_index=True)
         if events_df.empty:
-            snapshot_dates = meta_df["snapshot_date"].nunique()
+            _row = self._silver_con.execute(
+                "SELECT COUNT(DISTINCT snapshot_date) FROM silver_meta_history"
+            ).fetchone()
+            snapshot_dates = _row[0] if _row is not None else 0
             logger.info(
                 "No ban/unban transitions detected across %d snapshot date(s) "
                 "in silver_meta_history — gold_ban_price_impact will be empty",
