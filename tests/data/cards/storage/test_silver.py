@@ -1527,3 +1527,14 @@ class TestBuildSilverCardsSql:
                 "SELECT language FROM silver_cards WHERE scryfall_id = 'scryfall-ja'"
             ).fetchone()
             assert r is not None and r[0] == "Japanese"
+
+    def test_format_count_is_non_null_and_counts_legal_formats(self, tmp_path):
+        # legalities has commander=legal and standard=not_legal → format_count should be 1
+        with _make_storage_with_cards_bronze(
+            tmp_path, [_MTGJSON_ROW], [_SCRYFALL_ROW]
+        ) as s:
+            s._build_silver_cards_sql()
+            r = s._silver_con.execute(
+                "SELECT format_count FROM silver_cards WHERE scryfall_id = 'scryfall-a'"
+            ).fetchone()
+            assert r is not None and r[0] == 1

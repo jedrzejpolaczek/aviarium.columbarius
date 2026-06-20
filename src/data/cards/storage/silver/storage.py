@@ -346,26 +346,26 @@ final AS (
         LOWER(json_extract_string(legalities,'$.modern'))        = 'legal' AS is_modern_legal,
         LOWER(json_extract_string(legalities,'$.legacy'))        = 'legal' AS is_legacy_legal,
         (
-          (LOWER(json_extract_string(legalities,'$.standard'))    ='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.pioneer'))     ='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.modern'))      ='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.legacy'))      ='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.vintage'))     ='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.commander'))   ='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.oathbreaker')) ='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.brawl'))       ='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.historicbrawl'))='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.alchemy'))     ='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.explorer'))    ='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.historic'))    ='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.timeless'))    ='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.gladiator'))   ='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.penny'))       ='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.paupercommander'))='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.pauper'))      ='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.predh'))       ='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.premodern'))   ='legal')::INT +
-          (LOWER(json_extract_string(legalities,'$.oldschool'))   ='legal')::INT
+          COALESCE((LOWER(json_extract_string(legalities,'$.standard'))    ='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.pioneer'))     ='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.modern'))      ='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.legacy'))      ='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.vintage'))     ='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.commander'))   ='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.oathbreaker')) ='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.brawl'))       ='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.historicbrawl'))='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.alchemy'))     ='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.explorer'))    ='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.historic'))    ='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.timeless'))    ='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.gladiator'))   ='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.penny'))       ='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.paupercommander'))='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.pauper'))      ='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.predh'))       ='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.premodern'))   ='legal')::INT, 0) +
+          COALESCE((LOWER(json_extract_string(legalities,'$.oldschool'))   ='legal')::INT, 0)
         )                                                        AS format_count
     FROM deduped
 )
