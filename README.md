@@ -400,6 +400,18 @@ Design decisions are documented in `docs/adr/`:
 | [ADR-009](docs/adr/ADR-009-mtgjson-priority-card-join-strategy.md) | MTGJson-priority card join strategy |
 | [ADR-010](docs/adr/ADR-010-mypy-strict-mode-quality-gate.md) | mypy strict mode as a hard quality gate |
 | [ADR-011](docs/adr/ADR-011-uv-package-manager.md) | uv as the Python package manager |
+| [ADR-012](docs/adr/ADR-012-physical-cards-only.md) | Physical cards only — no digital formats or tix pricing |
+| [ADR-013](docs/adr/ADR-013-data-source-selection.md) | Data source selection |
+| [ADR-014](docs/adr/ADR-014-http-retry-exponential-backoff.md) | HTTP retry with exponential backoff for download functions |
+| [ADR-015](docs/adr/ADR-015-scraping-rights-review.md) | Scraping rights review for external HTML sources |
+| [ADR-016](docs/adr/ADR-016-app-src-layer-separation.md) | Separation of `app/` and `src/` layers |
+| [ADR-017](docs/adr/ADR-017-lightgbm-over-xgboost-tensorflow.md) | LightGBM as the primary gradient boosting library |
+| [ADR-018](docs/adr/ADR-018-tier-based-model-selection.md) | Tier-based model selection strategy |
+| [ADR-019](docs/adr/ADR-019-fastapi-startup-precomputation.md) | FastAPI startup pre-computation strategy |
+| [ADR-020](docs/adr/ADR-020-monitoring-and-retraining-architecture.md) | Monitoring and automated retraining architecture |
+| [ADR-021](docs/adr/ADR-021-duckdb-map-type-for-legalities.md) | DuckDB MAP type for the `legalities` column |
+| [ADR-022](docs/adr/ADR-022-gold-layer-tables.md) | Gold layer table design |
+| [ADR-023](docs/adr/ADR-023-card-recommendation-strategy.md) | Card recommendation and underpriced detection strategy |
 | [ADR-024](docs/adr/ADR-024-duckdb-compute-layer.md) | DuckDB as the compute layer for large Silver history queries |
 
 ---
