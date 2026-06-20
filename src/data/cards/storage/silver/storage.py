@@ -27,11 +27,8 @@ import pandas as pd
 
 from src.data.cards.storage.base import TransformStorage, get_tables
 from src.data.cards.storage.errors import StorageConnectionError, StorageWriteError
-from src.data.cards.storage.silver.card_join import SilverCardJoin
 from src.data.cards.storage.silver.persistence import SilverWriter
 from src.data.cards.storage.silver.prices import SilverPriceBuilder
-from src.data.cards.storage.silver.report import write_report
-from src.data.cards.storage.silver.transforms import SilverTransforms
 from src.logger import get_logger
 
 logger = get_logger(__name__)
@@ -434,13 +431,6 @@ class SilverStorage(TransformStorage):
                 f"Invalid JSON in silver config {config_path}: {e}"
             ) from e
 
-        self._transforms = SilverTransforms(
-            language_map=self._config["language_map"],
-            legality_map=self._config["legality_map"],
-            supertypes=self._config["supertypes"],
-            card_types=self._config["card_types"],
-        )
-        self._card_join = SilverCardJoin(language_map=self._config["language_map"])
         self._writer = SilverWriter(self._silver_con)
         self._prices = SilverPriceBuilder(self._bronze_con, self._silver_con)
 
@@ -449,25 +439,6 @@ class SilverStorage(TransformStorage):
         self._bronze_con.close()
         self._silver_con.close()
         logger.progress("Closed SilverStorage connections")
-
-    # ------------------------------------------------------------------
-    # Bronze loading
-    # ------------------------------------------------------------------
-
-    def _load_bronze_data(self) -> dict[str, pd.DataFrame]:
-        """Load Bronze tables referenced in the config into DataFrames.
-
-        Only tables declared as sources in silver_config.json are loaded,
-        avoiding the cost of reading history tables with millions of rows.
-        """
-        needed = {f"bronze_{name}" for name in self._config["sources"]}
-        existing = get_tables(self._bronze_con)
-        to_load = needed & existing
-        logger.progress("Loading %d Bronze tables", len(to_load))
-        return {
-            name: self._bronze_con.execute(f"SELECT * FROM {name}").df()
-            for name in to_load
-        }
 
     # ------------------------------------------------------------------
     # History appenders
@@ -653,96 +624,58 @@ class SilverStorage(TransformStorage):
     # Pipeline
     # ------------------------------------------------------------------
 
-    def _pipeline(
-        self, update: bool, report_path: str = "data/silver/transform_report.json"
-    ) -> None:
-        """Run the full Bronze → Silver transformation pipeline.
+    def _check_oracle_id_conflicts(self) -> None:
+        """Log a warning if any card name maps to more than one oracle_id.
 
-        After writing silver_cards, runs an oracle ID name conflict check
-        (EDA-01 §7): logs a warning if any card name maps to more than one
-        oracle_id, which signals a split card handling regression.
+        Signals a split-card handling regression — DFC faces should share one
+        oracle_id, not create two. Runs as a pure SQL query on silver_cards.
+        """
+        silver_tables = get_tables(self._silver_con)
+        if "silver_cards" not in silver_tables:
+            return
+        conflicts = self._silver_con.execute("""
+            SELECT name, COUNT(DISTINCT oracle_id) AS n
+            FROM silver_cards
+            WHERE oracle_id IS NOT NULL AND name IS NOT NULL
+            GROUP BY name
+            HAVING COUNT(DISTINCT oracle_id) > 1
+            LIMIT 5
+        """).fetchall()
+        if conflicts:
+            logger.warning(
+                "Oracle ID conflict check: %d name(s) map to multiple oracle_ids"
+                " — split card handling may have regressed. Examples: %s",
+                len(conflicts),
+                [r[0] for r in conflicts],
+            )
+        else:
+            logger.info("Oracle ID conflict check: 0 conflicts")
+
+    def _pipeline(self, update: bool) -> None:
+        """Run the full Bronze → Silver transformation pipeline via DuckDB SQL.
+
+        All source transformations happen in DuckDB — no pandas DataFrames are
+        allocated for Bronze data. SilverPriceBuilder is kept as-is (it already
+        reads Silver tables via SQL; its MTGJson price parsing operates on a single
+        day's rows and is too complex to express in SQL without UDFs).
 
         Args:
-            update: Unused — silver_cards always does a full_load (Scryfall is a
-                complete daily snapshot, so orphan rows from previous runs must
-                not persist). History tables use append() regardless.
-            report_path: File path where the transformation report will be written.
+            update: Unused — silver_cards always does a full rebuild (Scryfall is a
+                complete daily snapshot, so orphan rows from previous runs must not
+                persist). History tables use append-style anti-join dedup regardless.
         """
-        all_issues: list[dict[str, object]] = []
-        bronze_data = self._load_bronze_data()
-        transformed: dict[str, pd.DataFrame] = {}
-
-        for source_name, source_config in self._config["sources"].items():
-            bronze_table = f"bronze_{source_name}"
-            if bronze_table not in bronze_data:
-                logger.warning("Bronze table %r not found — skipping", bronze_table)
-                continue
-            logger.progress("Transforming %r", bronze_table)
-            df, issues = self._transforms.transform(
-                bronze_data[bronze_table], source_config
-            )
-            all_issues.extend(issues)
-            transformed[source_name] = df
-
-        # Cards — delegate to _join_cards wrapper for patchability in tests
-        cards_df = self._join_cards(transformed)
-        cards_df = self._transforms._extract_legality_features(cards_df, all_issues)
-        null_oracle = (
-            int(cards_df["oracle_id"].isna().sum())
-            if "oracle_id" in cards_df.columns
-            else 0
-        )
-        logger.debug(
-            "silver_cards: %d cards joined (%d without oracle_id)",
-            len(cards_df),
-            null_oracle,
-        )
-        # Scryfall delivers a complete daily snapshot, so silver_cards is always
-        # rebuilt from scratch.  An upsert would leave orphan rows (e.g. tokens
-        # from older runs before the layout filter was added, or cards removed
-        # from Scryfall) that silently corrupt oracle_id uniqueness checks.
-        self._writer.full_load(cards_df, "silver_cards")
-
-        # Oracle ID name conflict check (EDA-01 §7). A card name mapping to more
-        # than one oracle_id signals a split card handling regression — the front and
-        # back faces of a split card should share one oracle_id, not create two.
-        if (
-            not cards_df.empty
-            and "name" in cards_df.columns
-            and "oracle_id" in cards_df.columns
-        ):
-            conflicts = (
-                cards_df[cards_df["oracle_id"].notna() & cards_df["name"].notna()]
-                .groupby("name")["oracle_id"]
-                .nunique()
-            )
-            conflicts = conflicts[conflicts > 1]
-            if conflicts.empty:
-                logger.info("Oracle ID conflict check: 0 conflicts")
-            else:
-                logger.warning(
-                    "Oracle ID conflict check: %d name(s) map to multiple oracle_ids"
-                    " — split card handling may have regressed. Examples: %s",
-                    len(conflicts),
-                    list(conflicts.head(5).index),
-                )
-
-        # Meta history — DuckDB SQL path: ATTACHes Bronze, transforms, and
-        # dedup-inserts; filtered by silver_cards when available.
+        self._build_silver_cards_sql()
+        self._check_oracle_id_conflicts()
         self._append_meta_history_sql()
         self._silver_con.execute("CHECKPOINT")
 
-        # Prices history (canonical / English cards)
         today = datetime.date.today().isoformat()
         prices_df = self._prices.build(today)
         logger.debug(
             "silver_prices_history: %d price records for %s", len(prices_df), today
         )
-        self._writer.append(
-            prices_df, "silver_prices_history", key_column="scryfall_id"
-        )
+        self._writer.append(prices_df, "silver_prices_history", key_column="scryfall_id")
 
-        # Language variant prices (non-English Scryfall cards linked to canonical UUID)
         lang_prices_df = self._prices.build_language_prices(today)
         logger.debug(
             "silver_language_prices_history: %d language price records for %s",
@@ -755,30 +688,3 @@ class SilverStorage(TransformStorage):
 
         self._append_format_staples_history()
         self._append_tournament_results_history()
-
-        write_report(all_issues, report_path)
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _join_cards(self, cards: dict[str, pd.DataFrame]) -> pd.DataFrame:
-        """Guard-and-delegate wrapper around SilverCardJoin.join.
-
-        Checks that both required sources are present before delegating;
-        returns an empty DataFrame with a warning if either is missing.
-        Called by _pipeline and patchable in tests that need a controlled
-        cards_df without running the full join.
-
-        Args:
-            cards: Transformed DataFrames keyed by source name.
-
-        Returns:
-            Merged silver_cards DataFrame, or an empty DataFrame if either
-            source is absent.
-        """
-        if "mtgjson_cards" not in cards or "scryfall_cards" not in cards:
-            missing = [s for s in ("mtgjson_cards", "scryfall_cards") if s not in cards]
-            logger.warning("Cannot join cards — missing sources: %s", missing)
-            return pd.DataFrame()
-        return self._card_join.join(cards["mtgjson_cards"], cards["scryfall_cards"])

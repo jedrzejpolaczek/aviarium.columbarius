@@ -1,7 +1,6 @@
 import json
 import logging
 from pathlib import Path
-from unittest.mock import patch
 
 import duckdb
 import pandas as pd
@@ -569,12 +568,6 @@ class TestSilverCardJoin:
         assert "image_uris" in result.columns
         assert "id" not in result.columns
 
-    def test_missing_source_returns_empty_dataframe(self, storage):
-        # Tests the orchestration-level guard in SilverStorage._join_cards
-        # which checks for both required sources before delegating to SilverCardJoin.
-        result = storage._join_cards({"mtgjson_cards": pd.DataFrame()})
-        assert result.empty
-
     def test_scryfall_columns_duplicated_in_mtgjson_are_excluded(self, card_join):
         mtgjson = pd.DataFrame(
             {
@@ -979,32 +972,28 @@ _SCRYFALL_ROW = {
 
 class TestPopulateUpdate:
     def test_populate_with_empty_sources_does_not_raise(self, tmp_path):
-        with patch.object(SilverStorage, "_write_report", create=True):
-            with _make_storage(tmp_path) as s:
-                s.populate()
+        with _make_storage(tmp_path) as s:
+            s.populate()
 
     def test_update_with_empty_sources_does_not_raise(self, tmp_path):
-        with patch.object(SilverStorage, "_write_report", create=True):
-            with _make_storage(tmp_path) as s:
-                s.update()
+        with _make_storage(tmp_path) as s:
+            s.update()
 
     def test_pipeline_does_not_create_silver_scryfall_meta_history(self, tmp_path):
-        with patch("src.data.cards.storage.silver.storage.write_report"):
-            with _make_storage_with_meta_bronze(tmp_path, [("abc", "2026-05-11")]) as s:
-                s.populate()
-                tables = {r[0] for r in s._silver_con.execute("SHOW TABLES").fetchall()}
-                assert "silver_scryfall_meta_history" not in tables
+        with _make_storage_with_meta_bronze(tmp_path, [("abc", "2026-05-11")]) as s:
+            s.populate()
+            tables = {r[0] for r in s._silver_con.execute("SHOW TABLES").fetchall()}
+            assert "silver_scryfall_meta_history" not in tables
 
 
 class TestAppendMetaHistorySql:
     """Unit tests for SilverStorage._append_meta_history_sql."""
 
     def test_creates_silver_meta_history_table(self, tmp_path):
-        with patch("src.data.cards.storage.silver.storage.write_report"):
-            with _make_storage_with_meta_bronze(tmp_path, [("abc", "2026-06-20")]) as s:
-                s.populate()
-                tables = {r[0] for r in s._silver_con.execute("SHOW TABLES").fetchall()}
-                assert "silver_meta_history" in tables
+        with _make_storage_with_meta_bronze(tmp_path, [("abc", "2026-06-20")]) as s:
+            s.populate()
+            tables = {r[0] for r in s._silver_con.execute("SHOW TABLES").fetchall()}
+            assert "silver_meta_history" in tables
 
     def test_trims_id_and_snapshot_date(self, tmp_path):
         bronze_path = str(tmp_path / "bronze.duckdb")
@@ -1110,28 +1099,33 @@ class TestAppendMetaHistorySql:
             assert row[1] == "[]"
 
     def test_skips_duplicate_id_snapshot_date_pairs(self, tmp_path):
-        with patch("src.data.cards.storage.silver.storage.write_report"):
-            with _make_storage_with_meta_bronze(tmp_path, [("abc", "2026-06-20")]) as s:
-                s.populate()
-                s._append_meta_history_sql()  # second call must not insert duplicate
-                row = s._silver_con.execute(
-                    "SELECT count(*) FROM silver_meta_history"
-                ).fetchone()
-                assert row is not None and row[0] == 1
+        with _make_storage_with_meta_bronze(tmp_path, [("abc", "2026-06-20")]) as s:
+            s.populate()
+            s._append_meta_history_sql()  # second call must not insert duplicate
+            row = s._silver_con.execute(
+                "SELECT count(*) FROM silver_meta_history"
+            ).fetchone()
+            assert row is not None and row[0] == 1
 
     def test_filters_to_ids_in_silver_cards(self, tmp_path):
-        with patch("src.data.cards.storage.silver.storage.write_report"):
-            s = _make_storage_with_meta_bronze(
-                tmp_path,
-                [("id-keep", "2026-06-20"), ("id-drop", "2026-06-20")],
+        s = _make_storage_with_meta_bronze(
+            tmp_path,
+            [("id-keep", "2026-06-20"), ("id-drop", "2026-06-20")],
+        )
+        with s:
+            # Pre-seed silver_cards with only "id-keep" so that _append_meta_history_sql
+            # filters meta rows to ids present in silver_cards.
+            s._silver_con.execute(
+                "CREATE TABLE silver_cards (scryfall_id VARCHAR)"
             )
-            cards_mock = pd.DataFrame({"scryfall_id": ["id-keep"]})
-            with s, patch.object(s, "_join_cards", return_value=cards_mock):
-                s.populate()
-                row = s._silver_con.execute("SELECT count(*) FROM silver_meta_history").fetchone()
-                assert row is not None and row[0] == 1
-                kept = s._silver_con.execute("SELECT id FROM silver_meta_history").fetchone()
-                assert kept is not None and kept[0] == "id-keep"
+            s._silver_con.execute(
+                "INSERT INTO silver_cards VALUES ('id-keep')"
+            )
+            s._append_meta_history_sql()
+            row = s._silver_con.execute("SELECT count(*) FROM silver_meta_history").fetchone()
+            assert row is not None and row[0] == 1
+            kept = s._silver_con.execute("SELECT id FROM silver_meta_history").fetchone()
+            assert kept is not None and kept[0] == "id-keep"
 
     def test_writes_all_rows_when_silver_cards_absent(self, tmp_path):
         with _make_storage_with_meta_bronze(
@@ -1828,29 +1822,38 @@ class TestBuildLanguagePrices:
 
 
 # ---------------------------------------------------------------------------
-# SilverStorage._pipeline — oracle ID name conflict check (EDA-01 §7)
+# SilverStorage._check_oracle_id_conflicts — oracle ID name conflict check (EDA-01 §7)
 # ---------------------------------------------------------------------------
 
 
 class TestOracleIdConflictCheck:
-    def test_no_warning_when_all_names_have_unique_oracle_id(self, tmp_path, caplog):
-        cards_mock = pd.DataFrame(
-            {
-                "scryfall_id": ["s1", "s2"],
-                "name": ["CardA", "CardB"],
-                "oracle_id": ["o1", "o2"],
-            }
+    def _seed_silver_cards_with_oracle(
+        self, storage: SilverStorage, rows: list[dict]
+    ) -> None:
+        """Create silver_cards with name and oracle_id columns for conflict tests."""
+        storage._silver_con.execute(
+            "CREATE TABLE silver_cards (scryfall_id VARCHAR, name VARCHAR, oracle_id VARCHAR)"
         )
+        for row in rows:
+            storage._silver_con.execute(
+                "INSERT INTO silver_cards VALUES (?, ?, ?)",
+                [row["scryfall_id"], row["name"], row["oracle_id"]],
+            )
+
+    def test_no_warning_when_all_names_have_unique_oracle_id(self, tmp_path, caplog):
         with _make_storage(tmp_path) as s:
-            with (
-                patch.object(s, "_join_cards", return_value=cards_mock),
-                patch("src.data.cards.storage.silver.storage.write_report"),
-                caplog.at_level(
-                    logging.INFO,
-                    logger="src.data.cards.storage.silver.storage",
-                ),
+            self._seed_silver_cards_with_oracle(
+                s,
+                [
+                    {"scryfall_id": "s1", "name": "CardA", "oracle_id": "o1"},
+                    {"scryfall_id": "s2", "name": "CardB", "oracle_id": "o2"},
+                ],
+            )
+            with caplog.at_level(
+                logging.INFO,
+                logger="src.data.cards.storage.silver.storage",
             ):
-                s.populate()
+                s._check_oracle_id_conflicts()
 
         warning_records = [
             r
@@ -1863,23 +1866,19 @@ class TestOracleIdConflictCheck:
         self, tmp_path, caplog
     ):
         # "Fire // Ice" appears with two different oracle_ids — split card regression.
-        cards_mock = pd.DataFrame(
-            {
-                "scryfall_id": ["s1", "s2"],
-                "name": ["Fire // Ice", "Fire // Ice"],
-                "oracle_id": ["o1", "o2"],
-            }
-        )
         with _make_storage(tmp_path) as s:
-            with (
-                patch.object(s, "_join_cards", return_value=cards_mock),
-                patch("src.data.cards.storage.silver.storage.write_report"),
-                caplog.at_level(
-                    logging.WARNING,
-                    logger="src.data.cards.storage.silver.storage",
-                ),
+            self._seed_silver_cards_with_oracle(
+                s,
+                [
+                    {"scryfall_id": "s1", "name": "Fire // Ice", "oracle_id": "o1"},
+                    {"scryfall_id": "s2", "name": "Fire // Ice", "oracle_id": "o2"},
+                ],
+            )
+            with caplog.at_level(
+                logging.WARNING,
+                logger="src.data.cards.storage.silver.storage",
             ):
-                s.populate()
+                s._check_oracle_id_conflicts()
 
         warning_records = [
             r
