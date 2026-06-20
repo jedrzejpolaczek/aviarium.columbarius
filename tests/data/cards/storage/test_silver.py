@@ -769,6 +769,214 @@ def _make_storage_with_meta_bronze(
     return SilverStorage(bronze_path, ":memory:", str(config_path))
 
 
+def _make_minimal_mtgjson_bronze(con: duckdb.DuckDBPyConnection) -> None:
+    """Create bronze_mtgjson_cards with the columns needed by _build_silver_cards_sql."""
+    con.execute("""
+        CREATE TABLE bronze_mtgjson_cards (
+            uuid           VARCHAR,
+            name           VARCHAR,
+            ascii_name     VARCHAR,
+            set_code       VARCHAR,
+            number         VARCHAR,
+            language       VARCHAR,
+            layout         VARCHAR,
+            mana_cost      VARCHAR,
+            mana_value     DOUBLE,
+            face_mana_value DOUBLE,
+            text           VARCHAR,
+            original_text  VARCHAR,
+            original_type  VARCHAR,
+            power          VARCHAR,
+            toughness      VARCHAR,
+            loyalty        VARCHAR,
+            defense        VARCHAR,
+            rarity         VARCHAR,
+            border_color   VARCHAR,
+            frame_version  VARCHAR,
+            watermark      VARCHAR,
+            security_stamp VARCHAR,
+            flavor_text    VARCHAR,
+            flavor_name    VARCHAR,
+            artist         VARCHAR,
+            printed_name   VARCHAR,
+            printed_text   VARCHAR,
+            face_name      VARCHAR,
+            side           VARCHAR,
+            edhrec_rank    DOUBLE,
+            edhrec_saltiness DOUBLE,
+            is_online_only BOOLEAN,
+            is_funny       BOOLEAN,
+            is_oversized   BOOLEAN,
+            is_reprint     BOOLEAN,
+            is_reserved    BOOLEAN,
+            is_promo       BOOLEAN,
+            is_full_art    BOOLEAN,
+            is_textless    BOOLEAN,
+            is_alternative BOOLEAN,
+            is_story_spotlight BOOLEAN,
+            is_timeshifted BOOLEAN,
+            is_rebalanced  BOOLEAN,
+            is_game_changer BOOLEAN,
+            has_alternative_deck_limit BOOLEAN,
+            has_content_warning BOOLEAN,
+            legalities     VARCHAR,
+            identifiers    VARCHAR,
+            colors         VARCHAR,
+            color_identity VARCHAR,
+            color_indicator VARCHAR,
+            produced_mana  VARCHAR,
+            printings      VARCHAR,
+            keywords       VARCHAR,
+            finishes       VARCHAR,
+            availability   VARCHAR,
+            frame_effects  VARCHAR,
+            booster_types  VARCHAR,
+            promo_types    VARCHAR,
+            rulings        VARCHAR,
+            artist_ids     VARCHAR,
+            other_face_ids VARCHAR,
+            card_parts     VARCHAR,
+            variations     VARCHAR
+        )
+    """)
+
+
+def _make_minimal_scryfall_bronze(con: duckdb.DuckDBPyConnection) -> None:
+    """Create bronze_scryfall_cards with the columns needed by _build_silver_cards_sql."""
+    con.execute("""
+        CREATE TABLE bronze_scryfall_cards (
+            id             VARCHAR,
+            oracle_id      VARCHAR,
+            name           VARCHAR,
+            lang           VARCHAR,
+            layout         VARCHAR,
+            mana_cost      VARCHAR,
+            cmc            DOUBLE,
+            oracle_text    VARCHAR,
+            type_line      VARCHAR,
+            power          VARCHAR,
+            toughness      VARCHAR,
+            loyalty        VARCHAR,
+            defense        VARCHAR,
+            artist         VARCHAR,
+            illustration_id VARCHAR,
+            border_color   VARCHAR,
+            collector_number VARCHAR,
+            flavor_name    VARCHAR,
+            flavor_text    VARCHAR,
+            frame          VARCHAR,
+            printed_name   VARCHAR,
+            printed_text   VARCHAR,
+            printed_type_line VARCHAR,
+            rarity         VARCHAR,
+            set            VARCHAR,
+            set_id         VARCHAR,
+            set_name       VARCHAR,
+            set_type       VARCHAR,
+            security_stamp VARCHAR,
+            watermark      VARCHAR,
+            scryfall_uri   VARCHAR,
+            tcgplayer_id   DOUBLE,
+            cardmarket_id  DOUBLE,
+            edhrec_rank    DOUBLE,
+            penny_rank     DOUBLE,
+            digital        BOOLEAN,
+            oversized      BOOLEAN,
+            reserved       BOOLEAN,
+            reprint        BOOLEAN,
+            promo          BOOLEAN,
+            full_art       BOOLEAN,
+            textless       BOOLEAN,
+            variation      BOOLEAN,
+            booster        BOOLEAN,
+            story_spotlight BOOLEAN,
+            game_changer   BOOLEAN,
+            legalities     VARCHAR,
+            color_identity VARCHAR,
+            color_indicator VARCHAR,
+            colors         VARCHAR,
+            produced_mana  VARCHAR,
+            keywords       VARCHAR,
+            finishes       VARCHAR,
+            frame_effects  VARCHAR,
+            games          VARCHAR,
+            promo_types    VARCHAR,
+            artist_ids     VARCHAR,
+            multiverse_ids VARCHAR,
+            all_parts      VARCHAR,
+            card_faces     VARCHAR
+        )
+    """)
+
+
+def _make_storage_with_cards_bronze(
+    tmp_path: Path,
+    mtgjson_rows: list[dict],
+    scryfall_rows: list[dict],
+) -> SilverStorage:
+    """SilverStorage with Bronze card tables populated for SQL path tests."""
+    config = {**MINIMAL_CONFIG, "sources": {}}
+    config_path = tmp_path / "silver_config.json"
+    config_path.write_text(json.dumps(config))
+
+    bronze_path = str(tmp_path / "bronze.duckdb")
+    con = duckdb.connect(bronze_path)
+    _make_minimal_mtgjson_bronze(con)
+    _make_minimal_scryfall_bronze(con)
+
+    for row in mtgjson_rows:
+        cols = ", ".join(row.keys())
+        placeholders = ", ".join(["?"] * len(row))
+        con.execute(
+            f"INSERT INTO bronze_mtgjson_cards ({cols}) VALUES ({placeholders})",
+            list(row.values()),
+        )
+    for row in scryfall_rows:
+        cols = ", ".join(row.keys())
+        placeholders = ", ".join(["?"] * len(row))
+        con.execute(
+            f"INSERT INTO bronze_scryfall_cards ({cols}) VALUES ({placeholders})",
+            list(row.values()),
+        )
+    con.close()
+    return SilverStorage(bronze_path, ":memory:", str(config_path))
+
+
+# Minimal dicts for test rows — only required columns; rest default to NULL/false
+_MTGJSON_ROW = {
+    "uuid": "uuid-a",
+    "name": "Lightning Bolt",
+    "set_code": "M10",
+    "number": "141",
+    "language": "English",
+    "layout": "normal",
+    "rarity": "common",
+    "is_online_only": False,
+    "is_funny": False,
+    "is_oversized": False,
+    "identifiers": '{"scryfallId": "scryfall-a"}',
+    "legalities": '{"commander": "legal", "standard": "not_legal"}',
+    "colors": '["R"]',
+    "color_identity": '["R"]',
+    "finishes": '["nonfoil"]',
+}
+
+_SCRYFALL_ROW = {
+    "id": "scryfall-a",
+    "name": "Lightning Bolt",
+    "lang": "en",
+    "layout": "normal",
+    "rarity": "common",
+    "set": "m10",
+    "digital": False,
+    "oversized": False,
+    "legalities": '{"commander": "legal", "standard": "not_legal"}',
+    "colors": '["R"]',
+    "color_identity": '["R"]',
+    "finishes": '["nonfoil"]',
+}
+
+
 class TestPopulateUpdate:
     def test_populate_with_empty_sources_does_not_raise(self, tmp_path):
         with patch.object(SilverStorage, "_write_report", create=True):
@@ -1927,3 +2135,159 @@ class TestExtractLegalityFeatures:
         result = t._extract_legality_features(df, [])
         assert "is_commander_legal" not in result.columns
         assert list(result.columns) == ["name"]
+
+
+class TestBuildSilverCardsSql:
+    """Unit tests for SilverStorage._build_silver_cards_sql."""
+
+    def test_creates_silver_cards_table(self, tmp_path):
+        with _make_storage_with_cards_bronze(
+            tmp_path, [_MTGJSON_ROW], [_SCRYFALL_ROW]
+        ) as s:
+            s._build_silver_cards_sql()
+            tables = {r[0] for r in s._silver_con.execute("SHOW TABLES").fetchall()}
+            assert "silver_cards" in tables
+
+    def test_filters_out_is_online_only_mtgjson_rows(self, tmp_path):
+        online_row = {**_MTGJSON_ROW, "uuid": "uuid-online", "is_online_only": True,
+                      "identifiers": '{"scryfallId": "scryfall-online"}'}
+        scryfall_online = {**_SCRYFALL_ROW, "id": "scryfall-online"}
+        with _make_storage_with_cards_bronze(
+            tmp_path,
+            [_MTGJSON_ROW, online_row],
+            [_SCRYFALL_ROW, scryfall_online],
+        ) as s:
+            s._build_silver_cards_sql()
+            uuids = {r[0] for r in s._silver_con.execute(
+                "SELECT uuid FROM silver_cards WHERE uuid IS NOT NULL"
+            ).fetchall()}
+            assert "uuid-a" in uuids
+            assert "uuid-online" not in uuids
+
+    def test_filters_out_digital_scryfall_rows(self, tmp_path):
+        digital_scryfall = {**_SCRYFALL_ROW, "id": "scryfall-digital", "digital": True}
+        with _make_storage_with_cards_bronze(
+            tmp_path, [_MTGJSON_ROW], [_SCRYFALL_ROW, digital_scryfall]
+        ) as s:
+            s._build_silver_cards_sql()
+            ids = {r[0] for r in s._silver_con.execute(
+                "SELECT scryfall_id FROM silver_cards"
+            ).fetchall()}
+            assert "scryfall-digital" not in ids
+
+    def test_filters_out_token_layout_scryfall_rows(self, tmp_path):
+        token_scryfall = {**_SCRYFALL_ROW, "id": "scryfall-token", "layout": "token"}
+        with _make_storage_with_cards_bronze(
+            tmp_path, [_MTGJSON_ROW], [_SCRYFALL_ROW, token_scryfall]
+        ) as s:
+            s._build_silver_cards_sql()
+            ids = {r[0] for r in s._silver_con.execute(
+                "SELECT scryfall_id FROM silver_cards"
+            ).fetchall()}
+            assert "scryfall-token" not in ids
+
+    def test_joined_row_has_uuid_and_oracle_id(self, tmp_path):
+        scryfall_with_oracle = {**_SCRYFALL_ROW, "oracle_id": "oracle-a"}
+        with _make_storage_with_cards_bronze(
+            tmp_path, [_MTGJSON_ROW], [scryfall_with_oracle]
+        ) as s:
+            s._build_silver_cards_sql()
+            row = s._silver_con.execute(
+                "SELECT uuid, oracle_id FROM silver_cards WHERE scryfall_id = 'scryfall-a'"
+            ).fetchone()
+            assert row is not None
+            assert row[0] == "uuid-a"
+            assert row[1] == "oracle-a"
+
+    def test_scryfall_only_row_has_null_uuid(self, tmp_path):
+        scryfall_only = {**_SCRYFALL_ROW, "id": "scryfall-only", "lang": "ja"}
+        with _make_storage_with_cards_bronze(
+            tmp_path, [_MTGJSON_ROW], [_SCRYFALL_ROW, scryfall_only]
+        ) as s:
+            s._build_silver_cards_sql()
+            row = s._silver_con.execute(
+                "SELECT uuid FROM silver_cards WHERE scryfall_id = 'scryfall-only'"
+            ).fetchone()
+            assert row is not None and row[0] is None
+
+    def test_dfc_scryfall_id_deduplicated_to_one_row(self, tmp_path):
+        # DFC: two MTGJson rows share the same scryfall_id (front/back face)
+        back_face = {**_MTGJSON_ROW, "uuid": "uuid-back", "name": "Lightning Bolt // Back"}
+        with _make_storage_with_cards_bronze(
+            tmp_path, [_MTGJSON_ROW, back_face], [_SCRYFALL_ROW]
+        ) as s:
+            s._build_silver_cards_sql()
+            count = s._silver_con.execute(
+                "SELECT count(*) FROM silver_cards WHERE scryfall_id = 'scryfall-a'"
+            ).fetchone()
+            assert count is not None and count[0] == 1
+
+    def test_is_commander_legal_extracted_from_legalities(self, tmp_path):
+        with _make_storage_with_cards_bronze(
+            tmp_path, [_MTGJSON_ROW], [_SCRYFALL_ROW]
+        ) as s:
+            s._build_silver_cards_sql()
+            row = s._silver_con.execute(
+                "SELECT is_commander_legal FROM silver_cards WHERE scryfall_id = 'scryfall-a'"
+            ).fetchone()
+            assert row is not None and row[0] is True
+
+    def test_rarity_lowercased(self, tmp_path):
+        row = {**_MTGJSON_ROW, "rarity": "  RARE  "}
+        with _make_storage_with_cards_bronze(tmp_path, [row], [_SCRYFALL_ROW]) as s:
+            s._build_silver_cards_sql()
+            r = s._silver_con.execute(
+                "SELECT rarity FROM silver_cards WHERE uuid = 'uuid-a'"
+            ).fetchone()
+            assert r is not None and r[0] == "rare"
+
+    def test_sentinel_replaced_with_null(self, tmp_path):
+        row = {**_MTGJSON_ROW, "artist": "_"}
+        with _make_storage_with_cards_bronze(tmp_path, [row], [_SCRYFALL_ROW]) as s:
+            s._build_silver_cards_sql()
+            r = s._silver_con.execute(
+                "SELECT artist FROM silver_cards WHERE uuid = 'uuid-a'"
+            ).fetchone()
+            assert r is not None and r[0] is None
+
+    def test_colors_stored_as_uppercase_array(self, tmp_path):
+        row = {**_MTGJSON_ROW, "colors": '["r"]'}
+        with _make_storage_with_cards_bronze(tmp_path, [row], [_SCRYFALL_ROW]) as s:
+            s._build_silver_cards_sql()
+            r = s._silver_con.execute(
+                "SELECT colors FROM silver_cards WHERE uuid = 'uuid-a'"
+            ).fetchone()
+            assert r is not None and r[0] == ["R"]
+
+    def test_original_type_parsed_into_supertypes_and_subtypes(self, tmp_path):
+        row = {**_MTGJSON_ROW, "original_type": "Legendary Creature — Human Wizard"}
+        with _make_storage_with_cards_bronze(tmp_path, [row], [_SCRYFALL_ROW]) as s:
+            s._build_silver_cards_sql()
+            r = s._silver_con.execute(
+                "SELECT original_supertypes, original_types, original_subtypes"
+                " FROM silver_cards WHERE uuid = 'uuid-a'"
+            ).fetchone()
+            assert r is not None
+            assert "Legendary" in r[0]
+            assert "Creature" in r[1]
+            assert set(r[2]) == {"Human", "Wizard"}
+
+    def test_errata_true_when_text_differs_from_original(self, tmp_path):
+        row = {**_MTGJSON_ROW, "text": "New text", "original_text": "Old text"}
+        with _make_storage_with_cards_bronze(tmp_path, [row], [_SCRYFALL_ROW]) as s:
+            s._build_silver_cards_sql()
+            r = s._silver_con.execute(
+                "SELECT errata FROM silver_cards WHERE uuid = 'uuid-a'"
+            ).fetchone()
+            assert r is not None and r[0] is True
+
+    def test_scryfall_lang_code_mapped_to_full_language_name(self, tmp_path):
+        scryfall_ja = {**_SCRYFALL_ROW, "id": "scryfall-ja", "lang": "ja"}
+        with _make_storage_with_cards_bronze(
+            tmp_path, [], [scryfall_ja]
+        ) as s:
+            s._build_silver_cards_sql()
+            r = s._silver_con.execute(
+                "SELECT language FROM silver_cards WHERE scryfall_id = 'scryfall-ja'"
+            ).fetchone()
+            assert r is not None and r[0] == "Japanese"
