@@ -6,6 +6,8 @@ and setup_logging.
 
 import io
 import logging
+import pathlib
+from collections.abc import Generator
 
 import pytest
 
@@ -21,7 +23,7 @@ from src.logger import (
 
 
 @pytest.fixture()
-def isolated_root_logger():
+def isolated_root_logger() -> Generator[logging.Logger, None, None]:
     """Save and restore root logger handlers/level around each test.
 
     setup_logging() clears root handlers to avoid duplicates; this fixture
@@ -224,14 +226,16 @@ class TestProgressLogger:
 
 
 class TestSetupLogging:
-    def test_adds_progress_stream_handler(self, isolated_root_logger) -> None:
+    def test_adds_progress_stream_handler(
+        self, isolated_root_logger: logging.Logger
+    ) -> None:
         setup_logging()
         assert any(
             isinstance(h, ProgressStreamHandler) for h in isolated_root_logger.handlers
         )
 
     def test_console_handler_level_is_progress_by_default(
-        self, isolated_root_logger
+        self, isolated_root_logger: logging.Logger
     ) -> None:
         setup_logging()
         handlers = [
@@ -242,7 +246,7 @@ class TestSetupLogging:
         assert handlers[0].level == PROGRESS
 
     def test_custom_level_applied_to_console_handler(
-        self, isolated_root_logger
+        self, isolated_root_logger: logging.Logger
     ) -> None:
         setup_logging(level=logging.WARNING)
         handlers = [
@@ -252,11 +256,13 @@ class TestSetupLogging:
         ]
         assert handlers[0].level == logging.WARNING
 
-    def test_returns_none_without_log_dir(self, isolated_root_logger) -> None:
+    def test_returns_none_without_log_dir(
+        self, isolated_root_logger: logging.Logger
+    ) -> None:
         assert setup_logging() is None
 
     def test_creates_log_file_when_log_dir_provided(
-        self, isolated_root_logger, tmp_path
+        self, isolated_root_logger: logging.Logger, tmp_path: pathlib.Path
     ) -> None:
         result = setup_logging(log_dir=tmp_path)
         assert result is not None
@@ -265,7 +271,7 @@ class TestSetupLogging:
         assert result.suffix == ".log"
 
     def test_file_handler_added_at_debug_level(
-        self, isolated_root_logger, tmp_path
+        self, isolated_root_logger: logging.Logger, tmp_path: pathlib.Path
     ) -> None:
         setup_logging(log_dir=tmp_path)
         file_handlers = [
@@ -277,7 +283,7 @@ class TestSetupLogging:
         assert file_handlers[0].level == logging.DEBUG
 
     def test_file_handler_uses_plain_formatter(
-        self, isolated_root_logger, tmp_path
+        self, isolated_root_logger: logging.Logger, tmp_path: pathlib.Path
     ) -> None:
         setup_logging(log_dir=tmp_path)
         file_handlers = [
@@ -287,6 +293,8 @@ class TestSetupLogging:
         ]
         assert isinstance(file_handlers[0].formatter, PlainFormatter)
 
-    def test_root_level_set_to_debug(self, isolated_root_logger) -> None:
+    def test_root_level_set_to_debug(
+        self, isolated_root_logger: logging.Logger
+    ) -> None:
         setup_logging()
         assert isolated_root_logger.level == logging.DEBUG

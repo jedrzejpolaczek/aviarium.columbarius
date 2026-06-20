@@ -247,35 +247,41 @@ class TestRunTimed:
 
 
 class TestLogPipelineSummary:
-    def test_logs_at_info_level(self, caplog) -> None:
+    def test_logs_at_info_level(self, caplog: pytest.LogCaptureFixture) -> None:
         import logging
 
         with caplog.at_level(logging.INFO, logger="src.data.cards.pipelines"):
             _log_pipeline_summary([("Bronze", 1.5, "ok")], total=1.5)
         assert any(r.levelno == logging.INFO for r in caplog.records)
 
-    def test_summary_contains_stage_name(self, caplog) -> None:
+    def test_summary_contains_stage_name(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         import logging
 
         with caplog.at_level(logging.INFO, logger="src.data.cards.pipelines"):
             _log_pipeline_summary([("Bronze", 1.5, "ok")], total=1.5)
         assert "Bronze" in caplog.text
 
-    def test_summary_contains_checkmark_for_ok(self, caplog) -> None:
+    def test_summary_contains_checkmark_for_ok(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         import logging
 
         with caplog.at_level(logging.INFO, logger="src.data.cards.pipelines"):
             _log_pipeline_summary([("Bronze", 1.5, "ok")], total=1.5)
         assert "✓" in caplog.text
 
-    def test_summary_contains_cross_for_error(self, caplog) -> None:
+    def test_summary_contains_cross_for_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         import logging
 
         with caplog.at_level(logging.INFO, logger="src.data.cards.pipelines"):
             _log_pipeline_summary([("Silver", 0.3, "error")], total=0.3)
         assert "✗" in caplog.text
 
-    def test_summary_contains_total(self, caplog) -> None:
+    def test_summary_contains_total(self, caplog: pytest.LogCaptureFixture) -> None:
         import logging
 
         with caplog.at_level(logging.INFO, logger="src.data.cards.pipelines"):
@@ -284,7 +290,9 @@ class TestLogPipelineSummary:
             )
         assert "Total" in caplog.text
 
-    def test_all_stages_appear_in_summary(self, caplog) -> None:
+    def test_all_stages_appear_in_summary(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         import logging
 
         stages: list[_StageResult] = [
