@@ -22,6 +22,7 @@ import datetime
 import json
 from pathlib import Path
 
+import duckdb
 import pandas as pd
 
 from src.data.cards.storage.base import TransformStorage, get_tables
@@ -78,6 +79,7 @@ class SilverStorage(TransformStorage):
         Raises:
             StorageConnectionError: If either connection cannot be established.
         """
+        self._bronze_db_path = bronze_db_path
         self._bronze_con = self._open_connection(bronze_db_path, read_only=True)
         self._silver_con = self._open_connection(silver_db_path, read_only=False)
 
@@ -194,6 +196,76 @@ class SilverStorage(TransformStorage):
         ).df()
         self._writer.append(df, "silver_format_staples_history", key_column="id")
 
+    def _append_meta_history_sql(self) -> None:
+        """Append Bronze scryfall_meta_history to Silver via DuckDB SQL.
+
+        ATTACHes the Bronze file read-only, transforms with TRIM/TRY_CAST/COALESCE/
+        lower, filters via INNER JOIN silver_cards (when available), and INSERTs via
+        anti-join dedup — same contract as DuckDBWriter.append().
+
+        legalities is passed through unchanged: Scryfall already stores values
+        lowercase and Gold reads them via json_extract_string.
+        """
+        bronze_tables = get_tables(self._bronze_con)
+        if "bronze_scryfall_meta_history" not in bronze_tables:
+            logger.warning(
+                "bronze_scryfall_meta_history not found — skipping silver_meta_history"
+            )
+            return
+
+        silver_tables = get_tables(self._silver_con)
+        has_silver_cards = "silver_cards" in silver_tables
+        join_clause = (
+            "INNER JOIN silver_cards sc ON sc.scryfall_id = b.id"
+            if has_silver_cards
+            else ""
+        )
+        if not has_silver_cards:
+            logger.warning(
+                "silver_cards not available — writing all meta_history rows unfiltered"
+            )
+
+        transform_sql = f"""
+            SELECT
+                TRIM(b.id)            AS id,
+                TRIM(b.snapshot_date) AS snapshot_date,
+                b.legalities,
+                TRY_CAST(b.edhrec_rank AS INTEGER)   AS edhrec_rank,
+                COALESCE(b.reserved::BOOLEAN, false)  AS is_reserved,
+                COALESCE(lower(b.promo_types), '[]')  AS promo_types,
+                COALESCE(lower(b.finishes),    '[]')  AS finishes
+            FROM _bronze.bronze_scryfall_meta_history b
+            {join_clause}
+        """
+        try:
+            self._silver_con.execute(
+                f"ATTACH '{self._bronze_db_path}' AS _bronze (READ_ONLY)"
+            )
+            if "silver_meta_history" not in silver_tables:
+                self._silver_con.execute(
+                    f"CREATE TABLE silver_meta_history AS {transform_sql}"
+                )
+                logger.info("Created silver_meta_history via SQL path")
+            else:
+                self._silver_con.execute(f"""
+                    INSERT INTO silver_meta_history
+                    SELECT src.*
+                    FROM ({transform_sql}) src
+                    LEFT JOIN silver_meta_history t
+                        ON  t.id            = src.id
+                        AND t.snapshot_date = src.snapshot_date
+                    WHERE t.id IS NULL
+                """)
+                logger.info("Appended to silver_meta_history via SQL path")
+        except duckdb.Error as e:
+            logger.error("Failed to append silver_meta_history via SQL: %s", e)
+            raise
+        finally:
+            try:
+                self._silver_con.execute("DETACH _bronze")
+            except duckdb.Error:
+                pass
+
     # ------------------------------------------------------------------
     # Pipeline
     # ------------------------------------------------------------------
@@ -232,6 +304,16 @@ class SilverStorage(TransformStorage):
         # Cards — delegate to _join_cards wrapper for patchability in tests
         cards_df = self._join_cards(transformed)
         cards_df = self._transforms._extract_legality_features(cards_df, all_issues)
+        null_oracle = (
+            int(cards_df["oracle_id"].isna().sum())
+            if "oracle_id" in cards_df.columns
+            else 0
+        )
+        logger.debug(
+            "silver_cards: %d cards joined (%d without oracle_id)",
+            len(cards_df),
+            null_oracle,
+        )
         # Scryfall delivers a complete daily snapshot, so silver_cards is always
         # rebuilt from scratch.  An upsert would leave orphan rows (e.g. tokens
         # from older runs before the layout filter was added, or cards removed
@@ -262,32 +344,28 @@ class SilverStorage(TransformStorage):
                     list(conflicts.head(5).index),
                 )
 
-        # Meta history — restrict to IDs in silver_cards so digital/oversized cards
-        # dropped during the card join don't leak into history.
-        meta_df = transformed.get("scryfall_meta_history", pd.DataFrame())
-        if (
-            not meta_df.empty
-            and not cards_df.empty
-            and "scryfall_id" in cards_df.columns
-        ):
-            valid_ids = set(cards_df["scryfall_id"].dropna())
-            meta_df = meta_df[meta_df["id"].isin(valid_ids)]
-        self._writer.append(
-            meta_df,
-            "silver_meta_history",
-            key_column="id",
-        )
+        # Meta history — DuckDB SQL path: ATTACHes Bronze, transforms, and
+        # dedup-inserts; filtered by silver_cards when available.
+        self._append_meta_history_sql()
         self._silver_con.execute("CHECKPOINT")
 
         # Prices history (canonical / English cards)
         today = datetime.date.today().isoformat()
         prices_df = self._prices.build(today)
+        logger.debug(
+            "silver_prices_history: %d price records for %s", len(prices_df), today
+        )
         self._writer.append(
             prices_df, "silver_prices_history", key_column="scryfall_id"
         )
 
         # Language variant prices (non-English Scryfall cards linked to canonical UUID)
         lang_prices_df = self._prices.build_language_prices(today)
+        logger.debug(
+            "silver_language_prices_history: %d language price records for %s",
+            len(lang_prices_df),
+            today,
+        )
         self._writer.append(
             lang_prices_df, "silver_language_prices_history", key_column="scryfall_id"
         )
