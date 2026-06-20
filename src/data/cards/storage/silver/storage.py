@@ -26,7 +26,7 @@ import duckdb
 import pandas as pd
 
 from src.data.cards.storage.base import TransformStorage, get_tables
-from src.data.cards.storage.errors import StorageConnectionError
+from src.data.cards.storage.errors import StorageConnectionError, StorageWriteError
 from src.data.cards.storage.silver.card_join import SilverCardJoin
 from src.data.cards.storage.silver.persistence import SilverWriter
 from src.data.cards.storage.silver.prices import SilverPriceBuilder
@@ -259,7 +259,7 @@ class SilverStorage(TransformStorage):
                 logger.info("Appended to silver_meta_history via SQL path")
         except duckdb.Error as e:
             logger.error("Failed to append silver_meta_history via SQL: %s", e)
-            raise
+            raise StorageWriteError(f"Failed to append silver_meta_history: {e}") from e
         finally:
             try:
                 self._silver_con.execute("DETACH _bronze")
