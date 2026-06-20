@@ -28,6 +28,7 @@ logger = get_logger(__name__)
 
 class GoldSignalBuilders:
     """Builds event-driven and time-series signal tables from Silver history data."""
+
     _FORMATS = ["commander", "standard", "modern", "legacy", "vintage"]
 
     _EVENTS_COLS = ["event_date", "format", "event_type", "card_count"]

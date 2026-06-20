@@ -1,20 +1,65 @@
 """Unit tests for src/logger.py.
 
-Tests cover ColorFormatter, ProgressStreamHandler, ProgressLogger, and setup_logging.
+Tests cover PlainFormatter, ColorFormatter, ProgressStreamHandler, ProgressLogger,
+and setup_logging.
 """
 
 import io
 import logging
 
+import pytest
 
 from src.logger import (
     PROGRESS,
     ColorFormatter,
+    PlainFormatter,
     ProgressLogger,
     ProgressStreamHandler,
     get_logger,
     setup_logging,
 )
+
+
+@pytest.fixture()
+def isolated_root_logger():
+    """Save and restore root logger handlers/level around each test.
+
+    setup_logging() clears root handlers to avoid duplicates; this fixture
+    ensures pytest's log-capture handler is reinstated after each test.
+    """
+    root = logging.getLogger()
+    saved_handlers = root.handlers[:]
+    saved_level = root.level
+    yield root
+    root.handlers[:] = saved_handlers
+    root.setLevel(saved_level)
+
+
+# ---------------------------------------------------------------------------
+# PlainFormatter
+# ---------------------------------------------------------------------------
+
+
+class TestPlainFormatter:
+    def test_format_returns_string(self) -> None:
+        formatter = PlainFormatter()
+        record = logging.LogRecord("test", logging.INFO, "", 0, "hello world", (), None)
+        assert isinstance(formatter.format(record), str)
+
+    def test_format_contains_message(self) -> None:
+        formatter = PlainFormatter()
+        record = logging.LogRecord("test", logging.INFO, "", 0, "my message", (), None)
+        assert "my message" in formatter.format(record)
+
+    def test_format_contains_no_ansi_codes(self) -> None:
+        formatter = PlainFormatter()
+        record = logging.LogRecord("test", logging.INFO, "", 0, "msg", (), None)
+        assert "\033[" not in formatter.format(record)
+
+    def test_format_contains_level_name(self) -> None:
+        formatter = PlainFormatter()
+        record = logging.LogRecord("test", logging.WARNING, "", 0, "msg", (), None)
+        assert "WARNING" in formatter.format(record)
 
 
 # ---------------------------------------------------------------------------
@@ -179,33 +224,69 @@ class TestProgressLogger:
 
 
 class TestSetupLogging:
-    """setup_logging wraps basicConfig, which is a no-op when root already has handlers.
+    def test_adds_progress_stream_handler(self, isolated_root_logger) -> None:
+        setup_logging()
+        assert any(
+            isinstance(h, ProgressStreamHandler) for h in isolated_root_logger.handlers
+        )
 
-    We test the arguments passed to basicConfig rather than the root-logger state,
-    because pytest's log-capture plugin always holds a handler on root during tests.
-    """
+    def test_console_handler_level_is_progress_by_default(
+        self, isolated_root_logger
+    ) -> None:
+        setup_logging()
+        handlers = [
+            h
+            for h in isolated_root_logger.handlers
+            if isinstance(h, ProgressStreamHandler)
+        ]
+        assert handlers[0].level == PROGRESS
 
-    def test_setup_logging_passes_progress_handler_to_basicconfig(self) -> None:
-        from unittest.mock import patch
+    def test_custom_level_applied_to_console_handler(
+        self, isolated_root_logger
+    ) -> None:
+        setup_logging(level=logging.WARNING)
+        handlers = [
+            h
+            for h in isolated_root_logger.handlers
+            if isinstance(h, ProgressStreamHandler)
+        ]
+        assert handlers[0].level == logging.WARNING
 
-        with patch("logging.basicConfig") as mock_bc:
-            setup_logging()
-        _, kwargs = mock_bc.call_args
-        handlers = kwargs.get("handlers", [])
-        assert any(isinstance(h, ProgressStreamHandler) for h in handlers)
+    def test_returns_none_without_log_dir(self, isolated_root_logger) -> None:
+        assert setup_logging() is None
 
-    def test_setup_logging_default_level_is_progress(self) -> None:
-        from unittest.mock import patch
+    def test_creates_log_file_when_log_dir_provided(
+        self, isolated_root_logger, tmp_path
+    ) -> None:
+        result = setup_logging(log_dir=tmp_path)
+        assert result is not None
+        assert result.exists()
+        assert result.parent == tmp_path
+        assert result.suffix == ".log"
 
-        with patch("logging.basicConfig") as mock_bc:
-            setup_logging()
-        _, kwargs = mock_bc.call_args
-        assert kwargs.get("level") == PROGRESS
+    def test_file_handler_added_at_debug_level(
+        self, isolated_root_logger, tmp_path
+    ) -> None:
+        setup_logging(log_dir=tmp_path)
+        file_handlers = [
+            h
+            for h in isolated_root_logger.handlers
+            if isinstance(h, logging.FileHandler)
+        ]
+        assert len(file_handlers) == 1
+        assert file_handlers[0].level == logging.DEBUG
 
-    def test_setup_logging_custom_level_forwarded(self) -> None:
-        from unittest.mock import patch
+    def test_file_handler_uses_plain_formatter(
+        self, isolated_root_logger, tmp_path
+    ) -> None:
+        setup_logging(log_dir=tmp_path)
+        file_handlers = [
+            h
+            for h in isolated_root_logger.handlers
+            if isinstance(h, logging.FileHandler)
+        ]
+        assert isinstance(file_handlers[0].formatter, PlainFormatter)
 
-        with patch("logging.basicConfig") as mock_bc:
-            setup_logging(level=logging.WARNING)
-        _, kwargs = mock_bc.call_args
-        assert kwargs.get("level") == logging.WARNING
+    def test_root_level_set_to_debug(self, isolated_root_logger) -> None:
+        setup_logging()
+        assert isolated_root_logger.level == logging.DEBUG

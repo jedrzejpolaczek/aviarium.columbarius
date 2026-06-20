@@ -28,6 +28,7 @@ Quick start:
     http://localhost:8000/health (health check)
 """
 
+import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -45,7 +46,7 @@ from src.ml.features.pipeline import (
     get_feature_names,
 )
 from src.ml.recommendation.similarity import SIMILARITY_FEATURES, CardSimilarityIndex
-from src.logger import get_logger
+from src.logger import get_logger, setup_logging
 from src.ml.training.tracking import load_model_from_mlflow
 
 
@@ -77,6 +78,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # pragma: no cover
     Raises:
         RuntimeError: If ``gold_price_features`` is empty (ETL not yet run).
     """
+    setup_logging(logging.INFO)
+
     # 1. Connect DuckDB (read-only — API never writes)
     app.state.db = duckdb.connect(GOLD_DB_PATH, read_only=True)
 

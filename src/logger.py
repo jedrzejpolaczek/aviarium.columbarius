@@ -16,6 +16,8 @@ Exposes:
 
 import logging
 import sys
+from datetime import datetime
+from pathlib import Path
 from typing import Any, TextIO
 
 # ── Colour palette (ANSI codes) ───────────────────────────────────────────────
@@ -45,6 +47,16 @@ _LEVEL_COLOURS = {
 
 
 # ── Formatter ─────────────────────────────────────────────────────────────────
+
+
+class PlainFormatter(logging.Formatter):
+    """Plain-text formatter for file output — no ANSI codes."""
+
+    _FMT = "%(asctime)s %(levelname)-8s %(name)s — %(message)s"
+    _DATE_FMT = "%Y-%m-%d %H:%M:%S"
+
+    def __init__(self) -> None:
+        super().__init__(fmt=self._FMT, datefmt=self._DATE_FMT)
 
 
 class ColorFormatter(logging.Formatter):
@@ -148,14 +160,43 @@ def get_logger(name: str) -> ProgressLogger:
 # ── Public setup ──────────────────────────────────────────────────────────────
 
 
-def setup_logging(level: int = PROGRESS) -> None:
-    """Configure root logging with colour output and PROGRESS support.
+def setup_logging(
+    level: int = PROGRESS,
+    log_dir: Path | str | None = None,
+) -> Path | None:
+    """Configure root logging with colour console output and optional file output.
 
     The default level is PROGRESS (15) so both ephemeral progress lines and
     persistent INFO/WARNING/ERROR messages are shown.  Pass logging.INFO to
     suppress progress lines entirely (e.g. in automated tests).
+
+    When *log_dir* is given a timestamped log file is created there at DEBUG
+    level using plain-text formatting (no ANSI codes).  The path to that file
+    is returned so callers can display it to the user.
     """
-    handler = ProgressStreamHandler()
-    handler.setFormatter(ColorFormatter())
-    logging.basicConfig(level=level, handlers=[handler])
+    console_handler = ProgressStreamHandler()
+    console_handler.setFormatter(ColorFormatter())
+    console_handler.setLevel(level)
+
+    handlers: list[logging.Handler] = [console_handler]
+    log_file: Path | None = None
+
+    if log_dir is not None:
+        log_dir = Path(log_dir)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        log_file = log_dir / f"pipeline_{timestamp}.log"
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(PlainFormatter())
+        handlers.append(file_handler)
+
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+    root.handlers.clear()
+    for h in handlers:
+        root.addHandler(h)
+
     logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    return log_file

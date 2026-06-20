@@ -172,6 +172,7 @@ docs/superpowers/*
 docs/superpowers
 docs/prompts/*
 docs/prompts
+logs/*
 
 # Node
 node_modules/
