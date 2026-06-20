@@ -733,37 +733,39 @@ class TestSilverCardJoin:
 # ---------------------------------------------------------------------------
 
 
-_META_HISTORY_SOURCE_CONFIG = {
-    "drop_entries": {},
-    "drop_columns": [],
-    "json_columns": [],
-    "string_ops": {"id": ["strip"], "snapshot_date": ["strip"]},
-    "numeric_columns": [],
-    "list_operations": {},
-    "bool_columns": [],
-    "rename_columns": {},
-}
-
-
 def _make_storage_with_meta_bronze(
-    tmp_path: Path, rows: list[tuple[str, str]]
+    tmp_path: Path,
+    rows: list[tuple[str, str]],
 ) -> SilverStorage:
-    """SilverStorage whose config includes scryfall_meta_history and bronze has rows."""
-    config = {
-        **MINIMAL_CONFIG,
-        "sources": {"scryfall_meta_history": _META_HISTORY_SOURCE_CONFIG},
-    }
+    """SilverStorage with Bronze `bronze_scryfall_meta_history` populated.
+
+    Creates the full production Bronze schema; callers supply only
+    (id, snapshot_date) — remaining columns get sensible defaults.
+    """
+    config = {**MINIMAL_CONFIG, "sources": {}}
     config_path = tmp_path / "silver_config.json"
     config_path.write_text(json.dumps(config))
 
     bronze_path = str(tmp_path / "bronze.duckdb")
     con = duckdb.connect(bronze_path)
-    df = pd.DataFrame(rows, columns=["id", "snapshot_date"])
-    con.register("_df", df)
-    con.execute("CREATE TABLE bronze_scryfall_meta_history AS SELECT * FROM _df")
-    con.unregister("_df")
+    con.execute("""
+        CREATE TABLE bronze_scryfall_meta_history (
+            id            VARCHAR,
+            snapshot_date VARCHAR,
+            legalities    VARCHAR,
+            edhrec_rank   DOUBLE,
+            reserved      BOOLEAN,
+            promo_types   VARCHAR,
+            finishes      VARCHAR
+        )
+    """)
+    for id_, snap in rows:
+        con.execute(
+            "INSERT INTO bronze_scryfall_meta_history"
+            " VALUES (?, ?, NULL, NULL, false, '[]', '[]')",
+            [id_, snap],
+        )
     con.close()
-
     return SilverStorage(bronze_path, ":memory:", str(config_path))
 
 
@@ -778,19 +780,6 @@ class TestPopulateUpdate:
             with _make_storage(tmp_path) as s:
                 s.update()
 
-    def test_pipeline_writes_meta_history_to_silver_meta_history(self, tmp_path):
-        with patch("src.data.cards.storage.silver.storage.write_report"):
-            with _make_storage_with_meta_bronze(
-                tmp_path, [("abc", "2026-05-11"), ("def", "2026-05-11")]
-            ) as s:
-                s.populate()
-                tables = {r[0] for r in s._silver_con.execute("SHOW TABLES").fetchall()}
-                assert "silver_meta_history" in tables
-                row = s._silver_con.execute(
-                    "SELECT count(*) FROM silver_meta_history"
-                ).fetchone()
-                assert row is not None and row[0] == 2
-
     def test_pipeline_does_not_create_silver_scryfall_meta_history(self, tmp_path):
         with patch("src.data.cards.storage.silver.storage.write_report"):
             with _make_storage_with_meta_bronze(tmp_path, [("abc", "2026-05-11")]) as s:
@@ -798,25 +787,151 @@ class TestPopulateUpdate:
                 tables = {r[0] for r in s._silver_con.execute("SHOW TABLES").fetchall()}
                 assert "silver_scryfall_meta_history" not in tables
 
-    def test_meta_history_filtered_to_ids_in_silver_cards(self, tmp_path):
-        # meta_df has two IDs; _join_cards is patched to return a cards_df that
-        # only contains one of them — the other should be excluded from silver_meta_history.
+
+class TestAppendMetaHistorySql:
+    """Unit tests for SilverStorage._append_meta_history_sql."""
+
+    def test_creates_silver_meta_history_table(self, tmp_path):
         with patch("src.data.cards.storage.silver.storage.write_report"):
-            s = _make_storage_with_meta_bronze(
-                tmp_path,
-                [("id-keep", "2026-05-11"), ("id-drop", "2026-05-11")],
-            )
-            cards_mock = pd.DataFrame({"scryfall_id": ["id-keep"]})
-            with s, patch.object(s, "_join_cards", return_value=cards_mock):
+            with _make_storage_with_meta_bronze(tmp_path, [("abc", "2026-06-20")]) as s:
                 s.populate()
+                tables = {r[0] for r in s._silver_con.execute("SHOW TABLES").fetchall()}
+                assert "silver_meta_history" in tables
+
+    def test_trims_id_and_snapshot_date(self, tmp_path):
+        bronze_path = str(tmp_path / "bronze.duckdb")
+        con = duckdb.connect(bronze_path)
+        con.execute("""
+            CREATE TABLE bronze_scryfall_meta_history (
+                id VARCHAR, snapshot_date VARCHAR, legalities VARCHAR,
+                edhrec_rank DOUBLE, reserved BOOLEAN, promo_types VARCHAR, finishes VARCHAR
+            )
+        """)
+        con.execute(
+            "INSERT INTO bronze_scryfall_meta_history VALUES (?, ?, NULL, NULL, false, '[]', '[]')",
+            ["  abc  ", " 2026-06-20 "],
+        )
+        con.close()
+        config_path = tmp_path / "cfg.json"
+        config_path.write_text(json.dumps({**MINIMAL_CONFIG, "sources": {}}))
+        with SilverStorage(bronze_path, ":memory:", str(config_path)) as s:
+            s._append_meta_history_sql()
+            row = s._silver_con.execute(
+                "SELECT id, snapshot_date FROM silver_meta_history"
+            ).fetchone()
+            assert row == ("abc", "2026-06-20")
+
+    def test_casts_edhrec_rank_to_integer(self, tmp_path):
+        bronze_path = str(tmp_path / "bronze.duckdb")
+        con = duckdb.connect(bronze_path)
+        con.execute("""
+            CREATE TABLE bronze_scryfall_meta_history (
+                id VARCHAR, snapshot_date VARCHAR, legalities VARCHAR,
+                edhrec_rank DOUBLE, reserved BOOLEAN, promo_types VARCHAR, finishes VARCHAR
+            )
+        """)
+        con.execute(
+            "INSERT INTO bronze_scryfall_meta_history VALUES (?, ?, NULL, ?, false, '[]', '[]')",
+            ["x", "2026-06-20", 42.0],
+        )
+        con.close()
+        config_path = tmp_path / "cfg.json"
+        config_path.write_text(json.dumps({**MINIMAL_CONFIG, "sources": {}}))
+        with SilverStorage(bronze_path, ":memory:", str(config_path)) as s:
+            s._append_meta_history_sql()
+            row = s._silver_con.execute(
+                "SELECT edhrec_rank FROM silver_meta_history"
+            ).fetchone()
+            assert row is not None and row[0] == 42
+
+    def test_renames_reserved_to_is_reserved_and_fills_nulls(self, tmp_path):
+        bronze_path = str(tmp_path / "bronze.duckdb")
+        con = duckdb.connect(bronze_path)
+        con.execute("""
+            CREATE TABLE bronze_scryfall_meta_history (
+                id VARCHAR, snapshot_date VARCHAR, legalities VARCHAR,
+                edhrec_rank DOUBLE, reserved BOOLEAN, promo_types VARCHAR, finishes VARCHAR
+            )
+        """)
+        con.execute(
+            "INSERT INTO bronze_scryfall_meta_history VALUES (?, ?, NULL, NULL, ?, '[]', '[]')",
+            ["a", "2026-06-20", None],
+        )
+        con.execute(
+            "INSERT INTO bronze_scryfall_meta_history VALUES (?, ?, NULL, NULL, ?, '[]', '[]')",
+            ["b", "2026-06-20", True],
+        )
+        con.close()
+        config_path = tmp_path / "cfg.json"
+        config_path.write_text(json.dumps({**MINIMAL_CONFIG, "sources": {}}))
+        with SilverStorage(bronze_path, ":memory:", str(config_path)) as s:
+            s._append_meta_history_sql()
+            cols = [r[0] for r in s._silver_con.execute("DESCRIBE silver_meta_history").fetchall()]
+            assert "is_reserved" in cols
+            assert "reserved" not in cols
+            rows = dict(
+                s._silver_con.execute(
+                    "SELECT id, is_reserved FROM silver_meta_history ORDER BY id"
+                ).fetchall()
+            )
+            assert rows == {"a": False, "b": True}
+
+    def test_lowercases_promo_types_and_fills_null_finishes(self, tmp_path):
+        bronze_path = str(tmp_path / "bronze.duckdb")
+        con = duckdb.connect(bronze_path)
+        con.execute("""
+            CREATE TABLE bronze_scryfall_meta_history (
+                id VARCHAR, snapshot_date VARCHAR, legalities VARCHAR,
+                edhrec_rank DOUBLE, reserved BOOLEAN, promo_types VARCHAR, finishes VARCHAR
+            )
+        """)
+        con.execute(
+            "INSERT INTO bronze_scryfall_meta_history VALUES (?, ?, NULL, NULL, false, ?, ?)",
+            ["x", "2026-06-20", '["Nonfoil","Foil"]', None],
+        )
+        con.close()
+        config_path = tmp_path / "cfg.json"
+        config_path.write_text(json.dumps({**MINIMAL_CONFIG, "sources": {}}))
+        with SilverStorage(bronze_path, ":memory:", str(config_path)) as s:
+            s._append_meta_history_sql()
+            row = s._silver_con.execute(
+                "SELECT promo_types, finishes FROM silver_meta_history"
+            ).fetchone()
+            assert row is not None
+            assert row[0] == '["nonfoil","foil"]'
+            assert row[1] == "[]"
+
+    def test_skips_duplicate_id_snapshot_date_pairs(self, tmp_path):
+        with patch("src.data.cards.storage.silver.storage.write_report"):
+            with _make_storage_with_meta_bronze(tmp_path, [("abc", "2026-06-20")]) as s:
+                s.populate()
+                s._append_meta_history_sql()  # second call must not insert duplicate
                 row = s._silver_con.execute(
                     "SELECT count(*) FROM silver_meta_history"
                 ).fetchone()
                 assert row is not None and row[0] == 1
-                kept = s._silver_con.execute(
-                    "SELECT id FROM silver_meta_history"
-                ).fetchone()
+
+    def test_filters_to_ids_in_silver_cards(self, tmp_path):
+        with patch("src.data.cards.storage.silver.storage.write_report"):
+            s = _make_storage_with_meta_bronze(
+                tmp_path,
+                [("id-keep", "2026-06-20"), ("id-drop", "2026-06-20")],
+            )
+            cards_mock = pd.DataFrame({"scryfall_id": ["id-keep"]})
+            with s, patch.object(s, "_join_cards", return_value=cards_mock):
+                s.populate()
+                row = s._silver_con.execute("SELECT count(*) FROM silver_meta_history").fetchone()
+                assert row is not None and row[0] == 1
+                kept = s._silver_con.execute("SELECT id FROM silver_meta_history").fetchone()
                 assert kept is not None and kept[0] == "id-keep"
+
+    def test_writes_all_rows_when_silver_cards_absent(self, tmp_path):
+        with _make_storage_with_meta_bronze(
+            tmp_path, [("abc", "2026-06-20"), ("def", "2026-06-20")]
+        ) as s:
+            s._append_meta_history_sql()
+            row = s._silver_con.execute("SELECT count(*) FROM silver_meta_history").fetchone()
+            assert row is not None and row[0] == 2
 
 
 # ---------------------------------------------------------------------------
