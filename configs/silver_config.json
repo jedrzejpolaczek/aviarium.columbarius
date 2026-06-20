@@ -263,25 +263,6 @@
                 "booster":         "is_booster",
                 "story_spotlight": "is_story_spotlight"
             }
-        },
-
-        "scryfall_meta_history": {
-            "drop_entries": {},
-            "drop_columns": [],
-            "json_columns": ["legalities", "promo_types", "finishes"],
-            "string_ops": {
-                "id":            ["strip"],
-                "snapshot_date": ["strip"]
-            },
-            "numeric_columns": ["edhrec_rank"],
-            "list_operations": {
-                "promo_types": ["fill_empty", "lower"],
-                "finishes":    ["fill_empty", "lower"]
-            },
-            "bool_columns": ["reserved"],
-            "rename_columns": {
-                "reserved": "is_reserved"
-            }
         }
 
     }
