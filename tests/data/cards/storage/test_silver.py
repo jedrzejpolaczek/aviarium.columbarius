@@ -36,8 +36,6 @@ def storage(tmp_path):
     s.close()
 
 
-
-
 # ---------------------------------------------------------------------------
 # populate / update (integration smoke tests)
 # ---------------------------------------------------------------------------
@@ -380,7 +378,12 @@ class TestAppendMetaHistorySql:
         config_path.write_text(json.dumps({**MINIMAL_CONFIG, "sources": {}}))
         with SilverStorage(bronze_path, ":memory:", str(config_path)) as s:
             s._append_meta_history_sql()
-            cols = [r[0] for r in s._silver_con.execute("DESCRIBE silver_meta_history").fetchall()]
+            cols = [
+                r[0]
+                for r in s._silver_con.execute(
+                    "DESCRIBE silver_meta_history"
+                ).fetchall()
+            ]
             assert "is_reserved" in cols
             assert "reserved" not in cols
             rows = dict(
@@ -432,16 +435,16 @@ class TestAppendMetaHistorySql:
         with s:
             # Pre-seed silver_cards with only "id-keep" so that _append_meta_history_sql
             # filters meta rows to ids present in silver_cards.
-            s._silver_con.execute(
-                "CREATE TABLE silver_cards (scryfall_id VARCHAR)"
-            )
-            s._silver_con.execute(
-                "INSERT INTO silver_cards VALUES ('id-keep')"
-            )
+            s._silver_con.execute("CREATE TABLE silver_cards (scryfall_id VARCHAR)")
+            s._silver_con.execute("INSERT INTO silver_cards VALUES ('id-keep')")
             s._append_meta_history_sql()
-            row = s._silver_con.execute("SELECT count(*) FROM silver_meta_history").fetchone()
+            row = s._silver_con.execute(
+                "SELECT count(*) FROM silver_meta_history"
+            ).fetchone()
             assert row is not None and row[0] == 1
-            kept = s._silver_con.execute("SELECT id FROM silver_meta_history").fetchone()
+            kept = s._silver_con.execute(
+                "SELECT id FROM silver_meta_history"
+            ).fetchone()
             assert kept is not None and kept[0] == "id-keep"
 
     def test_writes_all_rows_when_silver_cards_absent(self, tmp_path):
@@ -449,7 +452,9 @@ class TestAppendMetaHistorySql:
             tmp_path, [("abc", "2026-06-20"), ("def", "2026-06-20")]
         ) as s:
             s._append_meta_history_sql()
-            row = s._silver_con.execute("SELECT count(*) FROM silver_meta_history").fetchone()
+            row = s._silver_con.execute(
+                "SELECT count(*) FROM silver_meta_history"
+            ).fetchone()
             assert row is not None and row[0] == 2
 
 
@@ -1385,8 +1390,12 @@ class TestBuildSilverCardsSql:
             assert "silver_cards" in tables
 
     def test_filters_out_is_online_only_mtgjson_rows(self, tmp_path):
-        online_row = {**_MTGJSON_ROW, "uuid": "uuid-online", "is_online_only": True,
-                      "identifiers": '{"scryfallId": "scryfall-online"}'}
+        online_row = {
+            **_MTGJSON_ROW,
+            "uuid": "uuid-online",
+            "is_online_only": True,
+            "identifiers": '{"scryfallId": "scryfall-online"}',
+        }
         scryfall_online = {**_SCRYFALL_ROW, "id": "scryfall-online"}
         with _make_storage_with_cards_bronze(
             tmp_path,
@@ -1394,9 +1403,12 @@ class TestBuildSilverCardsSql:
             [_SCRYFALL_ROW, scryfall_online],
         ) as s:
             s._build_silver_cards_sql()
-            uuids = {r[0] for r in s._silver_con.execute(
-                "SELECT uuid FROM silver_cards WHERE uuid IS NOT NULL"
-            ).fetchall()}
+            uuids = {
+                r[0]
+                for r in s._silver_con.execute(
+                    "SELECT uuid FROM silver_cards WHERE uuid IS NOT NULL"
+                ).fetchall()
+            }
             assert "uuid-a" in uuids
             assert "uuid-online" not in uuids
 
@@ -1406,9 +1418,12 @@ class TestBuildSilverCardsSql:
             tmp_path, [_MTGJSON_ROW], [_SCRYFALL_ROW, digital_scryfall]
         ) as s:
             s._build_silver_cards_sql()
-            ids = {r[0] for r in s._silver_con.execute(
-                "SELECT scryfall_id FROM silver_cards"
-            ).fetchall()}
+            ids = {
+                r[0]
+                for r in s._silver_con.execute(
+                    "SELECT scryfall_id FROM silver_cards"
+                ).fetchall()
+            }
             assert "scryfall-digital" not in ids
 
     def test_filters_out_token_layout_scryfall_rows(self, tmp_path):
@@ -1417,9 +1432,12 @@ class TestBuildSilverCardsSql:
             tmp_path, [_MTGJSON_ROW], [_SCRYFALL_ROW, token_scryfall]
         ) as s:
             s._build_silver_cards_sql()
-            ids = {r[0] for r in s._silver_con.execute(
-                "SELECT scryfall_id FROM silver_cards"
-            ).fetchall()}
+            ids = {
+                r[0]
+                for r in s._silver_con.execute(
+                    "SELECT scryfall_id FROM silver_cards"
+                ).fetchall()
+            }
             assert "scryfall-token" not in ids
 
     def test_joined_row_has_uuid_and_oracle_id(self, tmp_path):
@@ -1448,7 +1466,11 @@ class TestBuildSilverCardsSql:
 
     def test_dfc_scryfall_id_deduplicated_to_one_row(self, tmp_path):
         # DFC: two MTGJson rows share the same scryfall_id (front/back face)
-        back_face = {**_MTGJSON_ROW, "uuid": "uuid-back", "name": "Lightning Bolt // Back"}
+        back_face = {
+            **_MTGJSON_ROW,
+            "uuid": "uuid-back",
+            "name": "Lightning Bolt // Back",
+        }
         with _make_storage_with_cards_bronze(
             tmp_path, [_MTGJSON_ROW, back_face], [_SCRYFALL_ROW]
         ) as s:
@@ -1519,9 +1541,7 @@ class TestBuildSilverCardsSql:
 
     def test_scryfall_lang_code_mapped_to_full_language_name(self, tmp_path):
         scryfall_ja = {**_SCRYFALL_ROW, "id": "scryfall-ja", "lang": "ja"}
-        with _make_storage_with_cards_bronze(
-            tmp_path, [], [scryfall_ja]
-        ) as s:
+        with _make_storage_with_cards_bronze(tmp_path, [], [scryfall_ja]) as s:
             s._build_silver_cards_sql()
             r = s._silver_con.execute(
                 "SELECT language FROM silver_cards WHERE scryfall_id = 'scryfall-ja'"

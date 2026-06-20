@@ -23,7 +23,6 @@ import json
 from pathlib import Path
 
 import duckdb
-import pandas as pd
 
 from src.data.cards.storage.base import TransformStorage, get_tables
 from src.data.cards.storage.errors import StorageConnectionError, StorageWriteError
@@ -521,7 +520,8 @@ class SilverStorage(TransformStorage):
         """
         bronze_tables = get_tables(self._bronze_con)
         missing = [
-            t for t in ("bronze_mtgjson_cards", "bronze_scryfall_cards")
+            t
+            for t in ("bronze_mtgjson_cards", "bronze_scryfall_cards")
             if t not in bronze_tables
         ]
         if missing:
@@ -674,7 +674,9 @@ class SilverStorage(TransformStorage):
         logger.debug(
             "silver_prices_history: %d price records for %s", len(prices_df), today
         )
-        self._writer.append(prices_df, "silver_prices_history", key_column="scryfall_id")
+        self._writer.append(
+            prices_df, "silver_prices_history", key_column="scryfall_id"
+        )
 
         lang_prices_df = self._prices.build_language_prices(today)
         logger.debug(

@@ -9,7 +9,7 @@ import pytest
 
 from src.data.cards.storage.gold import GoldStorage
 from src.data.cards.storage.gold.ml_dataset import GoldMLDatasetBuilder
-from src.data.cards.storage.gold.storage import GoldWriter
+from src.data.cards.storage.base import DuckDBWriter as GoldWriter
 
 
 def _make_gold_storage(
