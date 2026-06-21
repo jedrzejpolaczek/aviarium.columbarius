@@ -8,7 +8,7 @@ import pytest
 from pydantic import BaseModel
 
 from src.data.cards.storage.bronze import STORAGE_CONFIG, BronzeStorage
-from src.data.cards.storage.bronze.writers import _filter_prices_to_date, _records_to_df
+from src.data.cards.storage.bronze.storage import _filter_prices_to_date, _records_to_df
 from src.data.cards.storage.errors import StorageWriteError
 
 
