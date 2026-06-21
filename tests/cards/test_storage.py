@@ -103,7 +103,7 @@ class TestBronzeStorageInit:
 
     def test_connection_error_raises_storage_connection_error(self):
         with patch(
-            "src.data.cards.storage.base.duckdb.connect",
+            "src.data.cards.storage.base.storage.duckdb.connect",
             side_effect=duckdb.Error("locked"),
         ):
             with pytest.raises(StorageConnectionError, match="Cannot open DuckDB"):
@@ -283,7 +283,7 @@ class TestSnapshot:
         assert _count(storage, "hist") == 1
 
     def test_snapshot_row_contains_key_and_date(self, storage):
-        with patch("src.data.cards.storage.bronze.writers.date") as mock_date:
+        with patch("src.data.cards.storage.bronze.storage.date") as mock_date:
             mock_date.today.return_value = date(2026, 1, 1)
             storage._snapshot(
                 [_Card(id="42", name="A")], key_column="id", history_table="hist"
@@ -295,7 +295,7 @@ class TestSnapshot:
 
     def test_idempotent_on_same_day(self, storage):
         records = [_Card(id="1", name="A")]
-        with patch("src.data.cards.storage.bronze.writers.date") as mock_date:
+        with patch("src.data.cards.storage.bronze.storage.date") as mock_date:
             mock_date.today.return_value = date(2026, 1, 1)
             storage._snapshot(records, key_column="id", history_table="hist")
             storage._snapshot(records, key_column="id", history_table="hist")
@@ -304,7 +304,7 @@ class TestSnapshot:
 
     def test_different_date_adds_new_row(self, storage):
         records = [_Card(id="1", name="A")]
-        with patch("src.data.cards.storage.bronze.writers.date") as mock_date:
+        with patch("src.data.cards.storage.bronze.storage.date") as mock_date:
             mock_date.today.return_value = date(2026, 1, 1)
             storage._snapshot(records, key_column="id", history_table="hist")
 
@@ -641,5 +641,5 @@ class TestSeedHistoricalPrices:
         # DuckDB's C-level execute is read-only; replace _con with a MagicMock instead.
         storage._con = MagicMock()
         storage._con.execute.side_effect = duckdb.Error("disk full")
-        with pytest.raises(StorageWriteError, match="Failed to seed historical prices"):
+        with pytest.raises(StorageWriteError, match="Failed to append into"):
             storage.seed_historical_prices([record])

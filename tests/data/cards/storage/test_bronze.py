@@ -189,6 +189,7 @@ class TestFullLoadTable:
             mock_con = MagicMock()
             mock_con.execute.side_effect = duckdb.Error("boom")
             b._con = mock_con
+            b._writer._con = mock_con
             with pytest.raises(StorageWriteError, match="Failed to full-load"):
                 b._full_load_table([_Card(id="1", name="X")], "test_table")
 
@@ -239,6 +240,7 @@ class TestIncrementalLoad:
             mock_con = MagicMock()
             mock_con.execute.side_effect = duckdb.Error("boom")
             b._con = mock_con
+            b._writer._con = mock_con
             with pytest.raises(StorageWriteError, match="Failed to upsert"):
                 b._incremental_load([_Card(id="1", name="X")], "test_table", "id")
 
@@ -267,7 +269,7 @@ class TestSnapshot:
 
         record = _Card(id="1", name="Alpha")
         with _bronze() as b:
-            with patch("src.data.cards.storage.bronze.writers.date") as mock_date:
+            with patch("src.data.cards.storage.bronze.storage.date") as mock_date:
                 mock_date.today.side_effect = [
                     date_cls.fromisoformat("2026-05-01"),
                     date_cls.fromisoformat("2026-05-02"),
@@ -315,6 +317,7 @@ class TestSnapshot:
             mock_con = MagicMock()
             mock_con.execute.side_effect = duckdb.Error("boom")
             b._con = mock_con
+            b._writer._con = mock_con
             with pytest.raises(StorageWriteError, match="Failed to append"):
                 b._snapshot([_Card(id="1", name="X")], "id", "test_history")
 

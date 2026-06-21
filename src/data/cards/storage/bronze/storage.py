@@ -12,15 +12,17 @@ Typical usage:
         storage.daily_update(results)  # incremental daily run
 """
 
-import duckdb
+from datetime import date
+
 import pandas as pd
 from pydantic import BaseModel
 
-from src.data.cards.storage.base import BaseStorage, _serialize_objects
+from src.data.cards.storage.base.storage import BaseStorage
+from src.data.cards.storage.base.writers import DuckDBWriter
 from src.data.cards.storage.bronze.config import STORAGE_CONFIG
 from src.data.cards.storage.bronze.writers import (
-    BronzeWritersMixin,
     _filter_prices_to_date,
+    _records_to_df,
 )
 from src.data.cards.storage.errors import StorageWriteError
 from src.logger import get_logger
@@ -28,7 +30,7 @@ from src.logger import get_logger
 logger = get_logger(__name__)
 
 
-class BronzeStorage(BronzeWritersMixin, BaseStorage):
+class BronzeStorage(BaseStorage):
     """Persistence layer for the Bronze (raw ingestion) tier.
 
     Inherits generic write operations from BronzeWritersMixin and connection
@@ -56,11 +58,67 @@ class BronzeStorage(BronzeWritersMixin, BaseStorage):
             StorageConnectionError: If the connection cannot be established.
         """
         self._con = self._open_connection(bronze_datadb_path, read_only=False)
+        self._writer = DuckDBWriter(self._con)
 
     def close(self) -> None:
         """Close the underlying DuckDB connection."""
         logger.progress("Closing connection to DuckDB")
         self._con.close()
+
+    def _full_load_table(self, records: list[BaseModel], table_name: str) -> None:
+        if not records:
+            logger.warning("No records to save to %r — skipping", table_name)
+            return
+        df = _records_to_df(records)
+        self._writer.full_load(df, table_name)
+
+    def _incremental_load(
+        self, records: list[BaseModel], table_name: str, key_column: str
+    ) -> None:
+        if not records:
+            logger.warning("No records to load into %r — skipping", table_name)
+            return
+        df = _records_to_df(records)
+        self._writer.upsert(df, table_name, key_column)
+
+    def _snapshot(
+        self,
+        records: list[BaseModel],
+        key_column: str,
+        history_table: str,
+        fields: list[str] | None = None,
+    ) -> None:
+        if not records:
+            logger.warning("No records to snapshot into %r — skipping", history_table)
+            return
+
+        today_iso = date.today().isoformat()
+        rows = []
+        for record in records:
+            dump = record.model_dump(mode="json")
+            data = (
+                {f: dump[f] for f in fields if f in dump}
+                if fields is not None
+                else dump
+            )
+            rows.append(
+                {
+                    key_column: dump[key_column],
+                    "snapshot_date": today_iso,
+                    **data,
+                }
+            )
+
+        if not rows:
+            logger.warning("No data to snapshot into %r — skipping", history_table)
+            return
+
+        df = pd.DataFrame(rows)
+        logger.progress("Snapshotting %d rows into %r", len(df), history_table)
+        self._writer.append(df, history_table, key_column)
+        logger.info(
+            "Snapshotted %d rows into %r for %s", len(rows), history_table, today_iso
+        )
 
     def seed_historical_prices(self, records: list[BaseModel]) -> None:
         """One-time seeding: explode AllPrices 90-day history into per-date rows.
@@ -113,27 +171,7 @@ class BronzeStorage(BronzeWritersMixin, BaseStorage):
             logger.warning("No date-keyed prices found in records — skipping seed")
             return
 
-        df = _serialize_objects(pd.DataFrame(rows))
-        self._con.register("_seed_staging", df)
-        try:
-            self._con.execute(
-                f"CREATE TABLE IF NOT EXISTS {history_table} AS "
-                f"SELECT * FROM _seed_staging WHERE false"
-            )
-            self._con.execute(
-                f"INSERT INTO {history_table} "
-                f"SELECT s.* FROM _seed_staging s "
-                f"WHERE NOT EXISTS ("
-                f"  SELECT 1 FROM {history_table} h "
-                f"  WHERE h.uuid = s.uuid AND h.snapshot_date = s.snapshot_date"
-                f")"
-            )
-        except duckdb.Error as e:
-            raise StorageWriteError(
-                f"Failed to seed historical prices into {history_table!r}: {e}"
-            ) from e
-        finally:
-            self._con.unregister("_seed_staging")
+        DuckDBWriter(self._con).append(pd.DataFrame(rows), history_table, "uuid")
         logger.info("Seeded %d historical price rows into %r", len(rows), history_table)
 
     def _process_sources(
