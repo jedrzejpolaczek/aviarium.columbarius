@@ -184,3 +184,72 @@ class TestCheckOracleIdConflicts:
         assert result.status == "FAIL"
         assert "21" in result.detail
         con.close()
+
+
+from src.data.cards.storage.health import (
+    _check_silver_prices_no_negative_eur,
+    _check_gold_ml_dataset_has_target,
+)
+
+
+class TestCheckSilverPricesNegativeEur:
+    def _make_prices(
+        self, con: duckdb.DuckDBPyConnection, rows: list[tuple]
+    ) -> None:
+        con.execute(
+            "CREATE TABLE silver_prices_history"
+            " (uuid VARCHAR, snapshot_date DATE, eur FLOAT)"
+        )
+        for r in rows:
+            con.execute("INSERT INTO silver_prices_history VALUES (?, ?, ?)", list(r))
+
+    def test_pass_when_all_prices_positive_today(self):
+        con = duckdb.connect(":memory:")
+        today = datetime.date(2026, 6, 22)
+        self._make_prices(con, [("u1", today, 1.5)])
+        result = _check_silver_prices_no_negative_eur(con, today)
+        assert result.status == "PASS"
+        con.close()
+
+    def test_fail_when_zero_price_today(self):
+        con = duckdb.connect(":memory:")
+        today = datetime.date(2026, 6, 22)
+        self._make_prices(con, [("u1", today, 0.0)])
+        result = _check_silver_prices_no_negative_eur(con, today)
+        assert result.status == "FAIL"
+        assert "1 rows" in result.detail
+        con.close()
+
+    def test_ignores_other_dates(self):
+        con = duckdb.connect(":memory:")
+        today = datetime.date(2026, 6, 22)
+        yesterday = datetime.date(2026, 6, 21)
+        self._make_prices(con, [("u1", yesterday, 0.0)])
+        result = _check_silver_prices_no_negative_eur(con, today)
+        assert result.status == "PASS"
+        con.close()
+
+
+class TestCheckGoldMlDatasetHasTarget:
+    def test_pass_when_some_targets_non_null(self):
+        con = duckdb.connect(":memory:")
+        con.execute(
+            "CREATE TABLE gold_ml_dataset (uuid VARCHAR, target_price_7d FLOAT)"
+        )
+        con.execute("INSERT INTO gold_ml_dataset VALUES ('u1', 5.0)")
+        con.execute("INSERT INTO gold_ml_dataset VALUES ('u2', NULL)")
+        result = _check_gold_ml_dataset_has_target(con)
+        assert result.status == "PASS"
+        assert "1 rows" in result.detail
+        con.close()
+
+    def test_fail_when_all_targets_null(self):
+        con = duckdb.connect(":memory:")
+        con.execute(
+            "CREATE TABLE gold_ml_dataset (uuid VARCHAR, target_price_7d FLOAT)"
+        )
+        con.execute("INSERT INTO gold_ml_dataset VALUES ('u1', NULL)")
+        result = _check_gold_ml_dataset_has_target(con)
+        assert result.status == "FAIL"
+        assert "100% NULL" in result.detail
+        con.close()

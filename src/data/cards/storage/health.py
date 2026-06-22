@@ -107,3 +107,45 @@ def _check_oracle_id_conflicts(con: duckdb.DuckDBPyConnection) -> CheckResult:
         "PASS",
         f"{count} conflicts (within threshold of {_ORACLE_ID_CONFLICT_THRESHOLD})",
     )
+
+
+def _check_silver_prices_no_negative_eur(
+    con: duckdb.DuckDBPyConnection, today: datetime.date
+) -> CheckResult:
+    count: int = con.execute(
+        "SELECT COUNT(*) FROM silver_prices_history"
+        " WHERE snapshot_date = ? AND eur <= 0",
+        [today],
+    ).fetchone()[0]  # type: ignore[index]
+    if count > 0:
+        return CheckResult(
+            "silver_prices_history EUR <= 0",
+            "silver",
+            "FAIL",
+            f"{count} rows with EUR <= 0 for {today}",
+        )
+    return CheckResult(
+        "silver_prices_history EUR <= 0",
+        "silver",
+        "PASS",
+        f"no invalid EUR prices for {today}",
+    )
+
+
+def _check_gold_ml_dataset_has_target(con: duckdb.DuckDBPyConnection) -> CheckResult:
+    count: int = con.execute(
+        "SELECT COUNT(*) FROM gold_ml_dataset WHERE target_price_7d IS NOT NULL"
+    ).fetchone()[0]  # type: ignore[index]
+    if count == 0:
+        return CheckResult(
+            "gold_ml_dataset target_price_7d",
+            "gold",
+            "FAIL",
+            "target_price_7d is 100% NULL — no usable training rows",
+        )
+    return CheckResult(
+        "gold_ml_dataset target_price_7d",
+        "gold",
+        "PASS",
+        f"{count} rows with non-NULL target_price_7d",
+    )
