@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from src.data.cards.storage.silver import SilverStorage
-from src.data.cards.storage.silver.persistence import SilverWriter
+from src.data.cards.storage.base.writers import DuckDBWriter as SilverWriter
 from src.data.cards.storage.errors import StorageWriteError
 
 MINIMAL_CONFIG = {
@@ -262,7 +262,7 @@ _MTGJSON_ROW = {
     "is_online_only": False,
     "is_funny": False,
     "is_oversized": False,
-    "identifiers": '{"scryfallId": "scryfall-a"}',
+    "identifiers": '{"scryfall_id": "scryfall-a"}',
     "legalities": '{"commander": "legal", "standard": "not_legal"}',
     "colors": '["R"]',
     "color_identity": '["R"]',
@@ -1394,7 +1394,7 @@ class TestBuildSilverCardsSql:
             **_MTGJSON_ROW,
             "uuid": "uuid-online",
             "is_online_only": True,
-            "identifiers": '{"scryfallId": "scryfall-online"}',
+            "identifiers": '{"scryfall_id": "scryfall-online"}',
         }
         scryfall_online = {**_SCRYFALL_ROW, "id": "scryfall-online"}
         with _make_storage_with_cards_bronze(

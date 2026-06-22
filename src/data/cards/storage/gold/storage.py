@@ -26,10 +26,11 @@ Composition:
     _writer    (DuckDBWriter)         — DROP-AND-REPLACE write helper
 """
 
-from src.data.cards.storage.base import TransformStorage, get_tables
+from src.data.cards.storage.base.storage import get_tables
+from src.data.cards.storage.base.transformer import TransformStorage
 from src.data.cards.storage.gold.features import GoldFeatureBuilders
 from src.data.cards.storage.gold.signals import GoldSignalBuilders
-from src.data.cards.storage.base import DuckDBWriter as GoldWriter
+from src.data.cards.storage.base.writers import DuckDBWriter as GoldWriter
 from src.data.cards.storage.gold.ml_dataset import GoldMLDatasetBuilder
 from src.logger import get_logger
 

@@ -7,7 +7,7 @@ into a single wide table keyed on (uuid, snapshot_date).
 import duckdb
 import pandas as pd
 
-from src.data.cards.storage.base import get_tables
+from src.data.cards.storage.base.storage import get_tables
 
 
 class GoldMLDatasetBuilder:

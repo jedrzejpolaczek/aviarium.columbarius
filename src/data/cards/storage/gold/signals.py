@@ -19,7 +19,7 @@ GoldSignalBuilders reads clean Silver tables and produces five Gold tables:
 import duckdb
 import pandas as pd
 
-from src.data.cards.storage.base import get_tables
+from src.data.cards.storage.base.storage import get_tables
 from src.logger import get_logger
 
 

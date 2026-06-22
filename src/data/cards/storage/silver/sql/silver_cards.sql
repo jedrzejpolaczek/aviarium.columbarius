@@ -13,7 +13,7 @@ mtgjson_filtered AS (
 mtgjson AS (
     SELECT
         TRIM(uuid)                                             AS uuid,
-        json_extract_string(identifiers, '$.scryfallId')       AS scryfall_id,
+        json_extract_string(identifiers, '$.scryfall_id')       AS scryfall_id,
         TRIM(name)                                             AS name,
         COALESCE(TRIM(ascii_name), TRIM(name))                 AS ascii_name,
         UPPER(TRIM(set_code))                                  AS set_code,
@@ -279,8 +279,7 @@ with_canonical AS (
         END                                                    AS canonical_uuid
     FROM joined j
     LEFT JOIN canonical_map cm
-           ON j.uuid IS NULL
-          AND j.set_code        = cm.set_code
+           ON j.set_code        = cm.set_code
           AND j.collector_number = cm.collector_number
 ),
 
