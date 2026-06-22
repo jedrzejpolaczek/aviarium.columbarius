@@ -79,3 +79,31 @@ def _check_no_duplicate_canonical_uuid(
     return CheckResult(
         "silver_cards duplicate canonical_uuid", "silver", "PASS", "no duplicates"
     )
+
+
+_ORACLE_ID_CONFLICT_THRESHOLD = 20
+
+
+def _check_oracle_id_conflicts(con: duckdb.DuckDBPyConnection) -> CheckResult:
+    count: int = con.execute("""
+        SELECT COUNT(*) FROM (
+            SELECT name
+            FROM silver_cards
+            WHERE oracle_id IS NOT NULL
+            GROUP BY name
+            HAVING COUNT(DISTINCT oracle_id) > 1
+        ) t
+    """).fetchone()[0]  # type: ignore[index]
+    if count > _ORACLE_ID_CONFLICT_THRESHOLD:
+        return CheckResult(
+            "silver_cards oracle_id conflicts",
+            "silver",
+            "FAIL",
+            f"{count} names map to multiple oracle_ids (threshold: {_ORACLE_ID_CONFLICT_THRESHOLD})",
+        )
+    return CheckResult(
+        "silver_cards oracle_id conflicts",
+        "silver",
+        "PASS",
+        f"{count} conflicts (within threshold of {_ORACLE_ID_CONFLICT_THRESHOLD})",
+    )

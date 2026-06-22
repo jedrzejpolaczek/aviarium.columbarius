@@ -151,3 +151,36 @@ class TestCheckNoDuplicateCanonicalUuid:
         assert result.status == "FAIL"
         assert "1 duplicated" in result.detail
         con.close()
+
+
+from src.data.cards.storage.health import _check_oracle_id_conflicts
+
+
+class TestCheckOracleIdConflicts:
+    def test_pass_when_conflicts_within_threshold(self):
+        # 5 conflicts (split cards like the production run) — well under threshold of 20
+        con = duckdb.connect(":memory:")
+        rows: list[tuple] = []
+        for i in range(5):
+            name = f"Split {i}"
+            rows.append((f"u{i}a", f"u{i}a", name, "10E", f"{i}a", f"oa{i}"))
+            rows.append((f"u{i}b", f"u{i}b", name, "10E", f"{i}b", f"ob{i}"))
+        _make_silver_cards(con, rows)
+        result = _check_oracle_id_conflicts(con)
+        assert result.status == "PASS"
+        assert "5 conflicts" in result.detail
+        con.close()
+
+    def test_fail_when_conflicts_exceed_threshold(self):
+        # 21 names each mapping to 2 oracle_ids — exceeds threshold of 20
+        con = duckdb.connect(":memory:")
+        rows = []
+        for i in range(21):
+            name = f"Conflict {i}"
+            rows.append((f"u{i}a", f"u{i}a", name, "10E", f"{i}a", f"oa{i}"))
+            rows.append((f"u{i}b", f"u{i}b", name, "10E", f"{i}b", f"ob{i}"))
+        _make_silver_cards(con, rows)
+        result = _check_oracle_id_conflicts(con)
+        assert result.status == "FAIL"
+        assert "21" in result.detail
+        con.close()
