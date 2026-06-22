@@ -253,3 +253,104 @@ class TestCheckGoldMlDatasetHasTarget:
         assert result.status == "FAIL"
         assert "100% NULL" in result.detail
         con.close()
+
+
+from src.data.cards.storage.health import run_health_checks
+
+
+def _make_all_dbs(tmp_path, today: datetime.date) -> tuple[str, str, str]:
+    """Create minimal valid Bronze/Silver/Gold DuckDB files under tmp_path."""
+    bronze_path = str(tmp_path / "bronze.duckdb")
+    b = duckdb.connect(bronze_path)
+    b.execute("CREATE TABLE bronze_scryfall_cards (id VARCHAR)")
+    b.execute("INSERT INTO bronze_scryfall_cards VALUES ('x')")
+    b.execute("CREATE TABLE bronze_mtgjson_cards (uuid VARCHAR)")
+    b.execute("INSERT INTO bronze_mtgjson_cards VALUES ('x')")
+    b.execute("CREATE TABLE bronze_mtgjson_prices_history (uuid VARCHAR)")
+    b.execute("INSERT INTO bronze_mtgjson_prices_history VALUES ('x')")
+    b.close()
+
+    silver_path = str(tmp_path / "silver.duckdb")
+    s = duckdb.connect(silver_path)
+    s.execute("""
+        CREATE TABLE silver_cards (
+            uuid VARCHAR, canonical_uuid VARCHAR, name VARCHAR,
+            set_code VARCHAR, collector_number VARCHAR, oracle_id VARCHAR
+        )
+    """)
+    s.execute(
+        "INSERT INTO silver_cards VALUES ('u1', 'u1', 'Serra Angel', '10E', '1', 'o1')"
+    )
+    s.execute(
+        "CREATE TABLE silver_prices_history (uuid VARCHAR, snapshot_date DATE, eur FLOAT)"
+    )
+    s.execute("INSERT INTO silver_prices_history VALUES ('u1', ?, 1.5)", [today])
+    s.execute(
+        "CREATE TABLE silver_language_prices_history (scryfall_id VARCHAR, snapshot_date DATE)"
+    )
+    s.execute("INSERT INTO silver_language_prices_history VALUES ('x', ?)", [today])
+    s.execute("CREATE TABLE silver_meta_history (id VARCHAR, snapshot_date DATE)")
+    s.execute("INSERT INTO silver_meta_history VALUES ('x', ?)", [today])
+    s.execute(
+        "CREATE TABLE silver_format_staples_history (id VARCHAR, snapshot_date DATE)"
+    )
+    s.execute("INSERT INTO silver_format_staples_history VALUES ('x', ?)", [today])
+    s.execute(
+        "CREATE TABLE silver_tournament_results_history"
+        " (id VARCHAR, tournament_date VARCHAR)"
+    )
+    s.execute("INSERT INTO silver_tournament_results_history VALUES ('x', '2026-06-20')")
+    s.close()
+
+    gold_path = str(tmp_path / "gold.duckdb")
+    g = duckdb.connect(gold_path)
+    g.execute("CREATE TABLE gold_card_features (uuid VARCHAR)")
+    g.execute("INSERT INTO gold_card_features VALUES ('u1')")
+    g.execute("CREATE TABLE gold_price_features (uuid VARCHAR)")
+    g.execute("INSERT INTO gold_price_features VALUES ('u1')")
+    g.execute("CREATE TABLE gold_language_premiums (scryfall_id VARCHAR)")
+    g.execute("INSERT INTO gold_language_premiums VALUES ('x')")
+    g.execute("CREATE TABLE gold_demand_signals (id VARCHAR)")
+    g.execute("INSERT INTO gold_demand_signals VALUES ('x')")
+    g.execute("CREATE TABLE gold_format_staples (id VARCHAR)")
+    g.execute("INSERT INTO gold_format_staples VALUES ('x')")
+    g.execute("CREATE TABLE gold_tournament_signals (oracle_id VARCHAR)")
+    g.execute("INSERT INTO gold_tournament_signals VALUES ('o1')")
+    g.execute(
+        "CREATE TABLE gold_ml_dataset (uuid VARCHAR, target_price_7d FLOAT)"
+    )
+    g.execute("INSERT INTO gold_ml_dataset VALUES ('u1', 5.0)")
+    g.close()
+
+    return bronze_path, silver_path, gold_path
+
+
+class TestRunHealthChecks:
+    def test_all_pass_returns_list_of_results(self, tmp_path):
+        today = datetime.date(2026, 6, 22)
+        bronze, silver, gold = _make_all_dbs(tmp_path, today)
+        results = run_health_checks(bronze, silver, gold, today)
+        assert len(results) > 0
+        assert all(r.status == "PASS" for r in results)
+
+    def test_exits_one_on_any_fail(self, tmp_path):
+        today = datetime.date(2026, 6, 22)
+        bronze, silver, gold = _make_all_dbs(tmp_path, today)
+        # Corrupt: gold_ml_dataset has all-NULL targets
+        g = duckdb.connect(gold)
+        g.execute("DELETE FROM gold_ml_dataset")
+        g.execute("INSERT INTO gold_ml_dataset VALUES ('u1', NULL)")
+        g.close()
+        with pytest.raises(SystemExit) as exc:
+            run_health_checks(bronze, silver, gold, today)
+        assert exc.value.code == 1
+
+    def test_skips_silver_quality_when_structure_fails(self, tmp_path):
+        today = datetime.date(2026, 6, 22)
+        bronze, silver, gold = _make_all_dbs(tmp_path, today)
+        # Remove silver_cards — structure FAIL should prevent quality checks
+        s = duckdb.connect(silver)
+        s.execute("DROP TABLE silver_cards")
+        s.close()
+        with pytest.raises(SystemExit):
+            run_health_checks(bronze, silver, gold, today)
