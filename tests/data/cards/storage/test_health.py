@@ -85,3 +85,69 @@ class TestCheckSnapshotDateToday:
         result = _check_snapshot_date_today(con, "silver_prices_history", today)
         assert result.status == "FAIL"
         con.close()
+
+
+from src.data.cards.storage.health import (
+    _check_no_nulls,
+    _check_no_duplicate_canonical_uuid,
+)
+
+
+def _make_silver_cards(
+    con: duckdb.DuckDBPyConnection,
+    rows: list[tuple],
+) -> None:
+    """rows: (uuid, canonical_uuid, name, set_code, collector_number, oracle_id)"""
+    con.execute("""
+        CREATE TABLE silver_cards (
+            uuid VARCHAR,
+            canonical_uuid VARCHAR,
+            name VARCHAR,
+            set_code VARCHAR,
+            collector_number VARCHAR,
+            oracle_id VARCHAR
+        )
+    """)
+    for row in rows:
+        con.execute("INSERT INTO silver_cards VALUES (?, ?, ?, ?, ?, ?)", list(row))
+
+
+class TestCheckNoNulls:
+    def test_pass_when_no_nulls(self):
+        con = duckdb.connect(":memory:")
+        _make_silver_cards(con, [("u1", "u1", "Serra Angel", "10E", "1", "o1")])
+        result = _check_no_nulls(con, "silver", "silver_cards", "name")
+        assert result.status == "PASS"
+        assert "no NULLs" in result.detail
+        con.close()
+
+    def test_fail_when_null_present(self):
+        con = duckdb.connect(":memory:")
+        _make_silver_cards(con, [(None, None, None, None, None, None)])
+        result = _check_no_nulls(con, "silver", "silver_cards", "name")
+        assert result.status == "FAIL"
+        assert "1 NULL" in result.detail
+        con.close()
+
+
+class TestCheckNoDuplicateCanonicalUuid:
+    def test_pass_when_no_duplicates(self):
+        con = duckdb.connect(":memory:")
+        _make_silver_cards(con, [
+            ("u1", "u1", "Serra Angel", "10E", "1", "o1"),
+            ("u2", "u2", "Shivan Dragon", "10E", "2", "o2"),
+        ])
+        result = _check_no_duplicate_canonical_uuid(con)
+        assert result.status == "PASS"
+        con.close()
+
+    def test_fail_when_duplicate_canonical_uuid(self):
+        con = duckdb.connect(":memory:")
+        _make_silver_cards(con, [
+            ("u1", "u1", "Serra Angel", "10E", "1", "o1"),
+            ("u1", "u1", "Serra Angel", "10E", "1a", "o1"),
+        ])
+        result = _check_no_duplicate_canonical_uuid(con)
+        assert result.status == "FAIL"
+        assert "1 duplicated" in result.detail
+        con.close()
