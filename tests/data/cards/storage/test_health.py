@@ -46,3 +46,42 @@ class TestCheckTableHasRows:
         assert result.status == "FAIL"
         assert "0 rows" in result.detail
         con.close()
+
+
+from src.data.cards.storage.health import _check_snapshot_date_today
+
+
+class TestCheckSnapshotDateToday:
+    def _make_prices(self, con: duckdb.DuckDBPyConnection, dates: list[datetime.date]) -> None:
+        con.execute(
+            "CREATE TABLE silver_prices_history (uuid VARCHAR, snapshot_date DATE)"
+        )
+        for d in dates:
+            con.execute("INSERT INTO silver_prices_history VALUES ('x', ?)", [d])
+
+    def test_pass_when_today_present(self):
+        con = duckdb.connect(":memory:")
+        today = datetime.date(2026, 6, 22)
+        self._make_prices(con, [today])
+        result = _check_snapshot_date_today(con, "silver_prices_history", today)
+        assert result.status == "PASS"
+        assert "2026-06-22" in result.detail
+        con.close()
+
+    def test_fail_when_only_yesterday(self):
+        con = duckdb.connect(":memory:")
+        today = datetime.date(2026, 6, 22)
+        yesterday = datetime.date(2026, 6, 21)
+        self._make_prices(con, [yesterday])
+        result = _check_snapshot_date_today(con, "silver_prices_history", today)
+        assert result.status == "FAIL"
+        assert "no rows" in result.detail
+        con.close()
+
+    def test_fail_when_table_empty(self):
+        con = duckdb.connect(":memory:")
+        today = datetime.date(2026, 6, 22)
+        self._make_prices(con, [])
+        result = _check_snapshot_date_today(con, "silver_prices_history", today)
+        assert result.status == "FAIL"
+        con.close()
