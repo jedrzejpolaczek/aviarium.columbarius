@@ -13,6 +13,7 @@ Silver from configs/silver_config.json, Gold from configs/gold_config.json.
 """
 
 import asyncio
+import datetime
 import json
 import time
 from collections.abc import Callable
@@ -27,6 +28,7 @@ from src.data.cards.sources import ingesting_pipeline
 from src.data.cards.storage.bronze import BronzeStorage
 from src.data.cards.storage.silver import SilverStorage
 from src.data.cards.storage.gold import GoldStorage
+from src.data.cards.storage.health import run_health_checks
 
 
 logger = get_logger(__name__)
@@ -224,6 +226,13 @@ def daily_pipeline(config_path: str) -> None:
     _run_timed("Gold", lambda: daily_gold_pipeline(config), results)
 
     _log_pipeline_summary(results, time.perf_counter() - pipeline_start)
+
+    run_health_checks(
+        bronze_path=config["storage"]["bronze_duckdb_path"],
+        silver_path=config["storage"]["silver_duckdb_path"],
+        gold_path=config["storage"]["gold_duckdb_path"],
+        today=datetime.date.today(),
+    )
 
 
 def daily_bronze_pipeline(config: dict[str, Any]) -> None:
