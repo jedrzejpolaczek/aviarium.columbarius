@@ -1,6 +1,5 @@
 """Tests for BaseStorage, TransformStorage, and DuckDBWriter base classes."""
 
-import json
 from unittest.mock import MagicMock, patch
 
 import duckdb
@@ -83,7 +82,9 @@ class TestOpenConnection:
                 BaseStorage._open_connection(bad_path, read_only=False)
 
     def test_raises_storage_connection_error_when_duckdb_fails(self):
-        with patch("src.data.cards.storage.base.storage.duckdb.connect") as mock_connect:
+        with patch(
+            "src.data.cards.storage.base.storage.duckdb.connect"
+        ) as mock_connect:
             mock_connect.side_effect = duckdb.Error("connection failed")
             with pytest.raises(StorageConnectionError, match="Cannot open DuckDB"):
                 BaseStorage._open_connection(":memory:", read_only=False)

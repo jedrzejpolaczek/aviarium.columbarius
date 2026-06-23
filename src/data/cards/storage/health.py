@@ -22,7 +22,9 @@ def _check_table_has_rows(
     con: duckdb.DuckDBPyConnection, layer: str, table: str
 ) -> CheckResult:
     if table not in get_tables(con):
-        return CheckResult(f"{table} exists", layer, "FAIL", f"table {table!r} not found")
+        return CheckResult(
+            f"{table} exists", layer, "FAIL", f"table {table!r} not found"
+        )
     count: int = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]  # type: ignore[index]
     if count == 0:
         return CheckResult(f"{table} rows", layer, "FAIL", "0 rows")
@@ -217,7 +219,9 @@ def run_health_checks(
             for t in _SILVER_FRESHNESS_TABLES:
                 results.append(_check_snapshot_date_today(silver_con, t, today))
             for col in _SILVER_QUALITY_NULL_COLUMNS:
-                results.append(_check_no_nulls(silver_con, "silver", "silver_cards", col))
+                results.append(
+                    _check_no_nulls(silver_con, "silver", "silver_cards", col)
+                )
             results.append(_check_no_duplicate_canonical_uuid(silver_con))
             results.append(_check_oracle_id_conflicts(silver_con))
             results.append(_check_silver_prices_no_negative_eur(silver_con, today))

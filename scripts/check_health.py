@@ -6,6 +6,7 @@ populated, fresh, and internally consistent. Exits with code 1 on any failure.
 Usage:
     python -m scripts.check_health
 """
+
 import datetime
 from pathlib import Path
 

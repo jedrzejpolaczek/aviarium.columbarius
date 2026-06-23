@@ -1,13 +1,26 @@
 import datetime
+from pathlib import Path
 
 import duckdb
 import pytest
 
-from src.data.cards.storage.health import CheckResult
+from src.data.cards.storage.health import (
+    CheckResult,
+    _check_table_has_rows,
+    _check_snapshot_date_today,
+    _check_no_nulls,
+    _check_no_duplicate_canonical_uuid,
+    _check_oracle_id_conflicts,
+    _check_silver_prices_no_negative_eur,
+    _check_gold_ml_dataset_has_target,
+    run_health_checks,
+)
 
 
 def test_check_result_pass():
-    r = CheckResult(name="silver_cards rows", layer="silver", status="PASS", detail="515728 rows")
+    r = CheckResult(
+        name="silver_cards rows", layer="silver", status="PASS", detail="515728 rows"
+    )
     assert r.name == "silver_cards rows"
     assert r.layer == "silver"
     assert r.status == "PASS"
@@ -15,11 +28,10 @@ def test_check_result_pass():
 
 
 def test_check_result_fail():
-    r = CheckResult(name="silver_cards rows", layer="gold", status="FAIL", detail="0 rows")
+    r = CheckResult(
+        name="silver_cards rows", layer="gold", status="FAIL", detail="0 rows"
+    )
     assert r.status == "FAIL"
-
-
-from src.data.cards.storage.health import _check_table_has_rows
 
 
 class TestCheckTableHasRows:
@@ -48,11 +60,10 @@ class TestCheckTableHasRows:
         con.close()
 
 
-from src.data.cards.storage.health import _check_snapshot_date_today
-
-
 class TestCheckSnapshotDateToday:
-    def _make_prices(self, con: duckdb.DuckDBPyConnection, dates: list[datetime.date]) -> None:
+    def _make_prices(
+        self, con: duckdb.DuckDBPyConnection, dates: list[datetime.date]
+    ) -> None:
         con.execute(
             "CREATE TABLE silver_prices_history (uuid VARCHAR, snapshot_date DATE)"
         )
@@ -85,12 +96,6 @@ class TestCheckSnapshotDateToday:
         result = _check_snapshot_date_today(con, "silver_prices_history", today)
         assert result.status == "FAIL"
         con.close()
-
-
-from src.data.cards.storage.health import (
-    _check_no_nulls,
-    _check_no_duplicate_canonical_uuid,
-)
 
 
 def _make_silver_cards(
@@ -133,27 +138,30 @@ class TestCheckNoNulls:
 class TestCheckNoDuplicateCanonicalUuid:
     def test_pass_when_no_duplicates(self):
         con = duckdb.connect(":memory:")
-        _make_silver_cards(con, [
-            ("u1", "u1", "Serra Angel", "10E", "1", "o1"),
-            ("u2", "u2", "Shivan Dragon", "10E", "2", "o2"),
-        ])
+        _make_silver_cards(
+            con,
+            [
+                ("u1", "u1", "Serra Angel", "10E", "1", "o1"),
+                ("u2", "u2", "Shivan Dragon", "10E", "2", "o2"),
+            ],
+        )
         result = _check_no_duplicate_canonical_uuid(con)
         assert result.status == "PASS"
         con.close()
 
     def test_fail_when_duplicate_canonical_uuid(self):
         con = duckdb.connect(":memory:")
-        _make_silver_cards(con, [
-            ("u1", "u1", "Serra Angel", "10E", "1", "o1"),
-            ("u1", "u1", "Serra Angel", "10E", "1a", "o1"),
-        ])
+        _make_silver_cards(
+            con,
+            [
+                ("u1", "u1", "Serra Angel", "10E", "1", "o1"),
+                ("u1", "u1", "Serra Angel", "10E", "1a", "o1"),
+            ],
+        )
         result = _check_no_duplicate_canonical_uuid(con)
         assert result.status == "FAIL"
         assert "1 duplicated" in result.detail
         con.close()
-
-
-from src.data.cards.storage.health import _check_oracle_id_conflicts
 
 
 class TestCheckOracleIdConflicts:
@@ -186,16 +194,8 @@ class TestCheckOracleIdConflicts:
         con.close()
 
 
-from src.data.cards.storage.health import (
-    _check_silver_prices_no_negative_eur,
-    _check_gold_ml_dataset_has_target,
-)
-
-
 class TestCheckSilverPricesNegativeEur:
-    def _make_prices(
-        self, con: duckdb.DuckDBPyConnection, rows: list[tuple]
-    ) -> None:
+    def _make_prices(self, con: duckdb.DuckDBPyConnection, rows: list[tuple]) -> None:
         con.execute(
             "CREATE TABLE silver_prices_history"
             " (uuid VARCHAR, snapshot_date DATE, eur FLOAT)"
@@ -255,10 +255,7 @@ class TestCheckGoldMlDatasetHasTarget:
         con.close()
 
 
-from src.data.cards.storage.health import run_health_checks
-
-
-def _make_all_dbs(tmp_path, today: datetime.date) -> tuple[str, str, str]:
+def _make_all_dbs(tmp_path: Path, today: datetime.date) -> tuple[str, str, str]:
     """Create minimal valid Bronze/Silver/Gold DuckDB files under tmp_path."""
     bronze_path = str(tmp_path / "bronze.duckdb")
     b = duckdb.connect(bronze_path)
@@ -299,7 +296,9 @@ def _make_all_dbs(tmp_path, today: datetime.date) -> tuple[str, str, str]:
         "CREATE TABLE silver_tournament_results_history"
         " (id VARCHAR, tournament_date VARCHAR)"
     )
-    s.execute("INSERT INTO silver_tournament_results_history VALUES ('x', '2026-06-20')")
+    s.execute(
+        "INSERT INTO silver_tournament_results_history VALUES ('x', '2026-06-20')"
+    )
     s.close()
 
     gold_path = str(tmp_path / "gold.duckdb")
@@ -316,9 +315,7 @@ def _make_all_dbs(tmp_path, today: datetime.date) -> tuple[str, str, str]:
     g.execute("INSERT INTO gold_format_staples VALUES ('x')")
     g.execute("CREATE TABLE gold_tournament_signals (oracle_id VARCHAR)")
     g.execute("INSERT INTO gold_tournament_signals VALUES ('o1')")
-    g.execute(
-        "CREATE TABLE gold_ml_dataset (uuid VARCHAR, target_price_7d FLOAT)"
-    )
+    g.execute("CREATE TABLE gold_ml_dataset (uuid VARCHAR, target_price_7d FLOAT)")
     g.execute("INSERT INTO gold_ml_dataset VALUES ('u1', 5.0)")
     g.close()
 

@@ -10,11 +10,13 @@ def report(pid: int) -> psutil.Process | None:
         p = psutil.Process(pid)
         with p.oneshot():
             info = {
-                "PID":        p.pid,
-                "Name":       p.name(),
-                "Status":     p.status(),
-                "Started":    datetime.fromtimestamp(p.create_time()).strftime("%Y-%m-%d %H:%M:%S"),
-                "CMD":        " ".join(p.cmdline()) or "(none)",
+                "PID": p.pid,
+                "Name": p.name(),
+                "Status": p.status(),
+                "Started": datetime.fromtimestamp(p.create_time()).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
+                "CMD": " ".join(p.cmdline()) or "(none)",
                 "Parent PID": p.ppid(),
             }
         print("\n=== Process Report ===")
@@ -33,7 +35,9 @@ def report(pid: int) -> psutil.Process | None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Report and optionally kill a process")
     parser.add_argument("pid", type=int, help="Process PID")
-    parser.add_argument("-y", "--yes", action="store_true", help="Kill without prompting")
+    parser.add_argument(
+        "-y", "--yes", action="store_true", help="Kill without prompting"
+    )
     args = parser.parse_args()
 
     proc = report(args.pid)

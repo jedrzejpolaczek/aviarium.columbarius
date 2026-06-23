@@ -22,8 +22,6 @@ import datetime
 import json
 from pathlib import Path
 
-_SQL_DIR = Path(__file__).parent / "sql"
-
 import duckdb
 
 from src.data.cards.storage.base.storage import get_tables
@@ -33,7 +31,10 @@ from src.data.cards.storage.base.writers import DuckDBWriter as SilverWriter
 from src.data.cards.storage.silver.prices import SilverPriceBuilder
 from src.logger import get_logger
 
+_SQL_DIR = Path(__file__).parent / "sql"
+
 logger = get_logger(__name__)
+
 
 class SilverStorage(TransformStorage):
     """Persistence layer for the Silver (cleaned) tier.
@@ -195,8 +196,12 @@ class SilverStorage(TransformStorage):
             self._silver_con.execute(
                 f"ATTACH '{self._bronze_db_path}' AS _bronze (READ_ONLY)"
             )
-            logger.progress("Building silver_cards (MTGJson × Scryfall SQL join — long step)...")
-            self._silver_con.execute((_SQL_DIR / "silver_cards.sql").read_text(encoding="utf-8"))
+            logger.progress(
+                "Building silver_cards (MTGJson × Scryfall SQL join — long step)..."
+            )
+            self._silver_con.execute(
+                (_SQL_DIR / "silver_cards.sql").read_text(encoding="utf-8")
+            )
             count = self._silver_con.execute(
                 "SELECT count(*) FROM silver_cards"
             ).fetchone()

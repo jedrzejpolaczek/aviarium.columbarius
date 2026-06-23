@@ -24,7 +24,6 @@ def get_tables(conn: duckdb.DuckDBPyConnection) -> set[str]:
     return {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
 
 
-
 class BaseStorage(ABC):
     """Common DuckDB utilities shared by all storage tiers.
 
