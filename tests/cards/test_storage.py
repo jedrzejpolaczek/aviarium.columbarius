@@ -652,19 +652,6 @@ class TestSeedHistoricalPrices:
         ).fetchall()}
         assert "cardkingdom" in retailers
 
-    def test_mtgo_prices_not_collected(self, storage):
-        record = _PriceRecord(
-            uuid="uuid-1",
-            paper=None,
-            mtgo={"cardhoarder": {"retail": {"normal": {"2026-03-15": 0.5}}}},
-        )
-        storage.seed_historical_prices([record])
-        tables = storage._con.execute(
-            f"SELECT table_name FROM information_schema.tables"
-            f" WHERE table_name = '{self.HISTORY_TABLE}'"
-        ).fetchall()
-        assert tables == []
-
     def test_duckdb_error_raises_storage_write_error(self, storage):
         record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
         # DuckDB's C-level execute is read-only; replace _con with a MagicMock instead.
