@@ -19,7 +19,7 @@ class DuckDBWriter:
     Provides three write patterns:
         full_load — DROP + CREATE OR REPLACE (initial load or full rebuild)
         upsert    — DELETE + INSERT by key column (current-state tables)
-        append    — LEFT JOIN anti-join insert, dedup by (key_column, snapshot_date)
+        append    — LEFT JOIN anti-join insert, dedup by (key_column(s), snapshot_date)
                     (history tables that must never lose rows)
 
     All methods call _serialize to prepare the DataFrame before DuckDB registration
@@ -180,8 +180,10 @@ class DuckDBWriter:
             return
 
         key_cols = [key_column] if isinstance(key_column, str) else list(key_column)
+        if not key_cols:
+            raise ValueError("key_column must not be empty")
         join_conditions = " AND ".join(
-            [f"t.snapshot_date = s.snapshot_date"]
+            ["t.snapshot_date = s.snapshot_date"]
             + [f"t.{col} = s.{col}" for col in key_cols]
         )
         null_check = f"t.{key_cols[0]} IS NULL"
