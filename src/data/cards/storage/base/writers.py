@@ -151,24 +151,26 @@ class DuckDBWriter:
         self,
         df: pd.DataFrame,
         table_name: str,
-        key_column: str,
+        key_column: str | list[str],
     ) -> None:
         """Append rows to a history table, skipping already-snapshotted pairs.
 
-        Rows already present for the same (key_column, snapshot_date) pair are
-        skipped, so calling this multiple times is safe.
-        History tables accumulate one snapshot per day and must never lose rows.
-        Use upsert() for current-state tables that should replace rows.
+        Rows already present for the same composite key are skipped, so calling
+        this multiple times is safe. History tables accumulate one snapshot per
+        day and must never lose rows.
 
-        Note: deduplication is inter-call only — duplicate (key, snapshot_date) pairs
+        Deduplication key: (key_column, snapshot_date) when key_column is a str;
+        (col1, col2, …, snapshot_date) when key_column is a list.
+
+        Note: deduplication is inter-call only — duplicate key+date pairs
         within the same ``df`` are not removed.
 
         Args:
             df: DataFrame to append. If empty, the write is skipped and a
                 warning is logged.
             table_name: Target history table name.
-            key_column: Primary key column (e.g. "uuid" or "id") used together
-                with snapshot_date to detect already-present rows.
+            key_column: Column name(s) forming the composite dedup key together
+                with snapshot_date.
 
         Raises:
             StorageWriteError: If the DuckDB write fails.
@@ -176,6 +178,13 @@ class DuckDBWriter:
         if df.empty:
             logger.warning("No data to append into %r — skipping", table_name)
             return
+
+        key_cols = [key_column] if isinstance(key_column, str) else list(key_column)
+        join_conditions = " AND ".join(
+            [f"t.snapshot_date = s.snapshot_date"]
+            + [f"t.{col} = s.{col}" for col in key_cols]
+        )
+        null_check = f"t.{key_cols[0]} IS NULL"
 
         staging = self._serialize(df)
         self._con.register("_staging", staging)
@@ -191,16 +200,14 @@ class DuckDBWriter:
 
             else:
                 # LEFT JOIN anti-join rather than NOT EXISTS: lets DuckDB use a hash join
-                # on (key, snapshot_date) instead of a correlated subquery per row.
+                # on the composite key instead of a correlated subquery per row.
                 self._con.execute(
                     f"INSERT INTO {table_name} "
                     f"SELECT s.* FROM _staging s "
-                    f"LEFT JOIN {table_name} t "
-                    f"  ON t.{key_column} = s.{key_column} "
-                    f"  AND t.snapshot_date = s.snapshot_date "
-                    f"WHERE t.{key_column} IS NULL"
+                    f"LEFT JOIN {table_name} t ON {join_conditions} "
+                    f"WHERE {null_check}"
                 )
-                logger.info("Appended %d rows into %r", len(df), table_name)
+                logger.info("Appended rows into %r", table_name)
 
         except duckdb.Error as e:
             raise StorageWriteError(f"Failed to append into {table_name!r}: {e}") from e
