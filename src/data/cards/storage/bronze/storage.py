@@ -365,9 +365,9 @@ class BronzeStorage(BaseStorage):
         All Bronze tables are dropped and recreated via _process_sources.
         Snapshot history tables are created automatically on first call.
 
-        After the config loop, seed_historical_prices is called to backfill
-        the 90-day price history from AllPrices.json (if mtgjson_prices is
-        present in results).
+        After the config loop, _snapshot_scryfall_prices captures today's
+        Scryfall prices as scalars, and seed_historical_prices backfills
+        the 90-day MTGJson price history from AllPrices.json.
 
         Args:
             results: Output of ingesting_pipeline — maps source type to
@@ -375,6 +375,16 @@ class BronzeStorage(BaseStorage):
         """
         logger.info("Starting DuckDB populate")
         self._process_sources(results, update=False)
+
+        scryfall_records, _ = results.get("scryfall", ([], []))
+        try:
+            self._snapshot_scryfall_prices(scryfall_records)
+        except StorageWriteError as e:
+            logger.error(
+                "Scryfall price snapshot failed during populate: %s — skipping",
+                e,
+                exc_info=True,
+            )
 
         prices_records, _ = results.get("mtgjson_prices", ([], []))
         try:
@@ -397,6 +407,8 @@ class BronzeStorage(BaseStorage):
 
         Sources and their write strategy are declared in STORAGE_CONFIG via
         _process_sources. If one source fails the others are still processed.
+        Price snapshots use dedicated methods (_snapshot_scryfall_prices and
+        _snapshot_mtgjson_prices) called after _process_sources.
 
         Args:
             results: Output of ingesting_pipeline — maps source type to
@@ -404,3 +416,9 @@ class BronzeStorage(BaseStorage):
         """
         logger.info("Starting DuckDB update")
         self._process_sources(results, update=True)
+
+        scryfall_records, _ = results.get("scryfall", ([], []))
+        self._snapshot_scryfall_prices(scryfall_records)
+
+        mtgjson_records, _ = results.get("mtgjson_prices", ([], []))
+        self._snapshot_mtgjson_prices(mtgjson_records)

@@ -383,6 +383,8 @@ class TestPopulate:
         with (
             patch.object(storage, "_full_load_table"),
             patch.object(storage, "_snapshot") as mock_snap,
+            patch.object(storage, "_snapshot_scryfall_prices"),
+            patch.object(storage, "seed_historical_prices"),
         ):
             storage.populate(
                 {
@@ -391,8 +393,9 @@ class TestPopulate:
                     "mtgjson_prices": ([MagicMock()], []),
                 }
             )
-        # scryfall: 2 snapshots, mtgjson_prices: 1, format_staples explicit call: 1 → 4 total
-        assert mock_snap.call_count == 4
+        # scryfall meta (1) + format_staples (1) = 2
+        # mtgjson_prices snapshots are now handled by _snapshot_mtgjson_prices (not _snapshot)
+        assert mock_snap.call_count == 2
 
     def test_missing_source_in_results_treated_as_empty(self, storage):
         with (
@@ -483,11 +486,12 @@ class TestDailyUpdate:
         assert "bronze_mtgjson_cards" in inc_tables
         assert "bronze_tournament_results" in inc_tables
 
-    def test_calls_snapshot_for_configured_sources(self, storage):
+    def test_daily_update_calls_snapshot(self, storage):
         with (
             patch.object(storage, "_incremental_load"),
-            patch.object(storage, "_full_load_table"),
             patch.object(storage, "_snapshot") as mock_snap,
+            patch.object(storage, "_snapshot_scryfall_prices") as mock_scryfall_prices,
+            patch.object(storage, "_snapshot_mtgjson_prices") as mock_mtgjson_prices,
         ):
             storage.daily_update(
                 {
@@ -496,9 +500,10 @@ class TestDailyUpdate:
                     "mtgjson_cards": ([], []),
                 }
             )
-
-        # scryfall: 2 snapshots, mtgjson_prices: 1, format_staples explicit call: 1 → 4 total
-        assert mock_snap.call_count == 4
+        # _process_sources: scryfall meta (1) + format_staples (1) = 2
+        assert mock_snap.call_count == 2
+        mock_scryfall_prices.assert_called_once()
+        mock_mtgjson_prices.assert_called_once()
 
     def test_write_error_skips_source_without_raising(self, storage):
         with patch.object(

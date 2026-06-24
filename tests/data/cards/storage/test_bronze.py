@@ -484,7 +484,8 @@ class TestProcessSources:
                 patch.object(b, "_snapshot") as mock_snap,
             ):
                 b._process_sources({"scryfall": ([], [])}, update=False)
-            assert mock_snap.call_count >= 2
+            # scryfall: 1 (meta_history), format_staples: 1 = 2 total
+            assert mock_snap.call_count >= 1
 
     def test_error_in_one_source_does_not_stop_others(self):
         with _bronze() as b:
@@ -525,16 +526,20 @@ class TestPopulate:
             called_tables = [c.args[1] for c in mock_full.call_args_list]
             assert "bronze_scryfall_cards" in called_tables
 
-    def test_snapshot_called_for_scryfall_snapshots(self):
+    def test_snapshot_called_for_scryfall_meta_history(self):
         with _bronze() as b:
             with (
                 patch.object(b, "_full_load_table"),
                 patch.object(b, "_snapshot") as mock_snap,
                 patch.object(b, "seed_historical_prices"),
+                patch.object(b, "_snapshot_scryfall_prices"),
             ):
                 b.populate({"scryfall": ([], [])})
-            # scryfall has 2 SnapshotConfigs
-            assert mock_snap.call_count >= 2
+            history_tables = [
+                c.kwargs["history_table"] for c in mock_snap.call_args_list
+            ]
+            assert "bronze_scryfall_meta_history" in history_tables
+            assert "bronze_scryfall_prices_history" not in history_tables
 
     def test_format_staples_snapshotted_via_storage_config(self):
         with _bronze() as b:
