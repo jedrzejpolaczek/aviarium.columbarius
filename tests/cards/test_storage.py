@@ -578,18 +578,27 @@ class TestSeedHistoricalPrices:
         }
         assert dates == {"2026-04-01", "2026-04-02"}
 
-    def test_paper_filtered_to_snapshot_date_only(self, storage):
+    def test_scalar_prices_stored_for_2026_04_01(self, storage):
         record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
         storage.seed_historical_prices([record])
-        rows = storage._con.execute(
-            f"SELECT snapshot_date, paper FROM {self.HISTORY_TABLE} ORDER BY snapshot_date"
-        ).fetchall()
-        for snapshot_date, paper_json in rows:
-            paper = json.loads(paper_json)
-            normal = paper["cardmarket"]["retail"]["normal"]
-            assert list(normal.keys()) == [snapshot_date], (
-                f"Row for {snapshot_date} contains extra dates: {list(normal.keys())}"
-            )
+        row = storage._con.execute(
+            f"SELECT cardmarket_eur, cardmarket_eur_foil FROM {self.HISTORY_TABLE}"
+            " WHERE snapshot_date = '2026-04-01'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == pytest.approx(1.0)   # cardmarket_eur
+        assert row[1] == pytest.approx(2.0)   # cardmarket_eur_foil
+
+    def test_scalar_prices_stored_for_2026_04_02(self, storage):
+        record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
+        storage.seed_historical_prices([record])
+        row = storage._con.execute(
+            f"SELECT cardmarket_eur, cardmarket_eur_foil FROM {self.HISTORY_TABLE}"
+            " WHERE snapshot_date = '2026-04-02'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == pytest.approx(1.1)   # cardmarket_eur
+        assert row[1] is None                 # foil only exists for 2026-04-01
 
     def test_idempotent_second_call_does_not_duplicate(self, storage):
         record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
@@ -612,20 +621,18 @@ class TestSeedHistoricalPrices:
         ).fetchall()
         assert tables == []
 
-    def test_dates_collected_from_mtgo_platform(self, storage):
+    def test_mtgo_prices_not_collected(self, storage):
         record = _PriceRecord(
             uuid="uuid-1",
             paper=None,
-            mtgo={
-                "cardhoarder": {
-                    "retail": {"normal": {"2026-03-15": 0.5}},
-                    "buylist": None,
-                    "currency": "USD",
-                }
-            },
+            mtgo={"cardhoarder": {"retail": {"normal": {"2026-03-15": 0.5}}}},
         )
         storage.seed_historical_prices([record])
-        assert _count(storage, self.HISTORY_TABLE) == 1
+        tables = storage._con.execute(
+            f"SELECT table_name FROM information_schema.tables"
+            f" WHERE table_name = '{self.HISTORY_TABLE}'"
+        ).fetchall()
+        assert tables == []
 
     def test_staging_view_cleaned_up_after_write(self, storage):
         record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)

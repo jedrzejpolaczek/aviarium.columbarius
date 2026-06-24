@@ -175,11 +175,10 @@ class BronzeStorage(BaseStorage):
         """One-time seeding: explode AllPrices 90-day history into per-date rows.
 
         Reads MtgjsonCardPrices instances from AllPrices.json (not
-        AllPricesToday.json). Each card's price dict contains up to 90
+        AllPricesToday.json). Each card's paper price dict contains up to 90
         date-keyed entries; this method expands them so that
-        bronze_mtgjson_prices_history gets one row per (uuid, date). Each row
-        contains only that date's prices, matching the shape of daily snapshot
-        rows produced by _snapshot() from AllPricesToday.json.
+        bronze_mtgjson_prices_history gets one row per (uuid, date) with scalar
+        FLOAT price columns.
 
         Already-existing (uuid, snapshot_date) pairs are skipped, so the call
         is idempotent and safe to re-run if interrupted.
@@ -199,22 +198,23 @@ class BronzeStorage(BaseStorage):
         for record in records:
             dump = record.model_dump(mode="json")
             uuid_str = dump["uuid"]
+            paper = dump.get("paper") or {}
 
             dates: set[str] = set()
-            for platform in ("paper", "mtgo"):
-                for retailer_data in (dump.get(platform) or {}).values():
-                    for tx_type in ("buylist", "retail"):
-                        listing = retailer_data.get(tx_type) or {}
-                        dates.update((listing.get("foil") or {}).keys())
-                        dates.update((listing.get("normal") or {}).keys())
+            for retailer_data in paper.values():
+                for tx_type in ("buylist", "retail"):
+                    listing = (retailer_data or {}).get(tx_type) or {}
+                    dates.update((listing.get("foil") or {}).keys())
+                    dates.update((listing.get("normal") or {}).keys())
 
             for d in dates:
                 rows.append(
                     {
                         "uuid": uuid_str,
                         "snapshot_date": d,
-                        "paper": _filter_prices_to_date(dump.get("paper"), d),
-                        "mtgo": _filter_prices_to_date(dump.get("mtgo"), d),
+                        **_extract_mtgjson_scalar_prices(
+                            _filter_prices_to_date(paper, d), d
+                        ),
                     }
                 )
 
