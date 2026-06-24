@@ -56,6 +56,31 @@ def _filter_prices_to_date(
     return result or None
 
 
+_MTGJSON_PRICE_MAP: dict[str, tuple[str, str, str]] = {
+    "cardmarket_eur": ("cardmarket", "retail", "normal"),
+    "cardmarket_eur_foil": ("cardmarket", "retail", "foil"),
+    "cardmarket_buylist_eur": ("cardmarket", "buylist", "normal"),
+    "tcgplayer_usd": ("tcgplayer", "retail", "normal"),
+    "tcgplayer_usd_foil": ("tcgplayer", "retail", "foil"),
+    "tcgplayer_buylist_usd": ("tcgplayer", "buylist", "normal"),
+}
+
+
+def _extract_mtgjson_scalar_prices(
+    paper_dict: dict | None, target_date: str
+) -> dict[str, float | None]:
+    result: dict[str, float | None] = {col: None for col in _MTGJSON_PRICE_MAP}
+    if not paper_dict:
+        return result
+    for col, (retailer, tx_type, finish) in _MTGJSON_PRICE_MAP.items():
+        prices = (
+            ((paper_dict.get(retailer) or {}).get(tx_type) or {}).get(finish) or {}
+        )
+        candidates = {k: v for k, v in prices.items() if k <= target_date}
+        result[col] = float(candidates[max(candidates)]) if candidates else None
+    return result
+
+
 class BronzeStorage(BaseStorage):
     """Persistence layer for the Bronze (raw ingestion) tier.
 

@@ -8,7 +8,12 @@ import pytest
 from pydantic import BaseModel
 
 from src.data.cards.storage.bronze import STORAGE_CONFIG, BronzeStorage
-from src.data.cards.storage.bronze.storage import _filter_prices_to_date, _records_to_df
+from src.data.cards.storage.bronze.storage import (
+    _filter_prices_to_date,
+    _records_to_df,
+    _extract_mtgjson_scalar_prices,
+    _MTGJSON_PRICE_MAP,
+)
 from src.data.cards.storage.errors import StorageWriteError
 
 
@@ -141,6 +146,96 @@ class TestToDF:
     def test_none_list_cell_remains_null(self):
         df = _records_to_df([_Card(id="1", name="Alpha", tags=None)])
         assert pd.isna(df["tags"].iloc[0])
+
+
+# ---------------------------------------------------------------------------
+# _extract_mtgjson_scalar_prices
+# ---------------------------------------------------------------------------
+
+
+class TestExtractMtgjsonScalarPrices:
+    def test_returns_all_null_for_none_input(self):
+        result = _extract_mtgjson_scalar_prices(None, "2026-05-11")
+        assert result == {col: None for col in _MTGJSON_PRICE_MAP}
+
+    def test_returns_all_null_for_empty_dict(self):
+        result = _extract_mtgjson_scalar_prices({}, "2026-05-11")
+        assert result == {col: None for col in _MTGJSON_PRICE_MAP}
+
+    def test_extracts_cardmarket_eur(self):
+        paper = {"cardmarket": {"retail": {"normal": {"2026-05-11": 1.5}}}}
+        result = _extract_mtgjson_scalar_prices(paper, "2026-05-11")
+        assert result["cardmarket_eur"] == pytest.approx(1.5)
+
+    def test_selects_max_date_leq_target(self):
+        paper = {
+            "cardmarket": {
+                "retail": {"normal": {"2026-05-10": 1.4, "2026-05-11": 1.5}}
+            }
+        }
+        result = _extract_mtgjson_scalar_prices(paper, "2026-05-11")
+        assert result["cardmarket_eur"] == pytest.approx(1.5)
+
+    def test_excludes_dates_after_target(self):
+        paper = {
+            "cardmarket": {
+                "retail": {"normal": {"2026-05-12": 1.6, "2026-05-10": 1.4}}
+            }
+        }
+        result = _extract_mtgjson_scalar_prices(paper, "2026-05-11")
+        assert result["cardmarket_eur"] == pytest.approx(1.4)
+
+    def test_no_date_leq_target_returns_null(self):
+        paper = {"cardmarket": {"retail": {"normal": {"2026-05-12": 1.6}}}}
+        result = _extract_mtgjson_scalar_prices(paper, "2026-05-11")
+        assert result["cardmarket_eur"] is None
+
+    def test_missing_retailer_returns_null_for_that_col(self):
+        paper = {"tcgplayer": {"retail": {"normal": {"2026-05-11": 3.5}}}}
+        result = _extract_mtgjson_scalar_prices(paper, "2026-05-11")
+        assert result["cardmarket_eur"] is None
+        assert result["tcgplayer_usd"] == pytest.approx(3.5)
+
+    def test_extracts_all_six_cols(self):
+        paper = {
+            "cardmarket": {
+                "retail": {
+                    "normal": {"2026-05-11": 3.20},
+                    "foil": {"2026-05-11": 8.50},
+                },
+                "buylist": {"normal": {"2026-05-11": 1.80}},
+            },
+            "tcgplayer": {
+                "retail": {
+                    "normal": {"2026-05-11": 3.50},
+                    "foil": {"2026-05-11": 9.00},
+                },
+                "buylist": {"normal": {"2026-05-11": 2.10}},
+            },
+        }
+        result = _extract_mtgjson_scalar_prices(paper, "2026-05-11")
+        assert result["cardmarket_eur"] == pytest.approx(3.20)
+        assert result["cardmarket_eur_foil"] == pytest.approx(8.50)
+        assert result["cardmarket_buylist_eur"] == pytest.approx(1.80)
+        assert result["tcgplayer_usd"] == pytest.approx(3.50)
+        assert result["tcgplayer_usd_foil"] == pytest.approx(9.00)
+        assert result["tcgplayer_buylist_usd"] == pytest.approx(2.10)
+
+    def test_null_buylist_branch_returns_null(self):
+        paper = {
+            "cardmarket": {
+                "retail": {"normal": {"2026-05-11": 3.20}},
+                "buylist": None,
+            }
+        }
+        result = _extract_mtgjson_scalar_prices(paper, "2026-05-11")
+        assert result["cardmarket_eur"] == pytest.approx(3.20)
+        assert result["cardmarket_buylist_eur"] is None
+
+    def test_returns_float_not_str(self):
+        paper = {"cardmarket": {"retail": {"normal": {"2026-05-11": "1.5"}}}}
+        result = _extract_mtgjson_scalar_prices(paper, "2026-05-11")
+        assert isinstance(result["cardmarket_eur"], float)
 
 
 # ---------------------------------------------------------------------------
