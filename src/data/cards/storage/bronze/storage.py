@@ -208,15 +208,14 @@ class BronzeStorage(BaseStorage):
                     dates.update((listing.get("normal") or {}).keys())
 
             for d in dates:
-                rows.append(
-                    {
-                        "uuid": uuid_str,
-                        "snapshot_date": d,
-                        **_extract_mtgjson_scalar_prices(
-                            _filter_prices_to_date(paper, d), d
-                        ),
-                    }
-                )
+                scalars: dict[str, float | None] = {}
+                for col, (retailer, tx_type, finish) in _MTGJSON_PRICE_MAP.items():
+                    prices = (
+                        ((paper.get(retailer) or {}).get(tx_type) or {}).get(finish) or {}
+                    )
+                    val = prices.get(d)
+                    scalars[col] = float(val) if val is not None else None
+                rows.append({"uuid": uuid_str, "snapshot_date": d, **scalars})
 
         if not rows:
             logger.warning("No date-keyed prices found in records — skipping seed")
