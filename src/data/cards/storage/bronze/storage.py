@@ -204,7 +204,7 @@ class BronzeStorage(BaseStorage):
             logger.warning("No date-keyed prices found in records — skipping seed")
             return
 
-        DuckDBWriter(self._con).append(
+        self._writer.append(
             pd.DataFrame(rows),
             history_table,
             ["uuid", "retailer", "tx_type", "finish"],

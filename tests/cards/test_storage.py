@@ -654,8 +654,9 @@ class TestSeedHistoricalPrices:
 
     def test_duckdb_error_raises_storage_write_error(self, storage):
         record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
-        # DuckDB's C-level execute is read-only; replace _con with a MagicMock instead.
-        storage._con = MagicMock()
-        storage._con.execute.side_effect = duckdb.Error("disk full")
+        mock_con = MagicMock()
+        mock_con.execute.side_effect = duckdb.Error("disk full")
+        storage._con = mock_con
+        storage._writer._con = mock_con
         with pytest.raises(StorageWriteError, match="Failed to append into"):
             storage.seed_historical_prices([record])
