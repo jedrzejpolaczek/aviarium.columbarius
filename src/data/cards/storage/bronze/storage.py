@@ -248,12 +248,11 @@ class BronzeStorage(BaseStorage):
         logger.info("Snapshotted %d Scryfall price rows for %s", len(rows), today_iso)
 
     def _snapshot_mtgjson_prices(self, records: list[BaseModel]) -> None:
-        """Snapshot today's MTGJson prices into bronze_mtgjson_prices_history.
+        """Snapshot today's MTGJson prices into bronze_mtgjson_prices_history (EAV).
 
-        Extracts scalar FLOAT price columns from each record's paper dict using
-        _extract_mtgjson_scalar_prices (look-back semantics), then appends one
-        row per card with snapshot_date set to today. Duplicate (uuid,
-        snapshot_date) pairs are silently skipped, making the call idempotent.
+        Extracts all (retailer, tx_type, finish) combinations present in each
+        record's paper dict using look-back semantics via _extract_paper_eav_rows.
+        One EAV row = one price point. All retailers are captured.
 
         Args:
             records: Pydantic model instances with uuid and paper fields.
@@ -263,21 +262,25 @@ class BronzeStorage(BaseStorage):
             return
 
         today_iso = date.today().isoformat()
-        rows = []
+        rows: list[dict] = []
         for record in records:
             dump = record.model_dump(mode="json")
-            rows.append(
-                {
-                    "uuid": dump["uuid"],
-                    "snapshot_date": today_iso,
-                    **_extract_mtgjson_scalar_prices(dump.get("paper"), today_iso),
-                }
+            rows.extend(
+                _extract_paper_eav_rows(dump.get("paper"), dump["uuid"], today_iso)
             )
 
+        if not rows:
+            logger.warning("No paper price rows found — skipping MTGJson snapshot")
+            return
+
         df = pd.DataFrame(rows)
-        logger.progress("Snapshotting %d MTGJson price rows", len(df))
-        self._writer.append(df, "bronze_mtgjson_prices_history", "uuid")
-        logger.info("Snapshotted %d MTGJson price rows for %s", len(rows), today_iso)
+        logger.progress("Snapshotting %d MTGJson EAV price rows", len(df))
+        self._writer.append(
+            df,
+            "bronze_mtgjson_prices_history",
+            ["uuid", "retailer", "tx_type", "finish"],
+        )
+        logger.info("Snapshotted %d MTGJson EAV rows for %s", len(rows), today_iso)
 
     def _process_sources(
         self,
