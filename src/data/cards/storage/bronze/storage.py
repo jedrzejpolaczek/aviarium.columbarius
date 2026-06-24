@@ -156,16 +156,13 @@ class BronzeStorage(BaseStorage):
         )
 
     def seed_historical_prices(self, records: list[BaseModel]) -> None:
-        """One-time seeding: explode AllPrices 90-day history into per-date rows.
+        """One-time seeding: expand AllPrices 90-day history into EAV rows.
 
-        Reads MtgjsonCardPrices instances from AllPrices.json (not
-        AllPricesToday.json). Each card's paper price dict contains up to 90
-        date-keyed entries; this method expands them so that
-        bronze_mtgjson_prices_history gets one row per (uuid, date) with scalar
-        FLOAT price columns.
-
-        Already-existing (uuid, snapshot_date) pairs are skipped, so the call
-        is idempotent and safe to re-run if interrupted.
+        Each card's paper dict contains date-keyed prices per (retailer, tx_type,
+        finish). This method expands every leaf {date: price} pair into an
+        individual EAV row. All retailers in the feed are captured without
+        pre-selection. Already-existing (uuid, snapshot_date, retailer, tx_type,
+        finish) rows are skipped, making the call idempotent.
 
         Args:
             records: MtgjsonCardPrices instances from AllPrices.json.
@@ -184,29 +181,35 @@ class BronzeStorage(BaseStorage):
             uuid_str = dump["uuid"]
             paper = dump.get("paper") or {}
 
-            dates: set[str] = set()
-            for retailer_data in paper.values():
+            for retailer, retailer_data in paper.items():
+                if not retailer_data:
+                    continue
                 for tx_type in ("buylist", "retail"):
-                    listing = (retailer_data or {}).get(tx_type) or {}
-                    dates.update((listing.get("foil") or {}).keys())
-                    dates.update((listing.get("normal") or {}).keys())
-
-            for d in dates:
-                scalars: dict[str, float | None] = {}
-                for col, (retailer, tx_type, finish) in _MTGJSON_PRICE_MAP.items():
-                    prices = (
-                        ((paper.get(retailer) or {}).get(tx_type) or {}).get(finish) or {}
-                    )
-                    val = prices.get(d)
-                    scalars[col] = float(val) if val is not None else None
-                rows.append({"uuid": uuid_str, "snapshot_date": d, **scalars})
+                    listing = (retailer_data.get(tx_type)) or {}
+                    for finish, prices in listing.items():
+                        if not isinstance(prices, dict):
+                            continue
+                        for d, val in prices.items():
+                            if val is not None:
+                                rows.append({
+                                    "uuid": uuid_str,
+                                    "snapshot_date": d,
+                                    "retailer": retailer,
+                                    "tx_type": tx_type,
+                                    "finish": finish,
+                                    "price": float(val),
+                                })
 
         if not rows:
             logger.warning("No date-keyed prices found in records — skipping seed")
             return
 
-        DuckDBWriter(self._con).append(pd.DataFrame(rows), history_table, "uuid")
-        logger.info("Seeded %d historical price rows into %r", len(rows), history_table)
+        DuckDBWriter(self._con).append(
+            pd.DataFrame(rows),
+            history_table,
+            ["uuid", "retailer", "tx_type", "finish"],
+        )
+        logger.info("Seeded %d EAV price rows into %r", len(rows), history_table)
 
     def _snapshot_scryfall_prices(self, records: list[BaseModel]) -> None:
         """Snapshot today's Scryfall prices into bronze_scryfall_prices_history.

@@ -542,11 +542,12 @@ _PAPER_PRICES = {
     "cardmarket": {
         "retail": {
             "normal": {"2026-04-01": 1.0, "2026-04-02": 1.1},
-            "foil": {"2026-04-01": 2.0},
+            "foil":   {"2026-04-01": 2.0},
         },
-        "buylist": None,
-        "currency": "EUR",
-    }
+    },
+    "cardkingdom": {
+        "retail": {"normal": {"2026-04-01": 3.5}},
+    },
 }
 
 
@@ -566,11 +567,12 @@ class TestSeedHistoricalPrices:
         storage.seed_historical_prices([record])
         assert _count(storage, self.HISTORY_TABLE) > 0
 
-    def test_one_row_per_unique_date(self, storage):
+    def test_row_count_matches_eav_leaf_entries(self, storage):
         record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
         storage.seed_historical_prices([record])
-        # paper has dates 2026-04-01 and 2026-04-02 across normal+foil
-        assert _count(storage, self.HISTORY_TABLE) == 2
+        # 4 EAV leaf entries: cm/retail/normal/04-01, cm/retail/normal/04-02,
+        # cm/retail/foil/04-01, ck/retail/normal/04-01
+        assert _count(storage, self.HISTORY_TABLE) == 4
 
     def test_row_contains_uuid_and_snapshot_date(self, storage):
         record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
@@ -583,39 +585,17 @@ class TestSeedHistoricalPrices:
         }
         assert dates == {"2026-04-01", "2026-04-02"}
 
-    def test_scalar_prices_stored_for_2026_04_01(self, storage):
-        record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
-        storage.seed_historical_prices([record])
-        row = storage._con.execute(
-            f"SELECT cardmarket_eur, cardmarket_eur_foil FROM {self.HISTORY_TABLE}"
-            " WHERE snapshot_date = '2026-04-01'"
-        ).fetchone()
-        assert row is not None
-        assert row[0] == pytest.approx(1.0)   # cardmarket_eur
-        assert row[1] == pytest.approx(2.0)   # cardmarket_eur_foil
-
-    def test_scalar_prices_stored_for_2026_04_02(self, storage):
-        record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
-        storage.seed_historical_prices([record])
-        row = storage._con.execute(
-            f"SELECT cardmarket_eur, cardmarket_eur_foil FROM {self.HISTORY_TABLE}"
-            " WHERE snapshot_date = '2026-04-02'"
-        ).fetchone()
-        assert row is not None
-        assert row[0] == pytest.approx(1.1)   # cardmarket_eur
-        assert row[1] is None                 # foil only exists for 2026-04-01
-
     def test_idempotent_second_call_does_not_duplicate(self, storage):
         record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
         storage.seed_historical_prices([record])
         storage.seed_historical_prices([record])
-        assert _count(storage, self.HISTORY_TABLE) == 2
+        assert _count(storage, self.HISTORY_TABLE) == 4
 
     def test_multiple_cards_all_seeded(self, storage):
         r1 = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
         r2 = _PriceRecord(uuid="uuid-2", paper=_PAPER_PRICES)
         storage.seed_historical_prices([r1, r2])
-        assert _count(storage, self.HISTORY_TABLE) == 4
+        assert _count(storage, self.HISTORY_TABLE) == 8
 
     def test_record_with_no_dates_produces_no_rows(self, storage):
         record = _PriceRecord(uuid="uuid-1", paper=None, mtgo=None)
@@ -639,14 +619,51 @@ class TestSeedHistoricalPrices:
         ).fetchall()
         assert tables == []
 
-    def test_staging_view_cleaned_up_after_write(self, storage):
+    def test_eav_schema_has_correct_columns(self, storage):
         record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
         storage.seed_historical_prices([record])
-        views = storage._con.execute(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_name = '_seed_staging'"
+        cols = {r[0] for r in storage._con.execute(
+            f"DESCRIBE {self.HISTORY_TABLE}"
+        ).fetchall()}
+        assert cols == {"uuid", "snapshot_date", "retailer", "tx_type", "finish", "price"}
+
+    def test_eav_row_has_correct_values(self, storage):
+        record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
+        storage.seed_historical_prices([record])
+        row = storage._con.execute(
+            f"SELECT uuid, snapshot_date, retailer, tx_type, finish, price"
+            f" FROM {self.HISTORY_TABLE}"
+            f" WHERE retailer='cardmarket' AND tx_type='retail'"
+            f"   AND finish='normal' AND snapshot_date='2026-04-01'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "uuid-1"
+        assert str(row[1]) == "2026-04-01"
+        assert row[2] == "cardmarket"
+        assert row[3] == "retail"
+        assert row[4] == "normal"
+        assert row[5] == pytest.approx(1.0)
+
+    def test_captures_cardkingdom(self, storage):
+        record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
+        storage.seed_historical_prices([record])
+        retailers = {r[0] for r in storage._con.execute(
+            f"SELECT DISTINCT retailer FROM {self.HISTORY_TABLE}"
+        ).fetchall()}
+        assert "cardkingdom" in retailers
+
+    def test_mtgo_prices_not_collected(self, storage):
+        record = _PriceRecord(
+            uuid="uuid-1",
+            paper=None,
+            mtgo={"cardhoarder": {"retail": {"normal": {"2026-03-15": 0.5}}}},
+        )
+        storage.seed_historical_prices([record])
+        tables = storage._con.execute(
+            f"SELECT table_name FROM information_schema.tables"
+            f" WHERE table_name = '{self.HISTORY_TABLE}'"
         ).fetchall()
-        assert views == []
+        assert tables == []
 
     def test_duckdb_error_raises_storage_write_error(self, storage):
         record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
