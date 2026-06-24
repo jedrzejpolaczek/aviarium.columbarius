@@ -31,37 +31,38 @@ def _records_to_df(records: Sequence[BaseModel]) -> pd.DataFrame:
     return pd.DataFrame([r.model_dump(mode="json") for r in records])
 
 
-_MTGJSON_PRICE_MAP: dict[str, tuple[str, str, str]] = {
-    "cardmarket_eur": ("cardmarket", "retail", "normal"),
-    "cardmarket_eur_foil": ("cardmarket", "retail", "foil"),
-    "cardmarket_buylist_eur": ("cardmarket", "buylist", "normal"),
-    "tcgplayer_usd": ("tcgplayer", "retail", "normal"),
-    "tcgplayer_usd_foil": ("tcgplayer", "retail", "foil"),
-    "tcgplayer_buylist_usd": ("tcgplayer", "buylist", "normal"),
-}
+def _extract_paper_eav_rows(
+    paper_dict: dict | None, uuid: str, snapshot_date: str
+) -> list[dict]:
+    """Extract EAV rows from an MTGJson paper dict for a given snapshot date.
 
-
-def _extract_mtgjson_scalar_prices(
-    paper_dict: dict | None, target_date: str
-) -> dict[str, float | None]:
-    """Extract scalar FLOAT price columns from a paper price dict.
-
-    Uses look-back semantics: selects the most recent price for each column
-    where the date key is <= target_date. Appropriate for daily snapshots
-    (AllPricesToday.json data has only today's key). For seeding historical
-    data with multi-date dicts, use inline exact-date extraction instead
-    (see seed_historical_prices).
+    Iterates every (retailer, tx_type, finish) found in paper_dict without
+    pre-selection — all retailers present in the feed are captured. Uses
+    look-back semantics: selects the most recent price per combination where
+    date key <= snapshot_date.
     """
-    result: dict[str, float | None] = {col: None for col in _MTGJSON_PRICE_MAP}
     if not paper_dict:
-        return result
-    for col, (retailer, tx_type, finish) in _MTGJSON_PRICE_MAP.items():
-        prices = (
-            ((paper_dict.get(retailer) or {}).get(tx_type) or {}).get(finish) or {}
-        )
-        candidates = {k: v for k, v in prices.items() if k <= target_date}
-        result[col] = float(candidates[max(candidates)]) if candidates else None
-    return result
+        return []
+    rows = []
+    for retailer, retailer_data in paper_dict.items():
+        if not retailer_data:
+            continue
+        for tx_type in ("buylist", "retail"):
+            listing = (retailer_data.get(tx_type)) or {}
+            for finish, prices in listing.items():
+                if not isinstance(prices, dict):
+                    continue
+                candidates = {k: v for k, v in prices.items() if k <= snapshot_date}
+                if candidates:
+                    rows.append({
+                        "uuid": uuid,
+                        "snapshot_date": snapshot_date,
+                        "retailer": retailer,
+                        "tx_type": tx_type,
+                        "finish": finish,
+                        "price": float(candidates[max(candidates)]),
+                    })
+    return rows
 
 
 class BronzeStorage(BaseStorage):

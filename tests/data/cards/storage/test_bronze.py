@@ -9,8 +9,7 @@ from pydantic import BaseModel
 
 from src.data.cards.storage.bronze import STORAGE_CONFIG, BronzeStorage
 from src.data.cards.storage.bronze.storage import (
-    _extract_mtgjson_scalar_prices,
-    _MTGJSON_PRICE_MAP,
+    _extract_paper_eav_rows,
     _records_to_df,
 )
 from src.data.cards.storage.errors import StorageWriteError
@@ -64,93 +63,82 @@ class TestToDF:
 
 
 # ---------------------------------------------------------------------------
-# _extract_mtgjson_scalar_prices
+# _extract_paper_eav_rows
 # ---------------------------------------------------------------------------
 
 
-class TestExtractMtgjsonScalarPrices:
-    def test_returns_all_null_for_none_input(self):
-        result = _extract_mtgjson_scalar_prices(None, "2026-05-11")
-        assert result == {col: None for col in _MTGJSON_PRICE_MAP}
+class TestExtractPaperEavRows:
+    def test_returns_empty_for_none(self):
+        assert _extract_paper_eav_rows(None, "u1", "2026-05-11") == []
 
-    def test_returns_all_null_for_empty_dict(self):
-        result = _extract_mtgjson_scalar_prices({}, "2026-05-11")
-        assert result == {col: None for col in _MTGJSON_PRICE_MAP}
+    def test_returns_empty_for_empty_dict(self):
+        assert _extract_paper_eav_rows({}, "u1", "2026-05-11") == []
 
-    def test_extracts_cardmarket_eur(self):
-        paper = {"cardmarket": {"retail": {"normal": {"2026-05-11": 1.5}}}}
-        result = _extract_mtgjson_scalar_prices(paper, "2026-05-11")
-        assert result["cardmarket_eur"] == pytest.approx(1.5)
-
-    def test_selects_max_date_leq_target(self):
-        paper = {
-            "cardmarket": {
-                "retail": {"normal": {"2026-05-10": 1.4, "2026-05-11": 1.5}}
-            }
+    def test_emits_one_row_per_price_point(self):
+        paper = {"cardmarket": {"retail": {"normal": {"2026-05-11": 3.20}}}}
+        rows = _extract_paper_eav_rows(paper, "u1", "2026-05-11")
+        assert len(rows) == 1
+        assert rows[0] == {
+            "uuid": "u1",
+            "snapshot_date": "2026-05-11",
+            "retailer": "cardmarket",
+            "tx_type": "retail",
+            "finish": "normal",
+            "price": pytest.approx(3.20),
         }
-        result = _extract_mtgjson_scalar_prices(paper, "2026-05-11")
-        assert result["cardmarket_eur"] == pytest.approx(1.5)
+
+    def test_captures_all_retailers_including_cardkingdom(self):
+        paper = {
+            "cardmarket":  {"retail": {"normal": {"2026-05-11": 3.20}}},
+            "tcgplayer":   {"retail": {"normal": {"2026-05-11": 3.50}}},
+            "cardkingdom": {"retail": {"normal": {"2026-05-11": 4.00}}},
+        }
+        rows = _extract_paper_eav_rows(paper, "u1", "2026-05-11")
+        retailers = {r["retailer"] for r in rows}
+        assert retailers == {"cardmarket", "tcgplayer", "cardkingdom"}
+
+    def test_lookback_selects_max_date_leq_target(self):
+        paper = {"cardmarket": {"retail": {"normal": {"2026-05-10": 1.0, "2026-05-11": 3.20}}}}
+        rows = _extract_paper_eav_rows(paper, "u1", "2026-05-11")
+        assert rows[0]["price"] == pytest.approx(3.20)
 
     def test_excludes_dates_after_target(self):
+        paper = {"cardmarket": {"retail": {"normal": {"2026-05-12": 5.00, "2026-05-10": 1.0}}}}
+        rows = _extract_paper_eav_rows(paper, "u1", "2026-05-11")
+        assert len(rows) == 1
+        assert rows[0]["price"] == pytest.approx(1.0)
+
+    def test_no_date_leq_target_emits_no_row(self):
+        paper = {"cardmarket": {"retail": {"normal": {"2026-05-12": 5.00}}}}
+        assert _extract_paper_eav_rows(paper, "u1", "2026-05-11") == []
+
+    def test_captures_all_tx_types(self):
         paper = {
             "cardmarket": {
-                "retail": {"normal": {"2026-05-12": 1.6, "2026-05-10": 1.4}}
+                "retail":  {"normal": {"2026-05-11": 3.20}},
+                "buylist": {"normal": {"2026-05-11": 1.80}},
             }
         }
-        result = _extract_mtgjson_scalar_prices(paper, "2026-05-11")
-        assert result["cardmarket_eur"] == pytest.approx(1.4)
+        rows = _extract_paper_eav_rows(paper, "u1", "2026-05-11")
+        assert {r["tx_type"] for r in rows} == {"retail", "buylist"}
 
-    def test_no_date_leq_target_returns_null(self):
-        paper = {"cardmarket": {"retail": {"normal": {"2026-05-12": 1.6}}}}
-        result = _extract_mtgjson_scalar_prices(paper, "2026-05-11")
-        assert result["cardmarket_eur"] is None
-
-    def test_missing_retailer_returns_null_for_that_col(self):
-        paper = {"tcgplayer": {"retail": {"normal": {"2026-05-11": 3.5}}}}
-        result = _extract_mtgjson_scalar_prices(paper, "2026-05-11")
-        assert result["cardmarket_eur"] is None
-        assert result["tcgplayer_usd"] == pytest.approx(3.5)
-
-    def test_extracts_all_six_cols(self):
+    def test_captures_all_finishes_including_etched(self):
         paper = {
             "cardmarket": {
                 "retail": {
                     "normal": {"2026-05-11": 3.20},
-                    "foil": {"2026-05-11": 8.50},
-                },
-                "buylist": {"normal": {"2026-05-11": 1.80}},
-            },
-            "tcgplayer": {
-                "retail": {
-                    "normal": {"2026-05-11": 3.50},
-                    "foil": {"2026-05-11": 9.00},
-                },
-                "buylist": {"normal": {"2026-05-11": 2.10}},
-            },
-        }
-        result = _extract_mtgjson_scalar_prices(paper, "2026-05-11")
-        assert result["cardmarket_eur"] == pytest.approx(3.20)
-        assert result["cardmarket_eur_foil"] == pytest.approx(8.50)
-        assert result["cardmarket_buylist_eur"] == pytest.approx(1.80)
-        assert result["tcgplayer_usd"] == pytest.approx(3.50)
-        assert result["tcgplayer_usd_foil"] == pytest.approx(9.00)
-        assert result["tcgplayer_buylist_usd"] == pytest.approx(2.10)
-
-    def test_null_buylist_branch_returns_null(self):
-        paper = {
-            "cardmarket": {
-                "retail": {"normal": {"2026-05-11": 3.20}},
-                "buylist": None,
+                    "foil":   {"2026-05-11": 8.50},
+                    "etched": {"2026-05-11": 12.00},
+                }
             }
         }
-        result = _extract_mtgjson_scalar_prices(paper, "2026-05-11")
-        assert result["cardmarket_eur"] == pytest.approx(3.20)
-        assert result["cardmarket_buylist_eur"] is None
+        rows = _extract_paper_eav_rows(paper, "u1", "2026-05-11")
+        assert {r["finish"] for r in rows} == {"normal", "foil", "etched"}
 
-    def test_returns_float_not_str(self):
-        paper = {"cardmarket": {"retail": {"normal": {"2026-05-11": "1.5"}}}}
-        result = _extract_mtgjson_scalar_prices(paper, "2026-05-11")
-        assert isinstance(result["cardmarket_eur"], float)
+    def test_price_is_float_not_str(self):
+        paper = {"cardmarket": {"retail": {"normal": {"2026-05-11": "3.20"}}}}
+        rows = _extract_paper_eav_rows(paper, "u1", "2026-05-11")
+        assert isinstance(rows[0]["price"], float)
 
 
 # ---------------------------------------------------------------------------
