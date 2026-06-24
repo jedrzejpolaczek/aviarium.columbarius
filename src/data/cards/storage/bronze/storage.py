@@ -14,7 +14,6 @@ Typical usage:
 
 from collections.abc import Sequence
 from datetime import date
-from typing import Any
 
 import pandas as pd
 from pydantic import BaseModel
@@ -30,30 +29,6 @@ logger = get_logger(__name__)
 
 def _records_to_df(records: Sequence[BaseModel]) -> pd.DataFrame:
     return pd.DataFrame([r.model_dump(mode="json") for r in records])
-
-
-def _filter_prices_to_date(
-    platform_prices: dict[str, Any] | None, target_date: str
-) -> dict[str, Any] | None:
-    if not platform_prices:
-        return None
-    result: dict[str, Any] = {}
-    for retailer, retailer_data in platform_prices.items():
-        filtered_retailer: dict[str, Any] = {}
-        if "currency" in retailer_data:
-            filtered_retailer["currency"] = retailer_data["currency"]
-        for tx_type in ("buylist", "retail"):
-            listing = retailer_data.get(tx_type) or {}
-            filtered_listing: dict[str, Any] = {}
-            for finish in ("foil", "normal"):
-                prices = listing.get(finish) or {}
-                if target_date in prices:
-                    filtered_listing[finish] = {target_date: prices[target_date]}
-            if filtered_listing:
-                filtered_retailer[tx_type] = filtered_listing
-        if any(k in filtered_retailer for k in ("buylist", "retail")):
-            result[retailer] = filtered_retailer
-    return result or None
 
 
 _MTGJSON_PRICE_MAP: dict[str, tuple[str, str, str]] = {

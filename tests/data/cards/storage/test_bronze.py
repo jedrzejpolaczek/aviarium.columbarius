@@ -9,10 +9,9 @@ from pydantic import BaseModel
 
 from src.data.cards.storage.bronze import STORAGE_CONFIG, BronzeStorage
 from src.data.cards.storage.bronze.storage import (
-    _filter_prices_to_date,
-    _records_to_df,
     _extract_mtgjson_scalar_prices,
     _MTGJSON_PRICE_MAP,
+    _records_to_df,
 )
 from src.data.cards.storage.errors import StorageWriteError
 
@@ -36,90 +35,6 @@ class _Item(BaseModel):
 def _bronze() -> BronzeStorage:
     """Return a BronzeStorage backed by an in-memory DuckDB database."""
     return BronzeStorage(":memory:")
-
-
-# ---------------------------------------------------------------------------
-# _filter_prices_to_date
-# ---------------------------------------------------------------------------
-
-
-class TestFilterPricesToDate:
-    def test_returns_none_for_none_input(self):
-        assert _filter_prices_to_date(None, "2026-05-01") is None
-
-    def test_returns_none_for_empty_dict(self):
-        assert _filter_prices_to_date({}, "2026-05-01") is None
-
-    def test_returns_none_when_no_prices_on_target_date(self):
-        prices = {"ck": {"retail": {"normal": {"2026-05-01": 5.0}}}}
-        assert _filter_prices_to_date(prices, "2026-05-02") is None
-
-    def test_keeps_only_target_date(self):
-        prices = {
-            "ck": {
-                "retail": {
-                    "normal": {
-                        "2026-05-01": 5.0,
-                        "2026-05-02": 6.0,
-                    }
-                }
-            }
-        }
-        result = _filter_prices_to_date(prices, "2026-05-01")
-        assert result is not None
-        assert result["ck"]["retail"]["normal"] == {"2026-05-01": 5.0}
-        assert "2026-05-02" not in result["ck"]["retail"]["normal"]
-
-    def test_preserves_currency(self):
-        prices = {
-            "ck": {
-                "currency": "USD",
-                "retail": {"normal": {"2026-05-01": 5.0}},
-            }
-        }
-        result = _filter_prices_to_date(prices, "2026-05-01")
-        assert result is not None
-        assert result["ck"]["currency"] == "USD"
-
-    def test_omits_retailer_with_no_matching_date(self):
-        prices = {
-            "ck": {"retail": {"normal": {"2026-05-01": 5.0}}},
-            "tcg": {"retail": {"normal": {"2026-05-02": 3.0}}},
-        }
-        result = _filter_prices_to_date(prices, "2026-05-01")
-        assert result is not None
-        assert "ck" in result
-        assert "tcg" not in result
-
-    def test_currency_only_retailer_excluded_without_prices(self):
-        prices = {"ck": {"currency": "USD"}}
-        assert _filter_prices_to_date(prices, "2026-05-01") is None
-
-    def test_handles_foil_and_normal_independently(self):
-        prices = {
-            "ck": {
-                "retail": {
-                    "foil": {"2026-05-01": 10.0},
-                    "normal": {"2026-05-02": 5.0},
-                }
-            }
-        }
-        result = _filter_prices_to_date(prices, "2026-05-01")
-        assert result is not None
-        assert "foil" in result["ck"]["retail"]
-        assert "normal" not in result["ck"]["retail"]
-
-    def test_buylist_included_when_on_target_date(self):
-        prices = {
-            "ck": {
-                "buylist": {"normal": {"2026-05-01": 2.0}},
-                "retail": {"normal": {"2026-05-01": 5.0}},
-            }
-        }
-        result = _filter_prices_to_date(prices, "2026-05-01")
-        assert result is not None
-        assert "buylist" in result["ck"]
-        assert "retail" in result["ck"]
 
 
 # ---------------------------------------------------------------------------
