@@ -625,6 +625,104 @@ class TestDailyUpdate:
 
 
 # ---------------------------------------------------------------------------
+# BronzeStorage._snapshot_scryfall_prices
+# ---------------------------------------------------------------------------
+
+
+class _ScryfallCard(BaseModel):
+    id: str
+    prices: dict | None = None
+
+
+class TestSnapshotScryfallPrices:
+    HISTORY_TABLE = "bronze_scryfall_prices_history"
+
+    def test_creates_history_table_on_first_call(self):
+        with _bronze() as b:
+            record = _ScryfallCard(
+                id="s1", prices={"eur": "3.20", "eur_foil": None, "usd": None, "usd_foil": None}
+            )
+            b._snapshot_scryfall_prices([record])
+            row = b._con.execute(
+                f"SELECT count(*) FROM {self.HISTORY_TABLE}"
+            ).fetchone()
+        assert row is not None and row[0] == 1
+
+    def test_extracts_eur_as_float(self):
+        with _bronze() as b:
+            record = _ScryfallCard(
+                id="s1",
+                prices={"eur": "3.20", "eur_foil": "8.50", "usd": "3.50", "usd_foil": "9.00"},
+            )
+            b._snapshot_scryfall_prices([record])
+            row = b._con.execute(
+                f"SELECT eur, eur_foil, usd, usd_foil FROM {self.HISTORY_TABLE}"
+            ).fetchone()
+        assert row is not None
+        assert row[0] == pytest.approx(3.20)
+        assert row[1] == pytest.approx(8.50)
+        assert row[2] == pytest.approx(3.50)
+        assert row[3] == pytest.approx(9.00)
+
+    def test_null_price_fields_produce_null_columns(self):
+        with _bronze() as b:
+            record = _ScryfallCard(
+                id="s1",
+                prices={"eur": "3.20", "eur_foil": None, "usd": None, "usd_foil": None},
+            )
+            b._snapshot_scryfall_prices([record])
+            row = b._con.execute(
+                f"SELECT eur, eur_foil FROM {self.HISTORY_TABLE}"
+            ).fetchone()
+        assert row is not None
+        assert row[0] == pytest.approx(3.20)
+        assert row[1] is None
+
+    def test_tix_key_is_ignored(self):
+        with _bronze() as b:
+            record = _ScryfallCard(
+                id="s1",
+                prices={"eur": "3.20", "tix": "0.05"},
+            )
+            b._snapshot_scryfall_prices([record])
+            cols = {r[0] for r in b._con.execute(
+                f"DESCRIBE {self.HISTORY_TABLE}"
+            ).fetchall()}
+        assert "tix" not in cols
+        assert "eur" in cols
+
+    def test_none_prices_dict_produces_all_null_columns(self):
+        with _bronze() as b:
+            record = _ScryfallCard(id="s1", prices=None)
+            b._snapshot_scryfall_prices([record])
+            row = b._con.execute(
+                f"SELECT eur FROM {self.HISTORY_TABLE}"
+            ).fetchone()
+        assert row is not None and row[0] is None
+
+    def test_idempotent_on_duplicate_id_date(self):
+        with _bronze() as b:
+            record = _ScryfallCard(
+                id="s1", prices={"eur": "3.20"}
+            )
+            b._snapshot_scryfall_prices([record])
+            b._snapshot_scryfall_prices([record])
+            row = b._con.execute(
+                f"SELECT count(*) FROM {self.HISTORY_TABLE}"
+            ).fetchone()
+        assert row is not None and row[0] == 1
+
+    def test_skips_when_records_empty(self):
+        with _bronze() as b:
+            b._snapshot_scryfall_prices([])
+            row = b._con.execute(
+                "SELECT count(*) FROM information_schema.tables"
+                f" WHERE table_name = '{self.HISTORY_TABLE}'"
+            ).fetchone()
+        assert row is not None and row[0] == 0
+
+
+# ---------------------------------------------------------------------------
 # BronzeStorage._snapshot_mtgjson_prices
 # ---------------------------------------------------------------------------
 
