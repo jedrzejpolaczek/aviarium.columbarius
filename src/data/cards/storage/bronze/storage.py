@@ -69,6 +69,14 @@ _MTGJSON_PRICE_MAP: dict[str, tuple[str, str, str]] = {
 def _extract_mtgjson_scalar_prices(
     paper_dict: dict | None, target_date: str
 ) -> dict[str, float | None]:
+    """Extract scalar FLOAT price columns from a paper price dict.
+
+    Uses look-back semantics: selects the most recent price for each column
+    where the date key is <= target_date. Appropriate for daily snapshots
+    (AllPricesToday.json data has only today's key). For seeding historical
+    data with multi-date dicts, use inline exact-date extraction instead
+    (see seed_historical_prices).
+    """
     result: dict[str, float | None] = {col: None for col in _MTGJSON_PRICE_MAP}
     if not paper_dict:
         return result
@@ -223,6 +231,38 @@ class BronzeStorage(BaseStorage):
 
         DuckDBWriter(self._con).append(pd.DataFrame(rows), history_table, "uuid")
         logger.info("Seeded %d historical price rows into %r", len(rows), history_table)
+
+    def _snapshot_mtgjson_prices(self, records: list[BaseModel]) -> None:
+        """Snapshot today's MTGJson prices into bronze_mtgjson_prices_history.
+
+        Extracts scalar FLOAT price columns from each record's paper dict using
+        _extract_mtgjson_scalar_prices (look-back semantics), then appends one
+        row per card with snapshot_date set to today. Duplicate (uuid,
+        snapshot_date) pairs are silently skipped, making the call idempotent.
+
+        Args:
+            records: Pydantic model instances with uuid and paper fields.
+        """
+        if not records:
+            logger.warning("No MTGJson price records to snapshot — skipping")
+            return
+
+        today_iso = date.today().isoformat()
+        rows = []
+        for record in records:
+            dump = record.model_dump(mode="json")
+            rows.append(
+                {
+                    "uuid": dump["uuid"],
+                    "snapshot_date": today_iso,
+                    **_extract_mtgjson_scalar_prices(dump.get("paper"), today_iso),
+                }
+            )
+
+        df = pd.DataFrame(rows)
+        logger.progress("Snapshotting %d MTGJson price rows", len(df))
+        self._writer.append(df, "bronze_mtgjson_prices_history", "uuid")
+        logger.info("Snapshotted %d MTGJson price rows for %s", len(rows), today_iso)
 
     def _process_sources(
         self,

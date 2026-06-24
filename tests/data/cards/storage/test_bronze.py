@@ -622,3 +622,108 @@ class TestDailyUpdate:
                 patch.object(b, "_snapshot"),
             ):
                 b.daily_update({})
+
+
+# ---------------------------------------------------------------------------
+# BronzeStorage._snapshot_mtgjson_prices
+# ---------------------------------------------------------------------------
+
+
+class _MtgjsonPrices(BaseModel):
+    uuid: str
+    paper: dict | None = None
+
+
+class TestSnapshotMtgjsonPrices:
+    HISTORY_TABLE = "bronze_mtgjson_prices_history"
+
+    def test_creates_history_table_on_first_call(self):
+        with _bronze() as b:
+            record = _MtgjsonPrices(
+                uuid="u1",
+                paper={"cardmarket": {"retail": {"normal": {"2026-06-24": 3.20}}}},
+            )
+            b._snapshot_mtgjson_prices([record])
+            row = b._con.execute(
+                f"SELECT count(*) FROM {self.HISTORY_TABLE}"
+            ).fetchone()
+        assert row is not None and row[0] == 1
+
+    def test_extracts_scalar_columns(self):
+        with _bronze() as b:
+            record = _MtgjsonPrices(
+                uuid="u1",
+                paper={
+                    "cardmarket": {
+                        "retail": {
+                            "normal": {"2026-06-24": 3.20},
+                            "foil": {"2026-06-24": 8.50},
+                        },
+                        "buylist": {"normal": {"2026-06-24": 1.80}},
+                    },
+                    "tcgplayer": {
+                        "retail": {
+                            "normal": {"2026-06-24": 3.50},
+                            "foil": {"2026-06-24": 9.00},
+                        },
+                        "buylist": {"normal": {"2026-06-24": 2.10}},
+                    },
+                },
+            )
+            b._snapshot_mtgjson_prices([record])
+            row = b._con.execute(
+                f"SELECT cardmarket_eur, cardmarket_eur_foil, cardmarket_buylist_eur,"
+                f" tcgplayer_usd, tcgplayer_usd_foil, tcgplayer_buylist_usd"
+                f" FROM {self.HISTORY_TABLE} WHERE uuid = 'u1'"
+            ).fetchone()
+        assert row is not None
+        assert row[0] == pytest.approx(3.20)
+        assert row[1] == pytest.approx(8.50)
+        assert row[2] == pytest.approx(1.80)
+        assert row[3] == pytest.approx(3.50)
+        assert row[4] == pytest.approx(9.00)
+        assert row[5] == pytest.approx(2.10)
+
+    def test_null_paper_produces_all_null_price_cols(self):
+        with _bronze() as b:
+            record = _MtgjsonPrices(uuid="u1", paper=None)
+            b._snapshot_mtgjson_prices([record])
+            row = b._con.execute(
+                f"SELECT cardmarket_eur FROM {self.HISTORY_TABLE}"
+            ).fetchone()
+        assert row is not None and row[0] is None
+
+    def test_idempotent_on_duplicate_uuid_date(self):
+        with _bronze() as b:
+            record = _MtgjsonPrices(
+                uuid="u1",
+                paper={"cardmarket": {"retail": {"normal": {"2026-06-24": 3.20}}}},
+            )
+            b._snapshot_mtgjson_prices([record])
+            b._snapshot_mtgjson_prices([record])
+            row = b._con.execute(
+                f"SELECT count(*) FROM {self.HISTORY_TABLE}"
+            ).fetchone()
+        assert row is not None and row[0] == 1
+
+    def test_uses_today_as_snapshot_date(self):
+        from datetime import date as date_cls
+
+        with _bronze() as b:
+            record = _MtgjsonPrices(uuid="u1", paper=None)
+            with patch("src.data.cards.storage.bronze.storage.date") as mock_date:
+                mock_date.today.return_value = date_cls.fromisoformat("2026-06-24")
+                b._snapshot_mtgjson_prices([record])
+            row = b._con.execute(
+                f"SELECT snapshot_date FROM {self.HISTORY_TABLE}"
+            ).fetchone()
+        assert row is not None and str(row[0]) == "2026-06-24"
+
+    def test_skips_when_records_empty(self):
+        with _bronze() as b:
+            b._snapshot_mtgjson_prices([])
+            row = b._con.execute(
+                "SELECT count(*) FROM information_schema.tables"
+                f" WHERE table_name = '{self.HISTORY_TABLE}'"
+            ).fetchone()
+        assert row is not None and row[0] == 0
