@@ -214,10 +214,9 @@ class BronzeStorage(BaseStorage):
     def _snapshot_scryfall_prices(self, records: list[BaseModel]) -> None:
         """Snapshot today's Scryfall prices into bronze_scryfall_prices_history.
 
-        Extracts scalar FLOAT price columns (eur, eur_foil, usd, usd_foil) from
-        each record's prices dict. tix is excluded per ADR-012 (physical cards only).
-        Null string values produce NULL float columns. Duplicate (id, snapshot_date)
-        pairs are silently skipped, making the call idempotent.
+        Extracts scalar FLOAT price columns (eur, eur_foil, usd, usd_foil, tix) from
+        each record's prices dict. Null string values produce NULL float columns.
+        Duplicate (id, snapshot_date) pairs are silently skipped, making the call idempotent.
 
         Args:
             records: Pydantic model instances with id and prices fields.
@@ -239,6 +238,7 @@ class BronzeStorage(BaseStorage):
                     "eur_foil": float(prices["eur_foil"]) if prices.get("eur_foil") is not None else None,
                     "usd": float(prices["usd"]) if prices.get("usd") is not None else None,
                     "usd_foil": float(prices["usd_foil"]) if prices.get("usd_foil") is not None else None,
+                    "tix": float(prices["tix"]) if prices.get("tix") is not None else None,
                 }
             )
 

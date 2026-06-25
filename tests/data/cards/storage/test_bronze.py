@@ -586,7 +586,7 @@ class TestSnapshotScryfallPrices:
         assert row[0] == pytest.approx(3.20)
         assert row[1] is None
 
-    def test_tix_key_is_ignored(self):
+    def test_tix_column_present_in_schema(self):
         with _bronze() as b:
             record = _ScryfallCard(
                 id="s1",
@@ -596,8 +596,27 @@ class TestSnapshotScryfallPrices:
             cols = {r[0] for r in b._con.execute(
                 f"DESCRIBE {self.HISTORY_TABLE}"
             ).fetchall()}
-        assert "tix" not in cols
-        assert "eur" in cols
+        assert "tix" in cols
+
+    def test_tix_stored_as_float(self):
+        with _bronze() as b:
+            record = _ScryfallCard(
+                id="s1",
+                prices={"eur": "3.20", "tix": "0.05"},
+            )
+            b._snapshot_scryfall_prices([record])
+            row = b._con.execute(
+                f"SELECT tix FROM {self.HISTORY_TABLE}"
+            ).fetchone()
+        assert row is not None
+        assert row[0] == pytest.approx(0.05)
+
+    def test_null_tix_produces_null_column(self):
+        with _bronze() as b:
+            record = _ScryfallCard(id="s1", prices={"eur": "3.20", "tix": None})
+            b._snapshot_scryfall_prices([record])
+            row = b._con.execute(f"SELECT tix FROM {self.HISTORY_TABLE}").fetchone()
+        assert row is not None and row[0] is None
 
     def test_none_prices_dict_produces_all_null_columns(self):
         with _bronze() as b:
