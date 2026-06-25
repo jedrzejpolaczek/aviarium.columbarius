@@ -1,6 +1,7 @@
 """Tests for scripts/migrate_bronze_prices.py."""
 
 import json
+import shutil
 from pathlib import Path
 
 import duckdb
@@ -57,12 +58,10 @@ def _make_scryfall_source(path: str) -> None:
 
 def _make_target_with_old_mtgjson(source_path: str, target_path: str) -> None:
     """Copy the old mtgjson prices table into the target DB (simulates live DB)."""
-    import shutil
     shutil.copy(source_path, target_path)
 
 
 def _make_target_with_old_scryfall(source_path: str, target_path: str) -> None:
-    import shutil
     shutil.copy(source_path, target_path)
 
 

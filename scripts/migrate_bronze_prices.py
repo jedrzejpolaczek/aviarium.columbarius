@@ -41,6 +41,7 @@ def migrate_mtgjson_prices(source_path: str, target_path: str) -> int:
             "SELECT uuid, snapshot_date, paper FROM bronze_mtgjson_prices_history"
         ).fetchall()
 
+        tgt.execute("DROP TABLE IF EXISTS bronze_mtgjson_prices_history_new")
         tgt.execute("""
             CREATE TABLE bronze_mtgjson_prices_history_new (
                 uuid          VARCHAR NOT NULL,
@@ -108,6 +109,7 @@ def migrate_scryfall_prices(source_path: str, target_path: str) -> int:
             "SELECT id, snapshot_date, prices FROM bronze_scryfall_prices_history"
         ).fetchall()
 
+        tgt.execute("DROP TABLE IF EXISTS bronze_scryfall_prices_history_new")
         tgt.execute("""
             CREATE TABLE bronze_scryfall_prices_history_new (
                 id            VARCHAR NOT NULL,
@@ -152,7 +154,7 @@ def migrate_scryfall_prices(source_path: str, target_path: str) -> int:
         )
         tgt.execute("CHECKPOINT")
 
-        return len(rows)
+        return len(batch)
     finally:
         src.close()
         tgt.close()
