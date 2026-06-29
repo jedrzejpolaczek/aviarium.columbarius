@@ -5,16 +5,21 @@ from typing import Literal
 import duckdb
 
 from src.data.cards.storage.base.storage import get_tables
+from src.data.cards.storage.silver.prices import SilverPriceBuilder
 from src.logger import get_logger
 
 logger = get_logger(__name__)
+
+_SILVER_PRICE_COMBOS: frozenset[tuple[str, str, str]] = frozenset(
+    SilverPriceBuilder._MTGJSON_PRICE_MAP.values()
+)
 
 
 @dataclass
 class CheckResult:
     name: str
     layer: str
-    status: Literal["PASS", "FAIL"]
+    status: Literal["PASS", "WARN", "FAIL"]
     detail: str
 
 
@@ -153,6 +158,68 @@ def _check_gold_ml_dataset_has_target(con: duckdb.DuckDBPyConnection) -> CheckRe
     )
 
 
+def _check_bronze_prices_schema_drift(
+    bronze_con: duckdb.DuckDBPyConnection,
+    today: datetime.date,
+    expected: set[tuple[str, str, str]] | None = None,
+) -> list[CheckResult]:
+    """Check for (retailer, tx_type, finish) combos not in Silver's map.
+
+    Returns WARN for new combinations (captured in Bronze but unknown to Silver)
+    and for missing expected combinations (Silver expects them but absent today).
+    Returns empty list if the EAV table is unavailable or has no EAV columns.
+    """
+    if expected is None:
+        expected = set(_SILVER_PRICE_COMBOS)
+
+    try:
+        rows = bronze_con.execute(
+            "SELECT DISTINCT retailer, tx_type, finish "
+            "FROM bronze_mtgjson_prices_history "
+            "WHERE snapshot_date = ?",
+            [today.isoformat()],
+        ).fetchall()
+    except Exception:
+        return []
+
+    actual = {(r[0], r[1], r[2]) for r in rows}
+    results: list[CheckResult] = []
+
+    new_combos = actual - expected
+    if new_combos:
+        results.append(CheckResult(
+            name="bronze mtgjson price schema drift",
+            layer="bronze",
+            status="WARN",
+            detail=(
+                f"{len(new_combos)} new (retailer,tx_type,finish) combinations"
+                f" not in Silver map: {sorted(new_combos)}"
+            ),
+        ))
+
+    missing = expected - actual
+    if missing:
+        results.append(CheckResult(
+            name="bronze mtgjson price schema drift",
+            layer="bronze",
+            status="WARN",
+            detail=(
+                f"{len(missing)} expected combinations absent from today's snapshot:"
+                f" {sorted(missing)}"
+            ),
+        ))
+
+    if not results:
+        results.append(CheckResult(
+            name="bronze mtgjson price schema drift",
+            layer="bronze",
+            status="PASS",
+            detail=f"All {len(actual)} combinations match Silver map",
+        ))
+
+    return results
+
+
 _BRONZE_TABLES = [
     "bronze_scryfall_cards",
     "bronze_mtgjson_cards",
@@ -204,6 +271,7 @@ def run_health_checks(
             _check_table_has_rows(bronze_con, "bronze", t) for t in _BRONZE_TABLES
         ]
         results.extend(bronze_structure)
+        results.extend(_check_bronze_prices_schema_drift(bronze_con, today))
 
         silver_structure = [
             _check_table_has_rows(silver_con, "silver", t) for t in _SILVER_TABLES
@@ -238,12 +306,17 @@ def run_health_checks(
         msg = f"[{r.status}] {r.layer} | {r.name} — {r.detail}"
         if r.status == "PASS":
             logger.info(msg)
+        elif r.status == "WARN":
+            logger.warning(msg)
         else:
             logger.error(msg)
 
     failed = sum(1 for r in results if r.status == "FAIL")
+    warned = sum(1 for r in results if r.status == "WARN")
     passed = sum(1 for r in results if r.status == "PASS")
-    logger.info("Health check complete: %d passed, %d failed", passed, failed)
+    logger.info(
+        "Health check complete: %d passed, %d warned, %d failed", passed, warned, failed
+    )
 
     if failed:
         raise SystemExit(1)

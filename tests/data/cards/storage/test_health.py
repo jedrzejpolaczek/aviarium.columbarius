@@ -13,6 +13,7 @@ from src.data.cards.storage.health import (
     _check_oracle_id_conflicts,
     _check_silver_prices_no_negative_eur,
     _check_gold_ml_dataset_has_target,
+    _check_bronze_prices_schema_drift,
     run_health_checks,
 )
 
@@ -328,7 +329,7 @@ class TestRunHealthChecks:
         bronze, silver, gold = _make_all_dbs(tmp_path, today)
         results = run_health_checks(bronze, silver, gold, today)
         assert len(results) > 0
-        assert all(r.status == "PASS" for r in results)
+        assert all(r.status in ("PASS", "WARN") for r in results)
 
     def test_exits_one_on_any_fail(self, tmp_path):
         today = datetime.date(2026, 6, 22)
@@ -351,3 +352,100 @@ class TestRunHealthChecks:
         s.close()
         with pytest.raises(SystemExit):
             run_health_checks(bronze, silver, gold, today)
+
+
+def test_check_result_warn():
+    r = CheckResult(
+        name="schema drift", layer="bronze", status="WARN",
+        detail="new combo: ('newretailer', 'retail', 'normal')"
+    )
+    assert r.status == "WARN"
+
+
+_EXPECTED_COMBOS = {
+    ("cardmarket", "retail",  "normal"),
+    ("cardmarket", "retail",  "foil"),
+    ("cardmarket", "buylist", "normal"),
+    ("tcgplayer",  "retail",  "normal"),
+    ("tcgplayer",  "retail",  "foil"),
+    ("tcgplayer",  "buylist", "normal"),
+}
+
+
+class TestCheckBronzePricesSchemaWarn:
+    def _make_eav_table(self, con: duckdb.DuckDBPyConnection, rows: list) -> None:
+        con.execute("""
+            CREATE TABLE bronze_mtgjson_prices_history (
+                uuid VARCHAR, snapshot_date VARCHAR,
+                retailer VARCHAR, tx_type VARCHAR, finish VARCHAR, price FLOAT
+            )
+        """)
+        for r in rows:
+            con.execute(
+                "INSERT INTO bronze_mtgjson_prices_history VALUES (?, ?, ?, ?, ?, ?)",
+                list(r),
+            )
+
+    def test_pass_when_combos_match_expected(self):
+        con = duckdb.connect(":memory:")
+        today = datetime.date(2026, 6, 24)
+        rows = [(f"u{i}", today.isoformat(), r, t, f, 1.0)
+                for i, (r, t, f) in enumerate(_EXPECTED_COMBOS)]
+        self._make_eav_table(con, rows)
+        results = _check_bronze_prices_schema_drift(con, today, _EXPECTED_COMBOS)
+        assert all(r.status == "PASS" for r in results)
+        con.close()
+
+    def test_warn_on_new_retailer_not_in_map(self):
+        con = duckdb.connect(":memory:")
+        today = datetime.date(2026, 6, 24)
+        rows = [("u1", today.isoformat(), "newretailer", "retail", "normal", 1.0)]
+        self._make_eav_table(con, rows)
+        results = _check_bronze_prices_schema_drift(con, today, _EXPECTED_COMBOS)
+        statuses = {r.status for r in results}
+        assert "WARN" in statuses
+        con.close()
+
+    def test_warn_on_missing_expected_combo(self):
+        con = duckdb.connect(":memory:")
+        today = datetime.date(2026, 6, 24)
+        rows = [("u1", today.isoformat(), "cardmarket", "retail", "normal", 1.0)]
+        self._make_eav_table(con, rows)
+        results = _check_bronze_prices_schema_drift(con, today, _EXPECTED_COMBOS)
+        statuses = {r.status for r in results}
+        assert "WARN" in statuses
+        con.close()
+
+    def test_returns_empty_when_table_missing(self):
+        con = duckdb.connect(":memory:")
+        today = datetime.date(2026, 6, 24)
+        results = _check_bronze_prices_schema_drift(con, today, _EXPECTED_COMBOS)
+        assert results == []
+        con.close()
+
+    def test_returns_empty_when_table_has_no_eav_columns(self):
+        con = duckdb.connect(":memory:")
+        today = datetime.date(2026, 6, 24)
+        con.execute("CREATE TABLE bronze_mtgjson_prices_history (uuid VARCHAR)")
+        results = _check_bronze_prices_schema_drift(con, today, _EXPECTED_COMBOS)
+        assert results == []
+        con.close()
+
+    def test_warn_does_not_cause_exit_in_run_health_checks(self, tmp_path):
+        today = datetime.date(2026, 6, 24)
+        bronze_path, silver_path, gold_path = _make_all_dbs(tmp_path, today)
+        b = duckdb.connect(bronze_path)
+        b.execute("DROP TABLE IF EXISTS bronze_mtgjson_prices_history")
+        b.execute("""
+            CREATE TABLE bronze_mtgjson_prices_history (
+                uuid VARCHAR, snapshot_date VARCHAR,
+                retailer VARCHAR, tx_type VARCHAR, finish VARCHAR, price FLOAT
+            )
+        """)
+        b.execute(
+            "INSERT INTO bronze_mtgjson_prices_history VALUES (?, ?, ?, ?, ?, ?)",
+            ["u1", today.isoformat(), "newretailer", "retail", "normal", 1.0],
+        )
+        b.close()
+        results = run_health_checks(bronze_path, silver_path, gold_path, today)
+        assert any(r.status == "WARN" for r in results)
