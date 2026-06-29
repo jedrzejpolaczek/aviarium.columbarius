@@ -709,9 +709,10 @@ class TestSnapshotMtgjsonPrices:
                 },
             )
             b._snapshot_mtgjson_prices([record])
-            count = b._con.execute(
+            _row = b._con.execute(
                 f"SELECT count(*) FROM {self.HISTORY_TABLE}"
-            ).fetchone()[0]
+            ).fetchone()
+            count = int(_row[0]) if _row else 0
         assert count == 4
 
     def test_captures_unlisted_retailer(self):
@@ -735,10 +736,11 @@ class TestSnapshotMtgjsonPrices:
     def test_null_paper_produces_no_rows(self):
         with _bronze() as b:
             b._snapshot_mtgjson_prices([_MtgjsonPrices(uuid="u1", paper=None)])
-            count = b._con.execute(
+            _row = b._con.execute(
                 "SELECT count(*) FROM information_schema.tables"
                 f" WHERE table_name = '{self.HISTORY_TABLE}'"
-            ).fetchone()[0]
+            ).fetchone()
+            count = int(_row[0]) if _row else 0
         assert count == 0
 
     def test_idempotent_on_duplicate(self):
@@ -749,9 +751,10 @@ class TestSnapshotMtgjsonPrices:
             )
             b._snapshot_mtgjson_prices([record])
             b._snapshot_mtgjson_prices([record])
-            count = b._con.execute(
+            _row = b._con.execute(
                 f"SELECT count(*) FROM {self.HISTORY_TABLE}"
-            ).fetchone()[0]
+            ).fetchone()
+            count = int(_row[0]) if _row else 0
         assert count == 1
 
     def test_uses_today_as_snapshot_date(self):
@@ -765,16 +768,18 @@ class TestSnapshotMtgjsonPrices:
             with patch("src.data.cards.storage.bronze.storage.date") as mock_date:
                 mock_date.today.return_value = date_cls.fromisoformat("2026-06-24")
                 b._snapshot_mtgjson_prices([record])
-            snap = b._con.execute(
+            _row = b._con.execute(
                 f"SELECT snapshot_date FROM {self.HISTORY_TABLE}"
-            ).fetchone()[0]
+            ).fetchone()
+            snap = _row[0] if _row else None
         assert str(snap) == "2026-06-24"
 
     def test_skips_when_records_empty(self):
         with _bronze() as b:
             b._snapshot_mtgjson_prices([])
-            count = b._con.execute(
+            _row = b._con.execute(
                 "SELECT count(*) FROM information_schema.tables"
                 f" WHERE table_name = '{self.HISTORY_TABLE}'"
-            ).fetchone()[0]
+            ).fetchone()
+            count = int(_row[0]) if _row else 0
         assert count == 0

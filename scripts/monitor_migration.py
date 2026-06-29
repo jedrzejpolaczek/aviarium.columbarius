@@ -15,7 +15,7 @@ WAL_PATH = Path("data/bronze/cards.duckdb.wal")
 INTERVAL = 30  # seconds
 
 
-def find_migration_process():
+def find_migration_process() -> psutil.Process | None:
     for proc in psutil.process_iter(
         ["pid", "name", "cmdline", "cpu_times", "memory_info"]
     ):
@@ -28,11 +28,11 @@ def find_migration_process():
     return None
 
 
-def fmt_mb(n_bytes):
+def fmt_mb(n_bytes: int) -> str:
     return f"{n_bytes / 1024 / 1024:,.0f} MB"
 
 
-def fmt_delta(delta_bytes):
+def fmt_delta(delta_bytes: int) -> str:
     if delta_bytes == 0:
         return "  —  "
     sign = "+" if delta_bytes > 0 else ""

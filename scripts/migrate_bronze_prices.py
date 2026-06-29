@@ -114,9 +114,10 @@ def migrate_mtgjson_prices(source_path: str, target_path: str) -> int:
             tgt.execute(_CHUNK_SQL, [snap_date])
             if i % 10 == 0:
                 tgt.execute("CHECKPOINT")
-            total_eav = tgt.execute(
+            _r = tgt.execute(
                 "SELECT COUNT(*) FROM bronze_mtgjson_prices_history_new"
-            ).fetchone()[0]
+            ).fetchone()
+            total_eav = int(_r[0]) if _r else 0
             print(
                 f"\r  [{i}/{total_dates}] {snap_date} — {total_eav:,} EAV rows",
                 end="",
@@ -125,9 +126,10 @@ def migrate_mtgjson_prices(source_path: str, target_path: str) -> int:
 
         print()
 
-        count = tgt.execute(
+        _r = tgt.execute(
             "SELECT COUNT(*) FROM bronze_mtgjson_prices_history_new"
-        ).fetchone()[0]
+        ).fetchone()
+        count = int(_r[0]) if _r else 0
 
         tgt.execute("DETACH src")
         tgt.execute("DROP TABLE IF EXISTS bronze_mtgjson_prices_history")
@@ -179,9 +181,10 @@ def migrate_scryfall_prices(source_path: str, target_path: str) -> int:
             FROM src.bronze_scryfall_prices_history
         """)
 
-        count = tgt.execute(
+        _r = tgt.execute(
             "SELECT COUNT(*) FROM bronze_scryfall_prices_history_new"
-        ).fetchone()[0]
+        ).fetchone()
+        count = int(_r[0]) if _r else 0
 
         tgt.execute("DETACH src")
         tgt.execute("DROP TABLE IF EXISTS bronze_scryfall_prices_history")

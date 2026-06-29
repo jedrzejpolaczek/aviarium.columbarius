@@ -14,6 +14,7 @@ Typical usage:
 
 from collections.abc import Sequence
 from datetime import date
+from typing import Any
 
 import pandas as pd
 from pydantic import BaseModel
@@ -32,8 +33,8 @@ def _records_to_df(records: Sequence[BaseModel]) -> pd.DataFrame:
 
 
 def _extract_paper_eav_rows(
-    paper_dict: dict | None, uuid: str, snapshot_date: str
-) -> list[dict]:
+    paper_dict: dict[str, Any] | None, uuid: str, snapshot_date: str
+) -> list[dict[str, Any]]:
     """Extract EAV rows from an MTGJson paper dict for a given snapshot date.
 
     Iterates every (retailer, tx_type, finish) found in paper_dict without
@@ -276,7 +277,7 @@ class BronzeStorage(BaseStorage):
             return
 
         today_iso = date.today().isoformat()
-        rows: list[dict] = []
+        rows: list[dict[str, Any]] = []
         for record in records:
             dump = record.model_dump(mode="json")
             rows.extend(

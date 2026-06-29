@@ -173,6 +173,7 @@ class TestMigrateMtgjsonPrices:
             "SELECT uuid, snapshot_date FROM bronze_mtgjson_prices_history LIMIT 1"
         ).fetchone()
         con.close()
+        assert row is not None
         assert row[0] == "uuid-1"
         assert str(row[1]) == "2026-05-11"
 
