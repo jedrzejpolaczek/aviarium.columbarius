@@ -301,7 +301,9 @@ class SilverPriceBuilder:
             logger.info("No language variant cards in silver_cards — skipping")
             return pd.DataFrame()
 
-        sql = (Path(__file__).parent / "sql" / "scryfall_language_prices_base.sql").read_text()
+        sql = (
+            Path(__file__).parent / "sql" / "scryfall_language_prices_base.sql"
+        ).read_text()
         scryfall_prices = self._bronze_con.execute(sql, [today]).df()
 
         df = scryfall_prices.merge(lang_map, on="scryfall_id", how="inner")

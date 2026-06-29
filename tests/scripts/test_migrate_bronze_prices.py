@@ -6,7 +6,10 @@ import shutil
 import duckdb
 import pytest
 
-from scripts.migrate_bronze_prices import migrate_mtgjson_prices, migrate_scryfall_prices
+from scripts.migrate_bronze_prices import (
+    migrate_mtgjson_prices,
+    migrate_scryfall_prices,
+)
 
 
 def _make_mtgjson_source(path: str) -> None:
@@ -20,16 +23,24 @@ def _make_mtgjson_source(path: str) -> None:
             mtgo          VARCHAR
         )
     """)
-    paper = json.dumps({
-        "cardmarket": {
-            "retail": {"normal": {"2026-05-11": 3.20}, "foil": {"2026-05-11": 8.50}},
-            "buylist": {"normal": {"2026-05-11": 1.80}},
-        },
-        "tcgplayer": {
-            "retail": {"normal": {"2026-05-11": 3.50}, "foil": {"2026-05-11": 9.00}},
-            "buylist": {"normal": {"2026-05-11": 2.10}},
-        },
-    })
+    paper = json.dumps(
+        {
+            "cardmarket": {
+                "retail": {
+                    "normal": {"2026-05-11": 3.20},
+                    "foil": {"2026-05-11": 8.50},
+                },
+                "buylist": {"normal": {"2026-05-11": 1.80}},
+            },
+            "tcgplayer": {
+                "retail": {
+                    "normal": {"2026-05-11": 3.50},
+                    "foil": {"2026-05-11": 9.00},
+                },
+                "buylist": {"normal": {"2026-05-11": 2.10}},
+            },
+        }
+    )
     con.execute(
         "INSERT INTO bronze_mtgjson_prices_history VALUES (?, ?, ?, NULL)",
         ["uuid-1", "2026-05-11", paper],
@@ -47,7 +58,15 @@ def _make_scryfall_source(path: str) -> None:
             prices        VARCHAR
         )
     """)
-    prices = json.dumps({"eur": "3.20", "eur_foil": "8.50", "usd": "3.50", "usd_foil": None, "tix": "0.05"})
+    prices = json.dumps(
+        {
+            "eur": "3.20",
+            "eur_foil": "8.50",
+            "usd": "3.50",
+            "usd_foil": None,
+            "tix": "0.05",
+        }
+    )
     con.execute(
         "INSERT INTO bronze_scryfall_prices_history VALUES (?, ?, ?)",
         ["s1", "2026-05-11", prices],
@@ -74,9 +93,19 @@ class TestMigrateMtgjsonPrices:
         migrate_mtgjson_prices(source, target)
 
         con = duckdb.connect(target, read_only=True)
-        cols = {r[0] for r in con.execute("DESCRIBE bronze_mtgjson_prices_history").fetchall()}
+        cols = {
+            r[0]
+            for r in con.execute("DESCRIBE bronze_mtgjson_prices_history").fetchall()
+        }
         con.close()
-        assert cols == {"uuid", "snapshot_date", "retailer", "tx_type", "finish", "price"}
+        assert cols == {
+            "uuid",
+            "snapshot_date",
+            "retailer",
+            "tx_type",
+            "finish",
+            "price",
+        }
 
     def test_no_paper_or_mtgo_columns(self, tmp_path):
         source = str(tmp_path / "source.duckdb")
@@ -87,7 +116,10 @@ class TestMigrateMtgjsonPrices:
         migrate_mtgjson_prices(source, target)
 
         con = duckdb.connect(target, read_only=True)
-        cols = {r[0] for r in con.execute("DESCRIBE bronze_mtgjson_prices_history").fetchall()}
+        cols = {
+            r[0]
+            for r in con.execute("DESCRIBE bronze_mtgjson_prices_history").fetchall()
+        }
         con.close()
         assert "paper" not in cols
         assert "mtgo" not in cols
@@ -101,9 +133,12 @@ class TestMigrateMtgjsonPrices:
         migrate_mtgjson_prices(source, target)
 
         con = duckdb.connect(target, read_only=True)
-        retailers = {r[0] for r in con.execute(
-            "SELECT DISTINCT retailer FROM bronze_mtgjson_prices_history"
-        ).fetchall()}
+        retailers = {
+            r[0]
+            for r in con.execute(
+                "SELECT DISTINCT retailer FROM bronze_mtgjson_prices_history"
+            ).fetchall()
+        }
         con.close()
         assert "cardmarket" in retailers
         assert "tcgplayer" in retailers
@@ -176,7 +211,10 @@ class TestMigrateScryfallPrices:
         migrate_scryfall_prices(source, target)
 
         con = duckdb.connect(target, read_only=True)
-        cols = {r[0] for r in con.execute("DESCRIBE bronze_scryfall_prices_history").fetchall()}
+        cols = {
+            r[0]
+            for r in con.execute("DESCRIBE bronze_scryfall_prices_history").fetchall()
+        }
         con.close()
         assert "eur" in cols
         assert "eur_foil" in cols
@@ -223,9 +261,7 @@ class TestMigrateScryfallPrices:
         migrate_scryfall_prices(source, target)
 
         con = duckdb.connect(target, read_only=True)
-        row = con.execute(
-            "SELECT eur FROM bronze_scryfall_prices_history"
-        ).fetchone()
+        row = con.execute("SELECT eur FROM bronze_scryfall_prices_history").fetchone()
         con.close()
         assert row is not None and row[0] is None
 
@@ -247,7 +283,10 @@ class TestMigrateScryfallPrices:
         migrate_scryfall_prices(source, target)
 
         con = duckdb.connect(target, read_only=True)
-        cols = {r[0] for r in con.execute("DESCRIBE bronze_scryfall_prices_history").fetchall()}
+        cols = {
+            r[0]
+            for r in con.execute("DESCRIBE bronze_scryfall_prices_history").fetchall()
+        }
         con.close()
         assert "tix" in cols
 

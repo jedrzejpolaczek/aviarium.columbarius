@@ -16,7 +16,9 @@ INTERVAL = 30  # seconds
 
 
 def find_migration_process():
-    for proc in psutil.process_iter(["pid", "name", "cmdline", "cpu_times", "memory_info"]):
+    for proc in psutil.process_iter(
+        ["pid", "name", "cmdline", "cpu_times", "memory_info"]
+    ):
         try:
             cmdline = " ".join(proc.info["cmdline"] or [])
             if "migrate_bronze_prices" in cmdline:
@@ -37,7 +39,9 @@ def fmt_delta(delta_bytes):
     return f"{sign}{delta_bytes / 1024 / 1024:,.1f} MB"
 
 
-print(f"{'CZAS':>15} | {'DB ROZMIAR':>12} | {'DELTA DB':>10} | {'WAL':>8} | {'CPU':>7} | {'RAM':>6}")
+print(
+    f"{'CZAS':>15} | {'DB ROZMIAR':>12} | {'DELTA DB':>10} | {'WAL':>8} | {'CPU':>7} | {'RAM':>6}"
+)
 print("-" * 80)
 
 prev_db_size = DB_PATH.stat().st_size if DB_PATH.exists() else 0

@@ -302,10 +302,18 @@ class TestDuckDBWriter:
 
     def test_append_composite_key_deduplicates_on_all_columns(self, mem_con):
         w = DuckDBWriter(mem_con)
-        df1 = pd.DataFrame([{
-            "uuid": "u1", "snapshot_date": "2026-06-24", "retailer": "cardmarket",
-            "tx_type": "retail", "finish": "normal", "price": 3.20,
-        }])
+        df1 = pd.DataFrame(
+            [
+                {
+                    "uuid": "u1",
+                    "snapshot_date": "2026-06-24",
+                    "retailer": "cardmarket",
+                    "tx_type": "retail",
+                    "finish": "normal",
+                    "price": 3.20,
+                }
+            ]
+        )
         w.append(df1, "t", ["uuid", "retailer", "tx_type", "finish"])
         # Same composite key — must be skipped
         w.append(df1, "t", ["uuid", "retailer", "tx_type", "finish"])
@@ -314,30 +322,62 @@ class TestDuckDBWriter:
 
     def test_append_composite_key_allows_different_finish(self, mem_con):
         w = DuckDBWriter(mem_con)
-        row_normal = pd.DataFrame([{
-            "uuid": "u1", "snapshot_date": "2026-06-24", "retailer": "cardmarket",
-            "tx_type": "retail", "finish": "normal", "price": 3.20,
-        }])
-        row_foil = pd.DataFrame([{
-            "uuid": "u1", "snapshot_date": "2026-06-24", "retailer": "cardmarket",
-            "tx_type": "retail", "finish": "foil", "price": 8.50,
-        }])
+        row_normal = pd.DataFrame(
+            [
+                {
+                    "uuid": "u1",
+                    "snapshot_date": "2026-06-24",
+                    "retailer": "cardmarket",
+                    "tx_type": "retail",
+                    "finish": "normal",
+                    "price": 3.20,
+                }
+            ]
+        )
+        row_foil = pd.DataFrame(
+            [
+                {
+                    "uuid": "u1",
+                    "snapshot_date": "2026-06-24",
+                    "retailer": "cardmarket",
+                    "tx_type": "retail",
+                    "finish": "foil",
+                    "price": 8.50,
+                }
+            ]
+        )
         w.append(row_normal, "t", ["uuid", "retailer", "tx_type", "finish"])
-        w.append(row_foil,   "t", ["uuid", "retailer", "tx_type", "finish"])
+        w.append(row_foil, "t", ["uuid", "retailer", "tx_type", "finish"])
         count = mem_con.execute("SELECT count(*) FROM t").fetchone()[0]
         assert count == 2
 
     def test_append_composite_key_allows_different_retailer(self, mem_con):
         w = DuckDBWriter(mem_con)
-        row_cm = pd.DataFrame([{
-            "uuid": "u1", "snapshot_date": "2026-06-24", "retailer": "cardmarket",
-            "tx_type": "retail", "finish": "normal", "price": 3.20,
-        }])
-        row_tcp = pd.DataFrame([{
-            "uuid": "u1", "snapshot_date": "2026-06-24", "retailer": "tcgplayer",
-            "tx_type": "retail", "finish": "normal", "price": 3.50,
-        }])
-        w.append(row_cm,  "t", ["uuid", "retailer", "tx_type", "finish"])
+        row_cm = pd.DataFrame(
+            [
+                {
+                    "uuid": "u1",
+                    "snapshot_date": "2026-06-24",
+                    "retailer": "cardmarket",
+                    "tx_type": "retail",
+                    "finish": "normal",
+                    "price": 3.20,
+                }
+            ]
+        )
+        row_tcp = pd.DataFrame(
+            [
+                {
+                    "uuid": "u1",
+                    "snapshot_date": "2026-06-24",
+                    "retailer": "tcgplayer",
+                    "tx_type": "retail",
+                    "finish": "normal",
+                    "price": 3.50,
+                }
+            ]
+        )
+        w.append(row_cm, "t", ["uuid", "retailer", "tx_type", "finish"])
         w.append(row_tcp, "t", ["uuid", "retailer", "tx_type", "finish"])
         count = mem_con.execute("SELECT count(*) FROM t").fetchone()[0]
         assert count == 2

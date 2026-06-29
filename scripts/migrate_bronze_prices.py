@@ -117,7 +117,11 @@ def migrate_mtgjson_prices(source_path: str, target_path: str) -> int:
             total_eav = tgt.execute(
                 "SELECT COUNT(*) FROM bronze_mtgjson_prices_history_new"
             ).fetchone()[0]
-            print(f"\r  [{i}/{total_dates}] {snap_date} — {total_eav:,} EAV rows", end="", flush=True)
+            print(
+                f"\r  [{i}/{total_dates}] {snap_date} — {total_eav:,} EAV rows",
+                end="",
+                flush=True,
+            )
 
         print()
 
@@ -195,7 +199,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Migrate Bronze price tables to scalar/EAV columns"
     )
-    parser.add_argument("--source", required=True, help="Path to cards_copy.duckdb (backup)")
+    parser.add_argument(
+        "--source", required=True, help="Path to cards_copy.duckdb (backup)"
+    )
     parser.add_argument("--target", required=True, help="Path to live cards.duckdb")
     args = parser.parse_args()
 

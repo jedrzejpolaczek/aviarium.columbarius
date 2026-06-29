@@ -187,35 +187,41 @@ def _check_bronze_prices_schema_drift(
 
     new_combos = actual - expected
     if new_combos:
-        results.append(CheckResult(
-            name="bronze mtgjson price schema drift",
-            layer="bronze",
-            status="WARN",
-            detail=(
-                f"{len(new_combos)} new (retailer,tx_type,finish) combinations"
-                f" not in Silver map: {sorted(new_combos)}"
-            ),
-        ))
+        results.append(
+            CheckResult(
+                name="bronze mtgjson price schema drift",
+                layer="bronze",
+                status="WARN",
+                detail=(
+                    f"{len(new_combos)} new (retailer,tx_type,finish) combinations"
+                    f" not in Silver map: {sorted(new_combos)}"
+                ),
+            )
+        )
 
     missing = expected - actual
     if missing:
-        results.append(CheckResult(
-            name="bronze mtgjson price schema drift",
-            layer="bronze",
-            status="WARN",
-            detail=(
-                f"{len(missing)} expected combinations absent from today's snapshot:"
-                f" {sorted(missing)}"
-            ),
-        ))
+        results.append(
+            CheckResult(
+                name="bronze mtgjson price schema drift",
+                layer="bronze",
+                status="WARN",
+                detail=(
+                    f"{len(missing)} expected combinations absent from today's snapshot:"
+                    f" {sorted(missing)}"
+                ),
+            )
+        )
 
     if not results:
-        results.append(CheckResult(
-            name="bronze mtgjson price schema drift",
-            layer="bronze",
-            status="PASS",
-            detail=f"All {len(actual)} combinations match Silver map",
-        ))
+        results.append(
+            CheckResult(
+                name="bronze mtgjson price schema drift",
+                layer="bronze",
+                status="PASS",
+                detail=f"All {len(actual)} combinations match Silver map",
+            )
+        )
 
     return results
 

@@ -462,7 +462,13 @@ class TestAppendMetaHistorySql:
 # Helpers for SilverPriceBuilder tests
 # ---------------------------------------------------------------------------
 
-_SCRYFALL_PRICE_COLS = {"eur": 3.20, "eur_foil": 8.50, "usd": 3.50, "usd_foil": 9.00, "tix": 0.05}
+_SCRYFALL_PRICE_COLS = {
+    "eur": 3.20,
+    "eur_foil": 8.50,
+    "usd": 3.50,
+    "usd_foil": 9.00,
+    "tix": 0.05,
+}
 
 
 def _scryfall_hist(*ids_and_dates: tuple[str, str]) -> pd.DataFrame:
@@ -486,12 +492,12 @@ def _mtgjson_eav_hist(*uuids_and_dates: tuple[str, str]) -> pd.DataFrame:
     """Build a bronze_mtgjson_prices_history EAV DataFrame with 6 price rows per card."""
     rows: list[dict] = []
     combos = [
-        ("cardmarket", "retail",  "normal", 3.20),
-        ("cardmarket", "retail",  "foil",   8.50),
+        ("cardmarket", "retail", "normal", 3.20),
+        ("cardmarket", "retail", "foil", 8.50),
         ("cardmarket", "buylist", "normal", 1.80),
-        ("tcgplayer",  "retail",  "normal", 3.50),
-        ("tcgplayer",  "retail",  "foil",   9.00),
-        ("tcgplayer",  "buylist", "normal", 2.10),
+        ("tcgplayer", "retail", "normal", 3.50),
+        ("tcgplayer", "retail", "foil", 9.00),
+        ("tcgplayer", "buylist", "normal", 2.10),
     ]
     for uuid, date in uuids_and_dates:
         for retailer, tx_type, finish, price in combos:
@@ -505,8 +511,12 @@ def _mtgjson_eav_hist(*uuids_and_dates: tuple[str, str]) -> pd.DataFrame:
                     "price": price,
                 }
             )
-    return pd.DataFrame(rows) if rows else pd.DataFrame(
-        columns=["uuid", "snapshot_date", "retailer", "tx_type", "finish", "price"]
+    return (
+        pd.DataFrame(rows)
+        if rows
+        else pd.DataFrame(
+            columns=["uuid", "snapshot_date", "retailer", "tx_type", "finish", "price"]
+        )
     )
 
 
@@ -553,7 +563,8 @@ def _seed_silver_cards(storage: SilverStorage, rows: list[tuple]) -> None:
 class TestSilverPriceBuilder:
     def test_returns_empty_dataframe_when_silver_cards_missing(self, tmp_path):
         with _make_storage_with_bronze(
-            tmp_path, {"bronze_scryfall_prices_history": _scryfall_hist(("s1", "2026-05-11"))}
+            tmp_path,
+            {"bronze_scryfall_prices_history": _scryfall_hist(("s1", "2026-05-11"))},
         ) as s:
             result = s._prices.build("2026-05-11")
             assert result.empty
@@ -571,7 +582,9 @@ class TestSilverPriceBuilder:
             tmp_path,
             {
                 "bronze_scryfall_prices_history": _scryfall_hist(("s1", "2026-05-11")),
-                "bronze_mtgjson_prices_history": _mtgjson_eav_hist(("u1", "2026-05-11")),
+                "bronze_mtgjson_prices_history": _mtgjson_eav_hist(
+                    ("u1", "2026-05-11")
+                ),
             },
         ) as s:
             _seed_silver_cards(s, [("u1", "s1")])
@@ -588,7 +601,8 @@ class TestSilverPriceBuilder:
 
     def test_happy_path_has_all_expected_columns(self, tmp_path):
         with _make_storage_with_bronze(
-            tmp_path, {"bronze_scryfall_prices_history": _scryfall_hist(("s1", "2026-05-11"))}
+            tmp_path,
+            {"bronze_scryfall_prices_history": _scryfall_hist(("s1", "2026-05-11"))},
         ) as s:
             _seed_silver_cards(s, [("u1", "s1")])
             result = s._prices.build("2026-05-11")
@@ -612,7 +626,8 @@ class TestSilverPriceBuilder:
 
     def test_mtgjson_missing_fills_columns_with_none(self, tmp_path):
         with _make_storage_with_bronze(
-            tmp_path, {"bronze_scryfall_prices_history": _scryfall_hist(("s1", "2026-05-11"))}
+            tmp_path,
+            {"bronze_scryfall_prices_history": _scryfall_hist(("s1", "2026-05-11"))},
         ) as s:
             _seed_silver_cards(s, [("u1", "s1")])
             result = s._prices.build("2026-05-11")
@@ -624,7 +639,11 @@ class TestSilverPriceBuilder:
     def test_scryfall_card_with_no_silver_match_is_dropped(self, tmp_path):
         with _make_storage_with_bronze(
             tmp_path,
-            {"bronze_scryfall_prices_history": _scryfall_hist(("s1", "2026-05-11"), ("s-no-match", "2026-05-11"))},
+            {
+                "bronze_scryfall_prices_history": _scryfall_hist(
+                    ("s1", "2026-05-11"), ("s-no-match", "2026-05-11")
+                )
+            },
         ) as s:
             _seed_silver_cards(s, [("u1", "s1")])
             result = s._prices.build("2026-05-11")
@@ -651,7 +670,11 @@ class TestSilverPriceBuilder:
     def test_build_ignores_bronze_rows_from_other_dates(self, tmp_path):
         with _make_storage_with_bronze(
             tmp_path,
-            {"bronze_scryfall_prices_history": _scryfall_hist(("s1", "2026-05-10"), ("s1", "2026-05-11"))},
+            {
+                "bronze_scryfall_prices_history": _scryfall_hist(
+                    ("s1", "2026-05-10"), ("s1", "2026-05-11")
+                )
+            },
         ) as s:
             _seed_silver_cards(s, [("u1", "s1")])
             result = s._prices.build("2026-05-11")
@@ -666,7 +689,12 @@ class TestSilverPriceBuilder:
         # The card's current Scryfall ID "s-stale" has real prices and must be
         # included in silver_prices_history under canonical_uuid.
         with _make_storage_with_bronze(
-            tmp_path, {"bronze_scryfall_prices_history": _scryfall_hist(("s-stale", "2026-05-11"))}
+            tmp_path,
+            {
+                "bronze_scryfall_prices_history": _scryfall_hist(
+                    ("s-stale", "2026-05-11")
+                )
+            },
         ) as s:
             # uuid=None forces COALESCE path; canonical_uuid resolves to "u1"
             _seed_silver_cards(s, [(None, "s-stale", "u1", "English")])
@@ -683,7 +711,11 @@ class TestSilverPriceBuilder:
         # build_language_prices to avoid duplicating the canonical card's prices.
         with _make_storage_with_bronze(
             tmp_path,
-            {"bronze_scryfall_prices_history": _scryfall_hist(("s1-en", "2026-05-11"), ("s1-ja", "2026-05-11"))},
+            {
+                "bronze_scryfall_prices_history": _scryfall_hist(
+                    ("s1-en", "2026-05-11"), ("s1-ja", "2026-05-11")
+                )
+            },
         ) as s:
             _seed_silver_cards(s, [("u1", "s1-en")])
             _seed_silver_language_variant_cards(s, [("s1-ja", "u1", "Japanese")])
@@ -984,7 +1016,8 @@ def _seed_silver_language_variant_cards(
 class TestBuildLanguagePrices:
     def test_returns_empty_when_silver_cards_missing(self, tmp_path):
         with _make_storage_with_bronze(
-            tmp_path, {"bronze_scryfall_prices_history": _scryfall_hist(("s1-ja", "2026-05-11"))}
+            tmp_path,
+            {"bronze_scryfall_prices_history": _scryfall_hist(("s1-ja", "2026-05-11"))},
         ) as s:
             result = s._prices.build_language_prices("2026-05-11")
             assert result.empty
@@ -1006,8 +1039,12 @@ class TestBuildLanguagePrices:
         with _make_storage_with_bronze(
             tmp_path,
             {
-                "bronze_scryfall_prices_history": _scryfall_hist(("s1-ja", "2026-05-11")),
-                "bronze_scryfall_cards": pd.DataFrame({"id": ["s1-ja"], "lang": ["ja"]}),
+                "bronze_scryfall_prices_history": _scryfall_hist(
+                    ("s1-ja", "2026-05-11")
+                ),
+                "bronze_scryfall_cards": pd.DataFrame(
+                    {"id": ["s1-ja"], "lang": ["ja"]}
+                ),
             },
         ) as s:
             _seed_silver_language_variant_cards(s, [("s1-ja", "u1", "Japanese")])
@@ -1024,8 +1061,12 @@ class TestBuildLanguagePrices:
         with _make_storage_with_bronze(
             tmp_path,
             {
-                "bronze_scryfall_prices_history": _scryfall_hist(("s1-ja", "2026-05-11")),
-                "bronze_scryfall_cards": pd.DataFrame({"id": ["s1-ja"], "lang": ["ja"]}),
+                "bronze_scryfall_prices_history": _scryfall_hist(
+                    ("s1-ja", "2026-05-11")
+                ),
+                "bronze_scryfall_cards": pd.DataFrame(
+                    {"id": ["s1-ja"], "lang": ["ja"]}
+                ),
             },
         ) as s:
             _seed_silver_language_variant_cards(s, [("s1-ja", "u1", "Japanese")])
@@ -1048,8 +1089,12 @@ class TestBuildLanguagePrices:
         with _make_storage_with_bronze(
             tmp_path,
             {
-                "bronze_scryfall_prices_history": _scryfall_hist(("s1-en", "2026-05-11"), ("s1-ja", "2026-05-11")),
-                "bronze_scryfall_cards": pd.DataFrame({"id": ["s1-en", "s1-ja"], "lang": ["en", "ja"]}),
+                "bronze_scryfall_prices_history": _scryfall_hist(
+                    ("s1-en", "2026-05-11"), ("s1-ja", "2026-05-11")
+                ),
+                "bronze_scryfall_cards": pd.DataFrame(
+                    {"id": ["s1-en", "s1-ja"], "lang": ["en", "ja"]}
+                ),
             },
         ) as s:
             _seed_silver_cards(s, [("u1", "s1-en")])
@@ -1484,5 +1529,7 @@ class TestBuildSilverCardsSql:
 
 def test_extract_all_prices_removed():
     import src.data.cards.storage.silver.prices as mod
-    assert not hasattr(mod.SilverPriceBuilder, "_extract_all_prices"), \
+
+    assert not hasattr(mod.SilverPriceBuilder, "_extract_all_prices"), (
         "_extract_all_prices should have been removed"
+    )

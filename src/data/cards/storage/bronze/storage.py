@@ -54,14 +54,16 @@ def _extract_paper_eav_rows(
                     continue
                 candidates = {k: v for k, v in prices.items() if k <= snapshot_date}
                 if candidates:
-                    rows.append({
-                        "uuid": uuid,
-                        "snapshot_date": snapshot_date,
-                        "retailer": retailer,
-                        "tx_type": tx_type,
-                        "finish": finish,
-                        "price": float(candidates[max(candidates)]),
-                    })
+                    rows.append(
+                        {
+                            "uuid": uuid,
+                            "snapshot_date": snapshot_date,
+                            "retailer": retailer,
+                            "tx_type": tx_type,
+                            "finish": finish,
+                            "price": float(candidates[max(candidates)]),
+                        }
+                    )
     return rows
 
 
@@ -191,14 +193,16 @@ class BronzeStorage(BaseStorage):
                             continue
                         for d, val in prices.items():
                             if val is not None:
-                                rows.append({
-                                    "uuid": uuid_str,
-                                    "snapshot_date": d,
-                                    "retailer": retailer,
-                                    "tx_type": tx_type,
-                                    "finish": finish,
-                                    "price": float(val),
-                                })
+                                rows.append(
+                                    {
+                                        "uuid": uuid_str,
+                                        "snapshot_date": d,
+                                        "retailer": retailer,
+                                        "tx_type": tx_type,
+                                        "finish": finish,
+                                        "price": float(val),
+                                    }
+                                )
 
         if not rows:
             logger.warning("No date-keyed prices found in records — skipping seed")
@@ -234,11 +238,21 @@ class BronzeStorage(BaseStorage):
                 {
                     "id": dump["id"],
                     "snapshot_date": today_iso,
-                    "eur": float(prices["eur"]) if prices.get("eur") is not None else None,
-                    "eur_foil": float(prices["eur_foil"]) if prices.get("eur_foil") is not None else None,
-                    "usd": float(prices["usd"]) if prices.get("usd") is not None else None,
-                    "usd_foil": float(prices["usd_foil"]) if prices.get("usd_foil") is not None else None,
-                    "tix": float(prices["tix"]) if prices.get("tix") is not None else None,
+                    "eur": float(prices["eur"])
+                    if prices.get("eur") is not None
+                    else None,
+                    "eur_foil": float(prices["eur_foil"])
+                    if prices.get("eur_foil") is not None
+                    else None,
+                    "usd": float(prices["usd"])
+                    if prices.get("usd") is not None
+                    else None,
+                    "usd_foil": float(prices["usd_foil"])
+                    if prices.get("usd_foil") is not None
+                    else None,
+                    "tix": float(prices["tix"])
+                    if prices.get("tix") is not None
+                    else None,
                 }
             )
 

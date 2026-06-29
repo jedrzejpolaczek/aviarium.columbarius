@@ -89,8 +89,8 @@ class TestExtractPaperEavRows:
 
     def test_captures_all_retailers_including_cardkingdom(self):
         paper = {
-            "cardmarket":  {"retail": {"normal": {"2026-05-11": 3.20}}},
-            "tcgplayer":   {"retail": {"normal": {"2026-05-11": 3.50}}},
+            "cardmarket": {"retail": {"normal": {"2026-05-11": 3.20}}},
+            "tcgplayer": {"retail": {"normal": {"2026-05-11": 3.50}}},
             "cardkingdom": {"retail": {"normal": {"2026-05-11": 4.00}}},
         }
         rows = _extract_paper_eav_rows(paper, "u1", "2026-05-11")
@@ -98,12 +98,20 @@ class TestExtractPaperEavRows:
         assert retailers == {"cardmarket", "tcgplayer", "cardkingdom"}
 
     def test_lookback_selects_max_date_leq_target(self):
-        paper = {"cardmarket": {"retail": {"normal": {"2026-05-10": 1.0, "2026-05-11": 3.20}}}}
+        paper = {
+            "cardmarket": {
+                "retail": {"normal": {"2026-05-10": 1.0, "2026-05-11": 3.20}}
+            }
+        }
         rows = _extract_paper_eav_rows(paper, "u1", "2026-05-11")
         assert rows[0]["price"] == pytest.approx(3.20)
 
     def test_excludes_dates_after_target(self):
-        paper = {"cardmarket": {"retail": {"normal": {"2026-05-12": 5.00, "2026-05-10": 1.0}}}}
+        paper = {
+            "cardmarket": {
+                "retail": {"normal": {"2026-05-12": 5.00, "2026-05-10": 1.0}}
+            }
+        }
         rows = _extract_paper_eav_rows(paper, "u1", "2026-05-11")
         assert len(rows) == 1
         assert rows[0]["price"] == pytest.approx(1.0)
@@ -115,7 +123,7 @@ class TestExtractPaperEavRows:
     def test_captures_all_tx_types(self):
         paper = {
             "cardmarket": {
-                "retail":  {"normal": {"2026-05-11": 3.20}},
+                "retail": {"normal": {"2026-05-11": 3.20}},
                 "buylist": {"normal": {"2026-05-11": 1.80}},
             }
         }
@@ -127,7 +135,7 @@ class TestExtractPaperEavRows:
             "cardmarket": {
                 "retail": {
                     "normal": {"2026-05-11": 3.20},
-                    "foil":   {"2026-05-11": 8.50},
+                    "foil": {"2026-05-11": 8.50},
                     "etched": {"2026-05-11": 12.00},
                 }
             }
@@ -548,7 +556,8 @@ class TestSnapshotScryfallPrices:
     def test_creates_history_table_on_first_call(self):
         with _bronze() as b:
             record = _ScryfallCard(
-                id="s1", prices={"eur": "3.20", "eur_foil": None, "usd": None, "usd_foil": None}
+                id="s1",
+                prices={"eur": "3.20", "eur_foil": None, "usd": None, "usd_foil": None},
             )
             b._snapshot_scryfall_prices([record])
             row = b._con.execute(
@@ -560,7 +569,12 @@ class TestSnapshotScryfallPrices:
         with _bronze() as b:
             record = _ScryfallCard(
                 id="s1",
-                prices={"eur": "3.20", "eur_foil": "8.50", "usd": "3.50", "usd_foil": "9.00"},
+                prices={
+                    "eur": "3.20",
+                    "eur_foil": "8.50",
+                    "usd": "3.50",
+                    "usd_foil": "9.00",
+                },
             )
             b._snapshot_scryfall_prices([record])
             row = b._con.execute(
@@ -593,9 +607,10 @@ class TestSnapshotScryfallPrices:
                 prices={"eur": "3.20", "tix": "0.05"},
             )
             b._snapshot_scryfall_prices([record])
-            cols = {r[0] for r in b._con.execute(
-                f"DESCRIBE {self.HISTORY_TABLE}"
-            ).fetchall()}
+            cols = {
+                r[0]
+                for r in b._con.execute(f"DESCRIBE {self.HISTORY_TABLE}").fetchall()
+            }
         assert "tix" in cols
 
     def test_tix_stored_as_float(self):
@@ -605,9 +620,7 @@ class TestSnapshotScryfallPrices:
                 prices={"eur": "3.20", "tix": "0.05"},
             )
             b._snapshot_scryfall_prices([record])
-            row = b._con.execute(
-                f"SELECT tix FROM {self.HISTORY_TABLE}"
-            ).fetchone()
+            row = b._con.execute(f"SELECT tix FROM {self.HISTORY_TABLE}").fetchone()
         assert row is not None
         assert row[0] == pytest.approx(0.05)
 
@@ -622,16 +635,12 @@ class TestSnapshotScryfallPrices:
         with _bronze() as b:
             record = _ScryfallCard(id="s1", prices=None)
             b._snapshot_scryfall_prices([record])
-            row = b._con.execute(
-                f"SELECT eur FROM {self.HISTORY_TABLE}"
-            ).fetchone()
+            row = b._con.execute(f"SELECT eur FROM {self.HISTORY_TABLE}").fetchone()
         assert row is not None and row[0] is None
 
     def test_idempotent_on_duplicate_id_date(self):
         with _bronze() as b:
-            record = _ScryfallCard(
-                id="s1", prices={"eur": "3.20"}
-            )
+            record = _ScryfallCard(id="s1", prices={"eur": "3.20"})
             b._snapshot_scryfall_prices([record])
             b._snapshot_scryfall_prices([record])
             row = b._con.execute(
@@ -669,10 +678,18 @@ class TestSnapshotMtgjsonPrices:
                 paper={"cardmarket": {"retail": {"normal": {"2026-06-24": 3.20}}}},
             )
             b._snapshot_mtgjson_prices([record])
-            cols = {r[0] for r in b._con.execute(
-                f"DESCRIBE {self.HISTORY_TABLE}"
-            ).fetchall()}
-        assert cols == {"uuid", "snapshot_date", "retailer", "tx_type", "finish", "price"}
+            cols = {
+                r[0]
+                for r in b._con.execute(f"DESCRIBE {self.HISTORY_TABLE}").fetchall()
+            }
+        assert cols == {
+            "uuid",
+            "snapshot_date",
+            "retailer",
+            "tx_type",
+            "finish",
+            "price",
+        }
 
     def test_emits_one_row_per_price_point(self):
         with _bronze() as b:
@@ -680,7 +697,10 @@ class TestSnapshotMtgjsonPrices:
                 uuid="u1",
                 paper={
                     "cardmarket": {
-                        "retail":  {"normal": {"2026-06-24": 3.20}, "foil": {"2026-06-24": 8.50}},
+                        "retail": {
+                            "normal": {"2026-06-24": 3.20},
+                            "foil": {"2026-06-24": 8.50},
+                        },
                         "buylist": {"normal": {"2026-06-24": 1.80}},
                     },
                     "tcgplayer": {
@@ -699,14 +719,17 @@ class TestSnapshotMtgjsonPrices:
             record = _MtgjsonPrices(
                 uuid="u1",
                 paper={
-                    "cardmarket":  {"retail": {"normal": {"2026-06-24": 3.20}}},
+                    "cardmarket": {"retail": {"normal": {"2026-06-24": 3.20}}},
                     "cardkingdom": {"retail": {"normal": {"2026-06-24": 4.00}}},
                 },
             )
             b._snapshot_mtgjson_prices([record])
-            retailers = {r[0] for r in b._con.execute(
-                f"SELECT DISTINCT retailer FROM {self.HISTORY_TABLE}"
-            ).fetchall()}
+            retailers = {
+                r[0]
+                for r in b._con.execute(
+                    f"SELECT DISTINCT retailer FROM {self.HISTORY_TABLE}"
+                ).fetchall()
+            }
         assert "cardkingdom" in retailers
 
     def test_null_paper_produces_no_rows(self):
@@ -733,6 +756,7 @@ class TestSnapshotMtgjsonPrices:
 
     def test_uses_today_as_snapshot_date(self):
         from datetime import date as date_cls
+
         with _bronze() as b:
             record = _MtgjsonPrices(
                 uuid="u1",

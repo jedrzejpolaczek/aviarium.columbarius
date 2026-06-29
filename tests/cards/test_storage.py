@@ -542,7 +542,7 @@ _PAPER_PRICES = {
     "cardmarket": {
         "retail": {
             "normal": {"2026-04-01": 1.0, "2026-04-02": 1.1},
-            "foil":   {"2026-04-01": 2.0},
+            "foil": {"2026-04-01": 2.0},
         },
     },
     "cardkingdom": {
@@ -622,10 +622,18 @@ class TestSeedHistoricalPrices:
     def test_eav_schema_has_correct_columns(self, storage):
         record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
         storage.seed_historical_prices([record])
-        cols = {r[0] for r in storage._con.execute(
-            f"DESCRIBE {self.HISTORY_TABLE}"
-        ).fetchall()}
-        assert cols == {"uuid", "snapshot_date", "retailer", "tx_type", "finish", "price"}
+        cols = {
+            r[0]
+            for r in storage._con.execute(f"DESCRIBE {self.HISTORY_TABLE}").fetchall()
+        }
+        assert cols == {
+            "uuid",
+            "snapshot_date",
+            "retailer",
+            "tx_type",
+            "finish",
+            "price",
+        }
 
     def test_eav_row_has_correct_values(self, storage):
         record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
@@ -647,9 +655,12 @@ class TestSeedHistoricalPrices:
     def test_captures_cardkingdom(self, storage):
         record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
         storage.seed_historical_prices([record])
-        retailers = {r[0] for r in storage._con.execute(
-            f"SELECT DISTINCT retailer FROM {self.HISTORY_TABLE}"
-        ).fetchall()}
+        retailers = {
+            r[0]
+            for r in storage._con.execute(
+                f"SELECT DISTINCT retailer FROM {self.HISTORY_TABLE}"
+            ).fetchall()
+        }
         assert "cardkingdom" in retailers
 
     def test_duckdb_error_raises_storage_write_error(self, storage):

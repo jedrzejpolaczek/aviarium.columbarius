@@ -356,19 +356,21 @@ class TestRunHealthChecks:
 
 def test_check_result_warn():
     r = CheckResult(
-        name="schema drift", layer="bronze", status="WARN",
-        detail="new combo: ('newretailer', 'retail', 'normal')"
+        name="schema drift",
+        layer="bronze",
+        status="WARN",
+        detail="new combo: ('newretailer', 'retail', 'normal')",
     )
     assert r.status == "WARN"
 
 
 _EXPECTED_COMBOS = {
-    ("cardmarket", "retail",  "normal"),
-    ("cardmarket", "retail",  "foil"),
+    ("cardmarket", "retail", "normal"),
+    ("cardmarket", "retail", "foil"),
     ("cardmarket", "buylist", "normal"),
-    ("tcgplayer",  "retail",  "normal"),
-    ("tcgplayer",  "retail",  "foil"),
-    ("tcgplayer",  "buylist", "normal"),
+    ("tcgplayer", "retail", "normal"),
+    ("tcgplayer", "retail", "foil"),
+    ("tcgplayer", "buylist", "normal"),
 }
 
 
@@ -389,8 +391,10 @@ class TestCheckBronzePricesSchemaWarn:
     def test_pass_when_combos_match_expected(self):
         con = duckdb.connect(":memory:")
         today = datetime.date(2026, 6, 24)
-        rows = [(f"u{i}", today.isoformat(), r, t, f, 1.0)
-                for i, (r, t, f) in enumerate(_EXPECTED_COMBOS)]
+        rows = [
+            (f"u{i}", today.isoformat(), r, t, f, 1.0)
+            for i, (r, t, f) in enumerate(_EXPECTED_COMBOS)
+        ]
         self._make_eav_table(con, rows)
         results = _check_bronze_prices_schema_drift(con, today, _EXPECTED_COMBOS)
         assert all(r.status == "PASS" for r in results)
