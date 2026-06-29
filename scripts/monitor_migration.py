@@ -4,7 +4,6 @@ Run in a new terminal while migrate_bronze_prices.py is running:
     uv run scripts/monitor_migration.py
 """
 
-import os
 import time
 from datetime import datetime
 from pathlib import Path
