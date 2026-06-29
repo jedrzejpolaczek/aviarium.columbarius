@@ -62,9 +62,9 @@ class SilverPriceBuilder:
         silver_prices_history.
 
         Scryfall side:
-            Reads today's rows from bronze_scryfall_prices_history, extracts
-            scalar EUR/USD fields from the stored JSON prices column, and joins
-            to silver_cards on scryfall_id to resolve the canonical MTGJson uuid.
+            Reads today's rows from bronze_scryfall_prices_history, selecting
+            scalar EUR/USD float columns directly (eur, eur_foil, usd, usd_foil),
+            and joins to silver_cards on scryfall_id to resolve the canonical MTGJson uuid.
             UUID resolution uses COALESCE(uuid, canonical_uuid) so that English
             paper cards whose direct scryfall_id→MTGJson join missed (e.g. due to
             a stale identifier in MTGJson) are still included via their
