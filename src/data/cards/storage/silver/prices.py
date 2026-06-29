@@ -1,6 +1,6 @@
 """Silver-tier price pipeline: extraction, joining, and forward-fill."""
 
-import json
+from pathlib import Path
 
 import duckdb
 import pandas as pd
@@ -11,31 +11,35 @@ from src.logger import get_logger
 
 logger = get_logger(__name__)
 
-_PRICE_COLS: list[str] = [
-    "eur",
-    "eur_foil",
-    "usd",
-    "usd_foil",
-    "cardmarket_eur",
-    "cardmarket_eur_foil",
-    "cardmarket_buylist_eur",
-    "tcgplayer_usd",
-    "tcgplayer_usd_foil",
-    "tcgplayer_buylist_usd",
-]
-
-_MTGJSON_PRICE_MAP: dict[str, tuple[str, str, str]] = {
-    "cardmarket_eur": ("cardmarket", "retail", "normal"),
-    "cardmarket_eur_foil": ("cardmarket", "retail", "foil"),
-    "cardmarket_buylist_eur": ("cardmarket", "buylist", "normal"),
-    "tcgplayer_usd": ("tcgplayer", "retail", "normal"),
-    "tcgplayer_usd_foil": ("tcgplayer", "retail", "foil"),
-    "tcgplayer_buylist_usd": ("tcgplayer", "buylist", "normal"),
-}
-
 
 class SilverPriceBuilder:
     """Builds today's silver_prices_history snapshot from Bronze sources."""
+
+    # All price columns in the silver schema. Scryfall supplies the first four
+    # (eur, eur_foil, usd, usd_foil); the remaining six come from MTGJson.
+    _PRICE_COLS: list[str] = [
+        "eur",
+        "eur_foil",
+        "usd",
+        "usd_foil",
+        "cardmarket_eur",
+        "cardmarket_eur_foil",
+        "cardmarket_buylist_eur",
+        "tcgplayer_usd",
+        "tcgplayer_usd_foil",
+        "tcgplayer_buylist_usd",
+    ]
+
+    # Maps each silver column name to its (retailer, tx_type, finish) triple in
+    # the Bronze EAV table. Used by the fallback path in _join_mtgjson_prices.
+    _MTGJSON_PRICE_MAP: dict[str, tuple[str, str, str]] = {
+        "cardmarket_eur": ("cardmarket", "retail", "normal"),
+        "cardmarket_eur_foil": ("cardmarket", "retail", "foil"),
+        "cardmarket_buylist_eur": ("cardmarket", "buylist", "normal"),
+        "tcgplayer_usd": ("tcgplayer", "retail", "normal"),
+        "tcgplayer_usd_foil": ("tcgplayer", "retail", "foil"),
+        "tcgplayer_buylist_usd": ("tcgplayer", "buylist", "normal"),
+    }
 
     def __init__(
         self,
@@ -68,9 +72,9 @@ class SilverPriceBuilder:
             resolvable UUID in silver_cards are dropped (inner join).
 
         MTGJson side:
-            Reads today's rows from bronze_mtgjson_prices_history. Each row's
-            JSON blob is parsed once and all six price columns are extracted in
-            a single pass. Left-joined to the Scryfall base on (uuid, snapshot_date).
+            Reads today's EAV rows from bronze_mtgjson_prices_history and pivots
+            them to six wide columns via CASE WHEN aggregation. Left-joined to the
+            Scryfall base on (uuid, snapshot_date).
 
         Returns an empty DataFrame when silver_cards or
         bronze_scryfall_prices_history do not yet exist.
@@ -143,31 +147,17 @@ class SilverPriceBuilder:
             "   AND (uuid IS NOT NULL OR language = 'English')"
         ).df()
 
-        scryfall_prices = self._bronze_con.execute(
-            """
-            SELECT
-                id                                                       AS scryfall_id,
-                snapshot_date,
-                CAST(json_extract_string(prices, '$.eur')      AS FLOAT) AS eur,
-                CAST(json_extract_string(prices, '$.eur_foil') AS FLOAT) AS eur_foil,
-                CAST(json_extract_string(prices, '$.usd')      AS FLOAT) AS usd,
-                CAST(json_extract_string(prices, '$.usd_foil') AS FLOAT) AS usd_foil
-            FROM bronze_scryfall_prices_history
-            WHERE snapshot_date = ?
-            """,
-            [today],
-        ).df()
-
+        sql = (Path(__file__).parent / "sql" / "scryfall_prices_base.sql").read_text()
+        scryfall_prices = self._bronze_con.execute(sql, [today]).df()
         return scryfall_prices.merge(card_map, on="scryfall_id", how="inner")
 
     def _join_mtgjson_prices(
         self, df: pd.DataFrame, bronze_tables: set[str], today: str
     ) -> pd.DataFrame:
-        """Join today's MTGJson paper prices onto the Scryfall base DataFrame.
+        """Join today's MTGJson EAV prices onto the Scryfall base DataFrame.
 
-        Reads only today's rows from bronze_mtgjson_prices_history. Each row's
-        JSON blob is parsed once and all six price columns are extracted in a
-        single pass, avoiding repeated json.loads calls per column.
+        Pivots EAV rows to six wide columns via CASE WHEN aggregation in SQL,
+        then left-joins to the Scryfall base on (uuid, snapshot_date).
 
         Args:
             df: Scryfall base DataFrame (uuid, scryfall_id, snapshot_date, …).
@@ -178,29 +168,14 @@ class SilverPriceBuilder:
             logger.warning(
                 "bronze_mtgjson_prices_history not found — MTGJson prices omitted"
             )
-            for col in _MTGJSON_PRICE_MAP:
+            for col in self._MTGJSON_PRICE_MAP:
                 df[col] = None
             return df
 
-        mtgjson = self._bronze_con.execute(
-            "SELECT uuid, snapshot_date, paper "
-            "FROM bronze_mtgjson_prices_history "
-            "WHERE snapshot_date = ?",
-            [today],
-        ).df()
+        sql = (Path(__file__).parent / "sql" / "mtgjson_prices_daily.sql").read_text()
+        mtgjson = self._bronze_con.execute(sql, [today]).df()
 
-        extracted = pd.DataFrame(
-            [
-                self._extract_all_prices(paper, snap)
-                for paper, snap in zip(mtgjson["paper"], mtgjson["snapshot_date"])
-            ]
-        )
-        mtgjson = pd.concat([mtgjson.drop(columns=["paper"]), extracted], axis=1)
-        # When bronze has no rows for today (e.g. pipeline runs before the daily
-        # snapshot lands), extracted is empty and has no columns. Ensure the price
-        # columns are present so the LEFT merge adds them as NULL rather than
-        # silently dropping them.
-        for col in _MTGJSON_PRICE_MAP:
+        for col in self._MTGJSON_PRICE_MAP:
             if col not in mtgjson.columns:
                 mtgjson[col] = None
         return df.merge(mtgjson, on=["uuid", "snapshot_date"], how="left")
@@ -272,7 +247,7 @@ class SilverPriceBuilder:
                    considered as fill sources.
         """
         return self._fill_from_history(
-            df, today, "silver_prices_history", list(_PRICE_COLS)
+            df, today, "silver_prices_history", list(self._PRICE_COLS)
         )
 
     # ------------------------------------------------------------------
@@ -326,20 +301,8 @@ class SilverPriceBuilder:
             logger.info("No language variant cards in silver_cards — skipping")
             return pd.DataFrame()
 
-        scryfall_prices = self._bronze_con.execute(
-            """
-            SELECT
-                id                                                       AS scryfall_id,
-                snapshot_date,
-                CAST(json_extract_string(prices, '$.eur')      AS FLOAT) AS eur,
-                CAST(json_extract_string(prices, '$.eur_foil') AS FLOAT) AS eur_foil,
-                CAST(json_extract_string(prices, '$.usd')      AS FLOAT) AS usd,
-                CAST(json_extract_string(prices, '$.usd_foil') AS FLOAT) AS usd_foil
-            FROM bronze_scryfall_prices_history
-            WHERE snapshot_date = ?
-            """,
-            [today],
-        ).df()
+        sql = (Path(__file__).parent / "sql" / "scryfall_language_prices_base.sql").read_text()
+        scryfall_prices = self._bronze_con.execute(sql, [today]).df()
 
         df = scryfall_prices.merge(lang_map, on="scryfall_id", how="inner")
         if df.empty:
@@ -378,34 +341,3 @@ class SilverPriceBuilder:
             "silver_language_prices_history",
             ["eur", "eur_foil", "usd", "usd_foil"],
         )
-
-    @staticmethod
-    def _extract_all_prices(
-        paper_json: object, snapshot_date: str
-    ) -> dict[str, float | None]:
-        """Parse a MTGJson paper JSON blob and extract all price columns at once.
-
-        Parses the JSON blob only once and extracts all six configured price
-        columns in a single pass, avoiding redundant parsing.
-
-        Args:
-            paper_json: Raw JSON string from bronze_mtgjson_prices_history.paper.
-            snapshot_date: ISO date string; only prices on or before this date are used.
-
-        Returns:
-            Dict mapping each column in _MTGJSON_PRICE_MAP to its value or None.
-        """
-        result: dict[str, float | None] = {col: None for col in _MTGJSON_PRICE_MAP}
-        if not isinstance(paper_json, str):
-            return result
-        try:
-            data = json.loads(paper_json)
-            for col, (retailer, tx_type, finish) in _MTGJSON_PRICE_MAP.items():
-                prices = ((data.get(retailer) or {}).get(tx_type) or {}).get(
-                    finish
-                ) or {}
-                candidates = {k: v for k, v in prices.items() if k <= snapshot_date}
-                result[col] = float(candidates[max(candidates)]) if candidates else None
-        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
-            pass
-        return result
