@@ -167,13 +167,12 @@ def migrate_scryfall_prices(source_path: str, target_path: str) -> int:
             SELECT
                 id,
                 CAST(snapshot_date AS VARCHAR) AS snapshot_date,
-                TRY_CAST(json_extract_string(prices::JSON, '$.eur')      AS FLOAT) AS eur,
-                TRY_CAST(json_extract_string(prices::JSON, '$.eur_foil') AS FLOAT) AS eur_foil,
-                TRY_CAST(json_extract_string(prices::JSON, '$.usd')      AS FLOAT) AS usd,
-                TRY_CAST(json_extract_string(prices::JSON, '$.usd_foil') AS FLOAT) AS usd_foil,
-                TRY_CAST(json_extract_string(prices::JSON, '$.tix')      AS FLOAT) AS tix
+                TRY_CAST(json_extract_string(CASE WHEN prices IS NOT NULL AND prices != 'null' THEN prices::JSON END, '$.eur')      AS FLOAT) AS eur,
+                TRY_CAST(json_extract_string(CASE WHEN prices IS NOT NULL AND prices != 'null' THEN prices::JSON END, '$.eur_foil') AS FLOAT) AS eur_foil,
+                TRY_CAST(json_extract_string(CASE WHEN prices IS NOT NULL AND prices != 'null' THEN prices::JSON END, '$.usd')      AS FLOAT) AS usd,
+                TRY_CAST(json_extract_string(CASE WHEN prices IS NOT NULL AND prices != 'null' THEN prices::JSON END, '$.usd_foil') AS FLOAT) AS usd_foil,
+                TRY_CAST(json_extract_string(CASE WHEN prices IS NOT NULL AND prices != 'null' THEN prices::JSON END, '$.tix')      AS FLOAT) AS tix
             FROM src.bronze_scryfall_prices_history
-            WHERE prices IS NOT NULL AND prices != 'null'
         """)
 
         count = tgt.execute(
