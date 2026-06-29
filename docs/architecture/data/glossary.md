@@ -103,7 +103,7 @@ The abstract card identity, shared across all printings and reprints. Two cards 
 ---
 
 ### Price snapshot
-One row of price data for a card on a specific date. Prices come from Scryfall (EUR/USD via `prices` JSON) and MTGJson (Cardmarket/TCGPlayer via `paper` JSON). Missing prices on a given day are forward-filled from the most recent prior snapshot.
+One row of price data for a card on a specific date. Prices come from Scryfall (scalar `eur`, `eur_foil`, `usd`, `usd_foil` float columns in `bronze_scryfall_prices_history`) and MTGJson (EAV rows in `bronze_mtgjson_prices_history` pivoted to wide Cardmarket/TCGPlayer columns at the Silver layer via CASE WHEN SQL). Missing prices on a given day are forward-filled from the most recent prior snapshot.
 
 **In the data:** `silver_prices_history` — grain: 1 row per (uuid, snapshot_date)
 

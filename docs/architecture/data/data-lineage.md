@@ -114,9 +114,9 @@ flowchart TD
 
 `SilverPriceBuilder.build()` runs daily, reading only today's rows:
 
-1. Reads today's `bronze_scryfall_prices_history` and extracts scalar `eur`, `eur_foil`, `usd`, `usd_foil` from the `prices` JSON.
+1. Reads today's `bronze_scryfall_prices_history` via `scryfall_prices_base.sql` — selects scalar `eur`, `eur_foil`, `usd`, `usd_foil` float columns directly (no JSON parsing).
 2. Joins to `silver_cards` on `scryfall_id` to resolve `uuid`. Falls back to `canonical_uuid` for cards whose direct join misses (stale MTGJson scryfall_id).
-3. Reads today's `bronze_mtgjson_prices_history` and extracts `cardmarket_eur`, `cardmarket_eur_foil`, `cardmarket_buylist_eur`, `tcgplayer_usd`, `tcgplayer_usd_foil`, `tcgplayer_buylist_usd` from the `paper` JSON blob (parsed in one pass).
+3. Reads today's `bronze_mtgjson_prices_history` via `mtgjson_prices_daily.sql` — pivots EAV rows `(retailer, tx_type, finish, price)` into six wide columns (`cardmarket_eur`, `cardmarket_eur_foil`, `cardmarket_buylist_eur`, `tcgplayer_usd`, `tcgplayer_usd_foil`, `tcgplayer_buylist_usd`) using `MAX(CASE WHEN ...)` aggregation per `(uuid, snapshot_date)`.
 4. Left-joins MTGJson prices onto the Scryfall base on `(uuid, snapshot_date)`.
 5. Forward-fills rows where all price columns are NULL from the most recent prior `silver_prices_history` row.
 

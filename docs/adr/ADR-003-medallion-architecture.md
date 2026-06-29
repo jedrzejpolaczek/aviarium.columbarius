@@ -40,9 +40,9 @@ shared file. Cross-layer queries are handled via DuckDB `ATTACH` in interactive 
 | `bronze_scryfall_cards` | full replace / upsert | All Scryfall card records |
 | `bronze_mtgjson_cards` | upsert | All MTGJson card printings |
 | `bronze_mtgjson_prices` | full replace | Current MTGJson prices per card UUID |
-| `bronze_scryfall_prices_history` | daily append | `id · snapshot_date · prices` |
+| `bronze_scryfall_prices_history` | daily append | `id · snapshot_date · eur · eur_foil · usd · usd_foil · tix` (scalar FLOAT columns) |
 | `bronze_scryfall_meta_history` | daily append | `id · snapshot_date · legalities · edhrec_rank · reserved · promo_types · finishes` |
-| `bronze_mtgjson_prices_history` | daily append | `uuid · snapshot_date · paper · mtgo` (seeded from AllPrices.json, then one row/day from AllPricesToday.json) |
+| `bronze_mtgjson_prices_history` | daily append | EAV: `uuid · snapshot_date · retailer · tx_type · finish · price` — one row per price point (seeded from AllPrices.json, then daily from AllPricesToday.json) |
 | `bronze_tournament_results` | upsert | Top-8 deck card rows from mtgtop8.com |
 | `bronze_format_staples_history` | daily append | `id · snapshot_date · format · deck_pct · played · top` |
 
@@ -137,9 +137,9 @@ flowchart LR
     FMT --> B_FSH["bronze_format_staples_history"]
     T8  --> B_TR["bronze_tournament_results"]
 
-    B_SF --> PH1["bronze_scryfall_prices_history\nid · snapshot_date · prices"]
+    B_SF --> PH1["bronze_scryfall_prices_history\nid · snapshot_date · eur · eur_foil · usd · usd_foil · tix"]
     B_SF --> PH2["bronze_scryfall_meta_history\nid · snapshot_date · legalities · edhrec_rank · ..."]
-    B_MJP --> PH3["bronze_mtgjson_prices_history\nuuid · snapshot_date · paper · mtgo"]
+    B_MJP --> PH3["bronze_mtgjson_prices_history\nuuid · snapshot_date · retailer · tx_type · finish · price"]
 
     B_SF  --> S["silver_cards"]
     B_MJ  --> S

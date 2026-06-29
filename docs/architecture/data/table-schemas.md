@@ -79,15 +79,19 @@ Raw ingestion from external sources. Bronze tables store Pydantic model dumps ex
 
 ### bronze_scryfall_prices_history
 
-**Grain:** 1 row per (scryfall_id, snapshot_date)
+**Grain:** 1 row per (id, snapshot_date)
 **Updated:** append — deduplication on (id, snapshot_date)
 **Source:** Daily snapshot of the `prices` field from `bronze_scryfall_cards`
 
 | Column | Type | Description |
 |--------|------|-------------|
 | id | VARCHAR | Scryfall UUID |
-| snapshot_date | DATE | Date this price snapshot was taken |
-| prices | VARCHAR | JSON object (ScryfallPrices): `{eur, eur_foil, usd, usd_foil, eur_etched, usd_etched, tix}` |
+| snapshot_date | VARCHAR | Date this price snapshot was taken |
+| eur | FLOAT? | EUR non-foil price |
+| eur_foil | FLOAT? | EUR foil price |
+| usd | FLOAT? | USD non-foil price |
+| usd_foil | FLOAT? | USD foil price |
+| tix | FLOAT? | MTGO ticket price (captured in Bronze; not propagated to Silver) |
 
 ---
 
@@ -130,16 +134,21 @@ Raw ingestion from external sources. Bronze tables store Pydantic model dumps ex
 
 ### bronze_mtgjson_prices_history
 
-**Grain:** 1 row per (uuid, snapshot_date)
-**Updated:** append — deduplication on (uuid, snapshot_date)
+**Grain:** 1 row per (uuid, snapshot_date, retailer, tx_type, finish)
+**Updated:** append — deduplication on (uuid, snapshot_date, retailer, tx_type, finish)
 **Source:** MTGJson AllPricesToday.json (daily snapshot) + AllPrices.json (one-time 90-day seed)
+
+EAV schema — one row per price point. All retailers present in the MTGJson feed are captured
+without pre-selection. Silver pivots to wide columns via `CASE WHEN` SQL.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | uuid | VARCHAR | MTGJson UUID |
-| snapshot_date | DATE | Date this price snapshot was taken |
-| paper | VARCHAR? | JSON object: paper retailer prices keyed by retailer → tx_type → finish → date (see `MtgjsonCardPrices.paper`) |
-| mtgo | VARCHAR? | JSON object: MTGO prices (same nested structure). NULL for most cards. |
+| snapshot_date | VARCHAR | Date this price was recorded |
+| retailer | VARCHAR | Source retailer (cardmarket, tcgplayer, …) |
+| tx_type | VARCHAR | Transaction type: `retail` or `buylist` |
+| finish | VARCHAR | Card finish: `normal`, `foil`, `etched` |
+| price | FLOAT? | Price in retailer's native currency |
 
 ---
 
