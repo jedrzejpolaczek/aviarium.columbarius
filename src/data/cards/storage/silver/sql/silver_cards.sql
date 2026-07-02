@@ -89,7 +89,7 @@ mtgjson AS (
             WHEN POSITION(' — ' IN COALESCE(original_type,'')) > 0
             THEN string_split(TRIM(split_part(original_type, ' — ', 2)), ' ')
             ELSE []::VARCHAR[]
-        END                                                     AS original_subtypes
+        END AS original_subtypes
     FROM mtgjson_filtered
 ),
 
