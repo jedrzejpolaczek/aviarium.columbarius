@@ -19,7 +19,6 @@ MINIMAL_PIPELINE_CONFIG = {
         "silver_duckdb_path": ":memory:",
         "gold_duckdb_path": ":memory:",
         "silver_config_path": "configs/silver_config.json",
-        "gold_config_path": "configs/gold_config.json",
         "bronze_config_path": "configs/bronze_config.json",
         "bronze_config_seed_path": "configs/bronze_config_seed.json",
     },
@@ -33,7 +32,6 @@ def test_load_config_storage_is_dict(tmp_path):
   silver_duckdb_path: "data/silver/cards.duckdb"
   gold_duckdb_path: "data/gold/cards.duckdb"
   silver_config_path: "configs/silver_config.json"
-  gold_config_path: "configs/gold_config.json"
   bronze_config_path: "configs/bronze_config.json"
   bronze_config_seed_path: "configs/bronze_config_seed.json"
 """
@@ -44,7 +42,6 @@ def test_load_config_storage_is_dict(tmp_path):
     assert isinstance(storage, dict), f"storage must be a dict, got {type(storage)}"
     assert storage["bronze_duckdb_path"] == "data/bronze/cards.duckdb"
     assert storage["bronze_config_seed_path"] == "configs/bronze_config_seed.json"
-    assert storage["gold_config_path"] == "configs/gold_config.json"
 
 
 @pytest.fixture
@@ -129,9 +126,7 @@ class TestInitialPipeline:
             MockSilver.assert_called_once_with(
                 ":memory:", ":memory:", "configs/silver_config.json"
             )
-            MockGold.assert_called_once_with(
-                ":memory:", ":memory:", "configs/gold_config.json"
-            )
+            MockGold.assert_called_once_with(":memory:", ":memory:")
 
 
 # ---------------------------------------------------------------------------

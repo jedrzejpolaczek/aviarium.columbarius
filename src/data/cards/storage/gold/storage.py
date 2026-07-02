@@ -12,7 +12,6 @@ Typical usage:
     with GoldStorage(
         "data/silver/cards.duckdb",
         "data/gold/cards.duckdb",
-        "configs/gold_config.json",
     ) as storage:
         storage.populate()   # initial load
         # or
@@ -58,7 +57,6 @@ class GoldStorage(TransformStorage):
         with GoldStorage(
             "data/silver/cards.duckdb",
             "data/gold/cards.duckdb",
-            "configs/gold_config.json",
         ) as storage:
             storage.populate()
 
@@ -66,15 +64,12 @@ class GoldStorage(TransformStorage):
         StorageConnectionError: If either DuckDB connection cannot be opened.
     """
 
-    def __init__(
-        self, silver_db_path: str, gold_db_path: str, config_path: str
-    ) -> None:
+    def __init__(self, silver_db_path: str, gold_db_path: str) -> None:
         """Open Silver (read-only) and Gold (read-write) DuckDB connections.
 
         Args:
             silver_db_path: Path to the Silver DuckDB file.
             gold_db_path: Path to the Gold DuckDB file (created if it does not exist).
-            config_path: Path to the gold_config.json file (reserved for future use).
 
         Raises:
             StorageConnectionError: If either connection cannot be established.

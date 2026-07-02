@@ -81,7 +81,6 @@ The pipeline follows a **Medallion architecture** (Bronze → Silver → Gold).
 ┌─────────────────────────────────────────────────────────────┐
 │  GOLD  —  DuckDB  (data/gold/cards.duckdb)  [stub]          │
 │  Aggregated views ready for ML                              │
-│  Config: configs/gold_config.json                           │
 └────────────────────┬────────────────────────────────────────┘
                      │  (planned)
                      ▼
@@ -106,8 +105,7 @@ aviarium.columbarius/
 ├── configs/
 │   ├── data_sources.yaml            # source URLs, local paths, download flags
 │   ├── bronze_config.json           # Bronze table definitions
-│   ├── silver_config.json           # Silver transform config
-│   └── gold_config.json             # Gold config (stub)
+│   └── silver_config.json           # Silver transform config
 ├── data/
 │   ├── raw/                         # downloaded JSON files (gitignored)
 │   ├── bronze/                      # Bronze DuckDB file (gitignored)
@@ -219,7 +217,7 @@ storage:
 
 Set `flag: true` for any source you want to download fresh from the API. Set `flag: false` to load from the existing local JSON file without hitting the network.
 
-Per-tier table and transformation rules are in `configs/bronze_config.json`, `configs/silver_config.json`, and `configs/gold_config.json`.
+Per-tier table and transformation rules are in `configs/bronze_config.json` and `configs/silver_config.json`.
 
 ---
 

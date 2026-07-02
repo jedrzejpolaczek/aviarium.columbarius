@@ -9,7 +9,7 @@ Provides two entry points that cover the full lifecycle of the data pipeline:
 
 Both functions read storage paths from a YAML file (configs/data_sources.yaml).
 Each tier loads its own JSON config: Bronze from configs/bronze_config.json,
-Silver from configs/silver_config.json, Gold from configs/gold_config.json.
+Silver from configs/silver_config.json.
 """
 
 import asyncio
@@ -200,9 +200,8 @@ def initial_gold_pipeline(config: dict[str, Any]) -> None:
 
     silver_duckdb_path = config["storage"]["silver_duckdb_path"]
     gold_duckdb_path = config["storage"]["gold_duckdb_path"]
-    gold_config_path = config["storage"]["gold_config_path"]
 
-    with GoldStorage(silver_duckdb_path, gold_duckdb_path, gold_config_path) as storage:
+    with GoldStorage(silver_duckdb_path, gold_duckdb_path) as storage:
         storage.populate()
 
     logger.info("Gold initial pipeline finished")
@@ -323,9 +322,8 @@ def daily_gold_pipeline(config: dict[str, Any]) -> None:
 
     silver_duckdb_path = config["storage"]["silver_duckdb_path"]
     gold_duckdb_path = config["storage"]["gold_duckdb_path"]
-    gold_config_path = config["storage"]["gold_config_path"]
 
-    with GoldStorage(silver_duckdb_path, gold_duckdb_path, gold_config_path) as storage:
+    with GoldStorage(silver_duckdb_path, gold_duckdb_path) as storage:
         storage.update()
 
     logger.info("Daily gold pipeline finished")

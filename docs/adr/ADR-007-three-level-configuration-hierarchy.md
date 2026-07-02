@@ -49,8 +49,10 @@ strategy because they are tightly coupled to the storage class and type-checked 
   in Python or transformation rules stay in JSON.
 
 ### Neutral
-- `gold_config.json` exists as a reserved placeholder for when the Gold layer is
-  implemented, following the same pattern as Silver.
+- `gold_config.json` was originally reserved for when the Gold layer would be
+  implemented. Gold shipped without ever needing transformation-rule config
+  (its logic is pure SQL/window functions with no tunable parameters), so the
+  placeholder was removed in 2026-07 rather than carried indefinitely.
 
 ## Diagram
 

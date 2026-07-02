@@ -24,9 +24,7 @@ def _make_gold_storage(
         con.unregister("_df")
     con.close()
 
-    config_path = tmp_path / "gold_config.json"
-    config_path.write_text("{}")
-    return GoldStorage(silver_path, ":memory:", str(config_path))
+    return GoldStorage(silver_path, ":memory:")
 
 
 @pytest.fixture
