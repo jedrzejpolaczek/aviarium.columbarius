@@ -64,6 +64,24 @@ class GoldStorage(TransformStorage):
         StorageConnectionError: If either DuckDB connection cannot be opened.
     """
 
+    # Every Gold table name any builder in this class can currently produce.
+    # _prune_orphaned_tables uses this to distinguish "no builder makes this
+    # anymore" (safe to drop) from "this run's Silver tier is partial" (must
+    # stay untouched — see _pipeline's docstring on partial-tier tolerance).
+    _KNOWN_GOLD_TABLES = frozenset(
+        {
+            "gold_card_features",
+            "gold_price_features",
+            "gold_language_premiums",
+            "gold_demand_signals",
+            "gold_events",
+            "gold_format_staples",
+            "gold_ban_price_impact",
+            "gold_tournament_signals",
+            "gold_ml_dataset",
+        }
+    )
+
     def __init__(self, silver_db_path: str, gold_db_path: str) -> None:
         """Open Silver (read-only) and Gold (read-write) DuckDB connections.
 
@@ -220,3 +238,25 @@ class GoldStorage(TransformStorage):
                 self._writer.full_load(self._ml.build_ml_dataset(), "gold_ml_dataset")
         else:
             logger.warning("gold_price_features not found — skipping gold_ml_dataset")
+
+        self._prune_orphaned_tables()
+
+    def _prune_orphaned_tables(self) -> None:
+        """Drop any gold_* table that no builder in this class can produce.
+
+        A table only reaches here if the code that used to build it was
+        removed. A table whose Silver source is merely absent on this run
+        stays in _KNOWN_GOLD_TABLES and is left untouched.
+        """
+        gold_tables = get_tables(self._gold_con)
+        orphaned = {
+            t
+            for t in gold_tables
+            if t.startswith("gold_") and t not in self._KNOWN_GOLD_TABLES
+        }
+        for table_name in sorted(orphaned):
+            logger.warning(
+                "Dropping orphaned Gold table %r — no builder produces it anymore",
+                table_name,
+            )
+            self._gold_con.execute(f"DROP TABLE {table_name}")

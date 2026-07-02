@@ -579,6 +579,34 @@ class TestPipelineFormatStaples:
             g.populate()  # should complete without error
 
 
+class TestPruneOrphanedTables:
+    def test_drops_gold_table_not_produced_by_any_builder(self, tmp_path):
+        with _make_gold_storage(tmp_path, {}) as g:
+            g._gold_con.execute("CREATE TABLE gold_old_removed_feature (x INT)")
+            g.populate()
+            tables = {r[0] for r in g._gold_con.execute("SHOW TABLES").fetchall()}
+
+        assert "gold_old_removed_feature" not in tables
+
+    def test_keeps_known_gold_table_when_its_silver_source_is_absent(self, tmp_path):
+        with _make_gold_storage(tmp_path, {}) as g:
+            g._gold_con.execute(
+                "CREATE TABLE gold_format_staples (id VARCHAR, deck_pct DOUBLE)"
+            )
+            g.populate()
+            tables = {r[0] for r in g._gold_con.execute("SHOW TABLES").fetchall()}
+
+        assert "gold_format_staples" in tables
+
+    def test_leaves_non_gold_tables_untouched(self, tmp_path):
+        with _make_gold_storage(tmp_path, {}) as g:
+            g._gold_con.execute("CREATE TABLE unrelated_table (x INT)")
+            g.populate()
+            tables = {r[0] for r in g._gold_con.execute("SHOW TABLES").fetchall()}
+
+        assert "unrelated_table" in tables
+
+
 # ---------------------------------------------------------------------------
 # Helpers for GoldSignalBuilders.build_ban_price_impact tests
 # ---------------------------------------------------------------------------
