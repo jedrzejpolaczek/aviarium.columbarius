@@ -292,7 +292,10 @@ async def _ingest_tournament_results_async(
 
     _save_to_json(new_raw, t_json_path)
     for p in t_html_paths:
-        Path(p).unlink(missing_ok=True)
+        try:
+            Path(p).unlink(missing_ok=True)
+        except PermissionError:
+            pass  # Windows: file still held by a concurrent process; ignore
 
     result = load_from_json(t_json_path, t_model)
     logger.info(
