@@ -16,6 +16,8 @@ GoldSignalBuilders reads clean Silver tables and produces five Gold tables:
                               and copy averages over 30-day and 90-day windows.
 """
 
+from pathlib import Path
+
 import duckdb
 import pandas as pd
 
@@ -24,6 +26,8 @@ from src.logger import get_logger
 
 
 logger = get_logger(__name__)
+
+_SQL_DIR = Path(__file__).parent / "sql"
 
 
 class GoldSignalBuilders:
@@ -49,71 +53,7 @@ class GoldSignalBuilders:
     # ban/unban legality transition per (card id, snapshot_date, format) by
     # comparing each snapshot's legality to the previous one via LAG().
     # Canonical columns: id, snapshot_date, format, event_type.
-    _TRANSITIONS_CTE = """
-        lagged AS (
-            SELECT
-                id,
-                snapshot_date,
-                json_extract_string(legalities, '$.commander') AS curr_commander,
-                LAG(json_extract_string(legalities, '$.commander')) OVER w AS prev_commander,
-                json_extract_string(legalities, '$.standard')  AS curr_standard,
-                LAG(json_extract_string(legalities, '$.standard'))  OVER w AS prev_standard,
-                json_extract_string(legalities, '$.modern')    AS curr_modern,
-                LAG(json_extract_string(legalities, '$.modern'))    OVER w AS prev_modern,
-                json_extract_string(legalities, '$.legacy')    AS curr_legacy,
-                LAG(json_extract_string(legalities, '$.legacy'))    OVER w AS prev_legacy,
-                json_extract_string(legalities, '$.vintage')   AS curr_vintage,
-                LAG(json_extract_string(legalities, '$.vintage'))   OVER w AS prev_vintage
-            FROM silver_meta_history
-            WINDOW w AS (PARTITION BY id ORDER BY snapshot_date)
-        ),
-        transitions AS (
-            SELECT id, snapshot_date, 'commander' AS format,
-                   CASE WHEN prev_commander = 'legal'  AND curr_commander = 'banned' THEN 'ban'
-                        WHEN prev_commander = 'banned' AND curr_commander = 'legal'  THEN 'unban'
-                   END AS event_type
-            FROM lagged
-            WHERE prev_commander IS NOT NULL
-              AND (   (prev_commander = 'legal'  AND curr_commander = 'banned')
-                   OR (prev_commander = 'banned' AND curr_commander = 'legal'))
-            UNION ALL
-            SELECT id, snapshot_date, 'standard',
-                   CASE WHEN prev_standard = 'legal'  AND curr_standard = 'banned' THEN 'ban'
-                        WHEN prev_standard = 'banned' AND curr_standard = 'legal'  THEN 'unban'
-                   END
-            FROM lagged
-            WHERE prev_standard IS NOT NULL
-              AND (   (prev_standard = 'legal'  AND curr_standard = 'banned')
-                   OR (prev_standard = 'banned' AND curr_standard = 'legal'))
-            UNION ALL
-            SELECT id, snapshot_date, 'modern',
-                   CASE WHEN prev_modern = 'legal'  AND curr_modern = 'banned' THEN 'ban'
-                        WHEN prev_modern = 'banned' AND curr_modern = 'legal'  THEN 'unban'
-                   END
-            FROM lagged
-            WHERE prev_modern IS NOT NULL
-              AND (   (prev_modern = 'legal'  AND curr_modern = 'banned')
-                   OR (prev_modern = 'banned' AND curr_modern = 'legal'))
-            UNION ALL
-            SELECT id, snapshot_date, 'legacy',
-                   CASE WHEN prev_legacy = 'legal'  AND curr_legacy = 'banned' THEN 'ban'
-                        WHEN prev_legacy = 'banned' AND curr_legacy = 'legal'  THEN 'unban'
-                   END
-            FROM lagged
-            WHERE prev_legacy IS NOT NULL
-              AND (   (prev_legacy = 'legal'  AND curr_legacy = 'banned')
-                   OR (prev_legacy = 'banned' AND curr_legacy = 'legal'))
-            UNION ALL
-            SELECT id, snapshot_date, 'vintage',
-                   CASE WHEN prev_vintage = 'legal'  AND curr_vintage = 'banned' THEN 'ban'
-                        WHEN prev_vintage = 'banned' AND curr_vintage = 'legal'  THEN 'unban'
-                   END
-            FROM lagged
-            WHERE prev_vintage IS NOT NULL
-              AND (   (prev_vintage = 'legal'  AND curr_vintage = 'banned')
-                   OR (prev_vintage = 'banned' AND curr_vintage = 'legal'))
-        )
-    """
+    _TRANSITIONS_CTE = (_SQL_DIR / "transitions_cte.sql").read_text()
 
     def __init__(self, silver_con: duckdb.DuckDBPyConnection) -> None:
         self._silver_con = silver_con
@@ -125,16 +65,8 @@ class GoldSignalBuilders:
         build_ban_price_impact() to skip the full window-function query when
         the silver_meta_history table has no transitions at all.
         """
-        row = self._silver_con.execute("""
-            SELECT 1 FROM (
-                SELECT id
-                FROM silver_meta_history
-                WHERE legalities IS NOT NULL
-                GROUP BY id
-                HAVING COUNT(DISTINCT legalities) > 1
-            ) t
-            LIMIT 1
-        """).fetchone()
+        sql = (_SQL_DIR / "legality_transitions_check.sql").read_text()
+        row = self._silver_con.execute(sql).fetchone()
         return row is not None
 
     def build_demand_signals(self) -> pd.DataFrame:
@@ -146,49 +78,8 @@ class GoldSignalBuilders:
         silver_tables = get_tables(self._silver_con)
         if "silver_meta_history" not in silver_tables:
             return pd.DataFrame()
-        return self._silver_con.execute("""
-            WITH lagged AS (
-                SELECT
-                    id,
-                    snapshot_date,
-                    edhrec_rank,
-                    LAG(edhrec_rank) OVER w                                          AS prev_rank,
-                    json_extract_string(legalities, '$.commander')                   AS commander_legality,
-                    LAG(json_extract_string(legalities, '$.commander')) OVER w       AS prev_commander,
-                    json_extract_string(legalities, '$.standard')                    AS standard_legality,
-                    LAG(json_extract_string(legalities, '$.standard'))  OVER w       AS prev_standard,
-                    json_extract_string(legalities, '$.modern')                      AS modern_legality,
-                    LAG(json_extract_string(legalities, '$.modern'))    OVER w       AS prev_modern,
-                    json_extract_string(legalities, '$.legacy')                      AS legacy_legality,
-                    LAG(json_extract_string(legalities, '$.legacy'))    OVER w       AS prev_legacy,
-                    json_extract_string(legalities, '$.vintage')                     AS vintage_legality,
-                    LAG(json_extract_string(legalities, '$.vintage'))   OVER w       AS prev_vintage
-                FROM silver_meta_history
-                WINDOW w AS (PARTITION BY id ORDER BY snapshot_date)
-            )
-            SELECT
-                id,
-                snapshot_date,
-                edhrec_rank,
-                edhrec_rank - prev_rank                                              AS edhrec_rank_change,
-                commander_legality,
-                standard_legality,
-                modern_legality,
-                legacy_legality,
-                vintage_legality,
-                COALESCE(prev_commander = 'legal'  AND commander_legality = 'banned', FALSE) AS commander_banned,
-                COALESCE(prev_commander = 'banned' AND commander_legality = 'legal',  FALSE) AS commander_unbanned,
-                COALESCE(prev_standard  = 'legal'  AND standard_legality  = 'banned', FALSE) AS standard_banned,
-                COALESCE(prev_standard  = 'banned' AND standard_legality  = 'legal',  FALSE) AS standard_unbanned,
-                COALESCE(prev_modern    = 'legal'  AND modern_legality    = 'banned', FALSE) AS modern_banned,
-                COALESCE(prev_modern    = 'banned' AND modern_legality    = 'legal',  FALSE) AS modern_unbanned,
-                COALESCE(prev_legacy    = 'legal'  AND legacy_legality    = 'banned', FALSE) AS legacy_banned,
-                COALESCE(prev_legacy    = 'banned' AND legacy_legality    = 'legal',  FALSE) AS legacy_unbanned,
-                COALESCE(prev_vintage   = 'legal'  AND vintage_legality   = 'banned', FALSE) AS vintage_banned,
-                COALESCE(prev_vintage   = 'banned' AND vintage_legality   = 'legal',  FALSE) AS vintage_unbanned
-            FROM lagged
-            ORDER BY id, snapshot_date
-        """).df()
+        sql = (_SQL_DIR / "demand_signals.sql").read_text()
+        return self._silver_con.execute(sql).df()
 
     def build_events(self) -> pd.DataFrame:
         """Build gold_events — format-level ban/unban event calendar.
@@ -214,13 +105,12 @@ class GoldSignalBuilders:
             )
             return empty
 
-        result = self._silver_con.execute(f"""
-            WITH {self._TRANSITIONS_CTE}
-            SELECT snapshot_date AS event_date, format, event_type, COUNT(*) AS card_count
-            FROM transitions
-            GROUP BY snapshot_date, format, event_type
-            ORDER BY event_date, format, event_type
-        """).df()
+        sql = (
+            (_SQL_DIR / "events.sql")
+            .read_text()
+            .format(transitions_cte=self._TRANSITIONS_CTE)
+        )
+        result = self._silver_con.execute(sql).df()
 
         if result.empty:
             return empty
@@ -236,29 +126,8 @@ class GoldSignalBuilders:
         Returns:
             One row per (id, snapshot_date) with format staple feature columns.
         """
-        return self._silver_con.execute("""
-            SELECT
-                id,
-                card_name,
-                format,
-                snapshot_date,
-                deck_pct,
-                played,
-                top,
-                AVG(deck_pct) OVER w7  AS deck_pct_7d_avg,
-                AVG(deck_pct) OVER w30 AS deck_pct_30d_avg,
-                deck_pct - LAG(deck_pct, 7)  OVER (PARTITION BY id ORDER BY snapshot_date)
-                    AS deck_pct_change_7d,
-                deck_pct - LAG(deck_pct, 30) OVER (PARTITION BY id ORDER BY snapshot_date)
-                    AS deck_pct_change_30d
-            FROM silver_format_staples_history
-            WINDOW
-                w7  AS (PARTITION BY id ORDER BY snapshot_date
-                         ROWS BETWEEN 6 PRECEDING AND CURRENT ROW),
-                w30 AS (PARTITION BY id ORDER BY snapshot_date
-                         ROWS BETWEEN 29 PRECEDING AND CURRENT ROW)
-            ORDER BY id, snapshot_date
-        """).df()
+        sql = (_SQL_DIR / "format_staples.sql").read_text()
+        return self._silver_con.execute(sql).df()
 
     def build_ban_price_impact(self) -> pd.DataFrame:
         """Build gold_ban_price_impact from silver_meta_history and silver_prices_history.
@@ -274,11 +143,12 @@ class GoldSignalBuilders:
             )
             return empty
 
-        events_df = self._silver_con.execute(f"""
-            WITH {self._TRANSITIONS_CTE}
-            SELECT id AS scryfall_id, snapshot_date AS event_date, format, event_type
-            FROM transitions
-        """).df()
+        sql = (
+            (_SQL_DIR / "ban_price_impact_events.sql")
+            .read_text()
+            .format(transitions_cte=self._TRANSITIONS_CTE)
+        )
+        events_df = self._silver_con.execute(sql).df()
 
         if events_df.empty:
             _row = self._silver_con.execute(
@@ -356,40 +226,5 @@ class GoldSignalBuilders:
             One row per (oracle_id, format) with appearance counts, copy
             averages, sideboard ratio, and last appearance date.
         """
-        return self._silver_con.execute("""
-            WITH base AS (
-                SELECT *,
-                    CAST(tournament_date AS DATE) AS tournament_dt,
-                    (CURRENT_DATE - CAST(tournament_date AS DATE)) AS days_ago
-                FROM silver_tournament_results_history
-                WHERE oracle_id IS NOT NULL
-            )
-            SELECT
-                oracle_id,
-                MIN(scryfall_id) AS scryfall_id,
-                format,
-                COUNT(DISTINCT CASE
-                    WHEN days_ago <= 30 AND NOT is_sideboard THEN tournament_id
-                END) AS top8_appearances_30d,
-                COUNT(DISTINCT CASE
-                    WHEN days_ago <= 90 AND NOT is_sideboard THEN tournament_id
-                END) AS top8_appearances_90d,
-                AVG(CASE
-                    WHEN NOT is_sideboard THEN CAST(copies AS FLOAT)
-                END) AS top8_copies_avg,
-                COUNT(DISTINCT CASE
-                    WHEN days_ago <= 30 AND is_sideboard THEN tournament_id
-                END) AS sideboard_appearances_30d,
-                COUNT(DISTINCT CASE
-                    WHEN days_ago <= 90 AND NOT is_sideboard THEN tournament_id
-                END) * 100.0
-                    / NULLIF(COUNT(DISTINCT CASE
-                        WHEN days_ago <= 90 THEN tournament_id
-                    END), 0) AS main_deck_pct,
-                MAX(CASE
-                    WHEN NOT is_sideboard THEN tournament_date
-                END) AS last_top8_date
-            FROM base
-            GROUP BY oracle_id, format
-            ORDER BY oracle_id, format
-        """).df()
+        sql = (_SQL_DIR / "tournament_signals.sql").read_text()
+        return self._silver_con.execute(sql).df()

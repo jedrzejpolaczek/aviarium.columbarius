@@ -4,10 +4,14 @@ Assembles the analysis-ready training frame by joining all Gold feature tables
 into a single wide table keyed on (uuid, snapshot_date).
 """
 
+from pathlib import Path
+
 import duckdb
 import pandas as pd
 
 from src.data.cards.storage.base.storage import get_tables
+
+_SQL_DIR = Path(__file__).parent / "sql"
 
 
 class GoldMLDatasetBuilder:
@@ -149,46 +153,18 @@ class GoldMLDatasetBuilder:
             else ""
         )
 
-        return self._gold_connection.execute(f"""
-            WITH spine AS (
-                SELECT * FROM gold_price_features
-            ),
-            with_targets AS (
-                SELECT
-                    s.*,
-                    t7.eur  AS target_price_7d,
-                    t30.eur AS target_price_30d
-                FROM spine s
-                LEFT JOIN gold_price_features t7
-                    ON s.uuid = t7.uuid
-                    AND CAST(t7.snapshot_date AS DATE)
-                        = CAST(s.snapshot_date AS DATE) + INTERVAL '7 days'
-                LEFT JOIN gold_price_features t30
-                    ON s.uuid = t30.uuid
-                    AND CAST(t30.snapshot_date AS DATE)
-                        = CAST(s.snapshot_date AS DATE) + INTERVAL '30 days'
-            ),
-            with_change_label AS (
-                SELECT *,
-                    CASE
-                        WHEN target_price_30d IS NULL        THEN NULL
-                        WHEN target_price_30d > eur * 1.2   THEN 'up'
-                        WHEN target_price_30d < eur * 0.8   THEN 'down'
-                        ELSE 'flat'
-                    END AS target_change_30d
-                FROM with_targets
-                WHERE eur IS NOT NULL
+        sql = (
+            (_SQL_DIR / "ml_dataset.sql")
+            .read_text()
+            .format(
+                card_cols=card_cols,
+                card_join=card_join,
+                demand_cols=demand_cols,
+                demand_join=demand_join,
+                tournament_cols=tournament_cols,
+                tournament_join=tournament_join,
+                staples_cols=staples_cols,
+                staples_joins=staples_joins,
             )
-            SELECT
-                wc.*,
-                {card_cols}
-                {demand_cols}
-                {tournament_cols}
-                {staples_cols}
-            FROM with_change_label wc
-            {card_join}
-            {demand_join}
-            {tournament_join}
-            {staples_joins}
-            ORDER BY wc.uuid, wc.snapshot_date
-        """).df()
+        )
+        return self._gold_connection.execute(sql).df()
