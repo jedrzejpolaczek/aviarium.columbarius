@@ -18,7 +18,7 @@ Usage:
 """
 
 import argparse
-import sys
+import sys as sys
 
 import mlflow
 

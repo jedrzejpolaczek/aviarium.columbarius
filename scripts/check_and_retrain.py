@@ -22,7 +22,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import duckdb
+import duckdb as duckdb
 
 from src.logger import get_logger, setup_logging
 from src.monitoring.retraining import retrain, should_retrain

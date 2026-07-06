@@ -464,6 +464,8 @@ Design decisions are documented in `docs/adr/`:
 | [ADR-022](docs/adr/ADR-022-gold-layer-tables.md) | Gold layer table design |
 | [ADR-023](docs/adr/ADR-023-card-recommendation-strategy.md) | Card recommendation and underpriced detection strategy |
 | [ADR-024](docs/adr/ADR-024-duckdb-compute-layer.md) | DuckDB as the compute layer for large Silver history queries |
+| [ADR-025](docs/adr/ADR-025-scalar-bronze-prices.md) | Scalar Bronze price tables with EAV for MTGJson |
+| [ADR-026](docs/adr/ADR-026-isolate-mlflow-tracking-tests.md) | Isolate MLflow tracking tests into a separate pytest process |
 
 ---
 
