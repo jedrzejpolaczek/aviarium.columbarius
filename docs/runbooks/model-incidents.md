@@ -18,8 +18,8 @@ at WARNING, not fatal).
 2. Confirm the run_id exists and has a `model` artefact:
    `uv run python -c "import mlflow; mlflow.set_tracking_uri('sqlite:///mlflow.db'); print(mlflow.get_run('<run_id>'))"`
 3. If the run_id is wrong or the artefact is missing, set `MODEL_RUN_ID` to
-   a known-good run (see Section 3 below for how to find one) and restart
-   the container: `docker compose -f docker/docker-compose.yml up -d --build api`.
+   a known-good run (see Section 2, step 1 for how to list available runs/versions)
+   and restart the container: `docker compose -f docker/docker-compose.yml up -d --build api`.
 
 ## 2. `logs/last_check_status.json` shows `"result": "retrained"` and predictions look wrong afterwards
 
@@ -49,11 +49,22 @@ regressions that only show up on live traffic.
 
 ## 3. `logs/last_check_status.json` shows `"result": "error"`
 
-**Cause:** either `"reason": "gold_db_missing"` (ETL pipeline hasn't run
-yet) or `"reason": "no_snapshot"` (`gold_price_features` is empty).
+**Cause:** one of three reasons in the `"reason"` field:
+- `"gold_db_missing"` — the ETL pipeline hasn't run yet.
+- `"no_snapshot"` — `gold_price_features` is empty.
+- `"retrain_failed"` — a retrain trigger fired, but `retrain()` itself
+  raised an exception (CV, feature build, LightGBM fit, or MLflow logging
+  failure). The status file's `"error"` field holds the exception message.
 
-**Fix:** run `make pipeline`, confirm `data/gold/cards.duckdb` exists and
-`gold_price_features` is populated, then re-run `make monitor`.
+**Fix:**
+- For `gold_db_missing` / `no_snapshot`: run `make pipeline`, confirm
+  `data/gold/cards.duckdb` exists and `gold_price_features` is populated,
+  then re-run `make monitor`.
+- For `retrain_failed`: read the `"error"` field in
+  `logs/last_check_status.json` and the full traceback in the day's
+  `logs/pipeline_*.log` (or console output if run interactively) to
+  diagnose the underlying failure — this is not fixed by re-running the
+  pipeline.
 
 ## Known limitation
 
