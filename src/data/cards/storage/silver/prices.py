@@ -16,7 +16,7 @@ class SilverPriceBuilder:
     """Builds today's silver_prices_history snapshot from Bronze sources."""
 
     # All price columns in the silver schema. Scryfall supplies the first four
-    # (eur, eur_foil, usd, usd_foil); the remaining six come from MTGJson.
+    # (eur, eur_foil, usd, usd_foil); the rest come from MTGJson.
     _PRICE_COLS: list[str] = [
         "eur",
         "eur_foil",
@@ -85,7 +85,7 @@ class SilverPriceBuilder:
 
         MTGJson side:
             Reads today's EAV rows from bronze_mtgjson_prices_history and pivots
-            them to six wide columns via CASE WHEN aggregation. Left-joined to the
+            them to wide columns via CASE WHEN aggregation. Left-joined to the
             Scryfall base on (uuid, snapshot_date).
 
         Returns an empty DataFrame when silver_cards or
@@ -174,7 +174,7 @@ class SilverPriceBuilder:
     ) -> pd.DataFrame:
         """Join today's MTGJson EAV prices onto the Scryfall base DataFrame.
 
-        Pivots EAV rows to six wide columns via CASE WHEN aggregation in SQL,
+        Pivots EAV rows to wide columns via CASE WHEN aggregation in SQL,
         then left-joins to the Scryfall base on (uuid, snapshot_date).
 
         Args:
