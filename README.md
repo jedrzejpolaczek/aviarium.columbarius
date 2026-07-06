@@ -16,12 +16,13 @@
 6. [Configuration](#configuration)
 7. [Usage](#usage)
 8. [Model Training](#model-training)
-9. [API & UI](#api--ui)
-10. [Data Catalog](#data-catalog)
-11. [Testing](#testing)
-13. [Architecture Decision Records](#architecture-decision-records)
-14. [References](#references)
-15. [Monitoring & Scheduled Retraining](#monitoring--scheduled-retraining)
+9. [Results](#results)
+10. [Monitoring & Scheduled Retraining](#monitoring--scheduled-retraining)
+11. [API & UI](#api--ui)
+12. [Data Catalog](#data-catalog)
+13. [Testing](#testing)
+14. [Architecture Decision Records](#architecture-decision-records)
+15. [References](#references)
 
 ---
 
@@ -304,6 +305,24 @@ uv run python -m scripts.train_model --db-path path/to/gold/cards.duckdb
 ```
 
 > **Data requirement:** Walk-forward CV needs at least 50 days of daily snapshots (≥ 3 folds of 30-day train + 7-day validation windows). If fewer snapshots are available, the script skips CV and trains a final model directly.
+
+---
+
+## Results
+
+Exploratory and confirmatory analysis behind the feature set and modelling choices is written up per phase in `notebooks/`:
+
+| Phase | Write-up |
+|---|---|
+| Exploratory data analysis | [notebooks/exploratory_data_analysis/EDA_FINDINGS.md](notebooks/exploratory_data_analysis/EDA_FINDINGS.md) |
+| Confirmatory data analysis | [notebooks/confirmatory_data_analysis/CDA_FINDINGS.md](notebooks/confirmatory_data_analysis/CDA_FINDINGS.md) |
+| Statistical properties (stationarity, seasonality, cointegration) | [notebooks/statistical_properties/STAT_FINDINGS.md](notebooks/statistical_properties/STAT_FINDINGS.md) |
+| Bayesian analysis | [notebooks/bayesian_analysis/BAYESIAN_FINDINGS.md](notebooks/bayesian_analysis/BAYESIAN_FINDINGS.md) |
+| Model preparation (leakage review, validation strategy) | [notebooks/model_preparation/MODEL_PREP_FINDINGS.md](notebooks/model_preparation/MODEL_PREP_FINDINGS.md) |
+
+**Model status:** the LightGBM pipeline trains, logs to MLflow, and serves predictions through the [API](#api--ui) using the tiered pricing strategy from [ADR-018](docs/adr/ADR-018-tier-based-model-selection.md).
+
+> **Known gap:** [`notebooks/ml_models/ML_FINDINGS.md`](notebooks/ml_models/ML_FINDINGS.md) (baseline-vs-LightGBM comparison, SHAP importance) has not been filled in yet, and the most recently logged MLflow runs show suspicious `mae_test = 0.0` metrics that need triage before being quoted anywhere. Treat any specific accuracy number as unverified until that investigation happens — it is tracked as separate follow-up work, not covered by this section.
 
 ---
 
