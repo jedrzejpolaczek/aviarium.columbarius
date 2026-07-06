@@ -256,7 +256,7 @@ Cleaned and merged data. `silver_cards` is the central card reference table (MTG
 
 **Grain:** 1 row per (uuid, snapshot_date)
 **Updated:** append — deduplication on (uuid, snapshot_date); forward-filled for all-NULL price rows
-**Source:** `bronze_scryfall_prices_history` (EUR/USD prices) + `bronze_mtgjson_prices_history` (Cardmarket/TCGPlayer prices); joined to `silver_cards` for UUID resolution
+**Source:** `bronze_scryfall_prices_history` (EUR/USD prices) + `bronze_mtgjson_prices_history` (Cardmarket/TCGPlayer/Card Kingdom/ManaPool prices); joined to `silver_cards` for UUID resolution
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -273,6 +273,12 @@ Cleaned and merged data. `silver_cards` is the central card reference table (MTG
 | tcgplayer_usd | FLOAT? | TCGPlayer retail non-foil USD (from MTGJson) |
 | tcgplayer_usd_foil | FLOAT? | TCGPlayer retail foil USD (from MTGJson) |
 | tcgplayer_buylist_usd | FLOAT? | TCGPlayer buylist USD (from MTGJson; currently 100% NULL) |
+| cardkingdom_usd | FLOAT? | Card Kingdom retail non-foil USD (from MTGJson) |
+| cardkingdom_usd_foil | FLOAT? | Card Kingdom retail foil USD (from MTGJson) |
+| cardkingdom_buylist_usd | FLOAT? | Card Kingdom buylist non-foil USD (from MTGJson) |
+| cardkingdom_buylist_usd_foil | FLOAT? | Card Kingdom buylist foil USD (from MTGJson) |
+| manapool_usd | FLOAT? | ManaPool retail non-foil USD (from MTGJson; no buylist source) |
+| manapool_usd_foil | FLOAT? | ManaPool retail foil USD (from MTGJson; no buylist source) |
 
 ---
 

@@ -28,6 +28,12 @@ class SilverPriceBuilder:
         "tcgplayer_usd",
         "tcgplayer_usd_foil",
         "tcgplayer_buylist_usd",
+        "cardkingdom_usd",
+        "cardkingdom_usd_foil",
+        "cardkingdom_buylist_usd",
+        "cardkingdom_buylist_usd_foil",
+        "manapool_usd",
+        "manapool_usd_foil",
     ]
 
     # Maps each silver column name to its (retailer, tx_type, finish) triple in
@@ -39,6 +45,12 @@ class SilverPriceBuilder:
         "tcgplayer_usd": ("tcgplayer", "retail", "normal"),
         "tcgplayer_usd_foil": ("tcgplayer", "retail", "foil"),
         "tcgplayer_buylist_usd": ("tcgplayer", "buylist", "normal"),
+        "cardkingdom_usd": ("cardkingdom", "retail", "normal"),
+        "cardkingdom_usd_foil": ("cardkingdom", "retail", "foil"),
+        "cardkingdom_buylist_usd": ("cardkingdom", "buylist", "normal"),
+        "cardkingdom_buylist_usd_foil": ("cardkingdom", "buylist", "foil"),
+        "manapool_usd": ("manapool", "retail", "normal"),
+        "manapool_usd_foil": ("manapool", "retail", "foil"),
     }
 
     def __init__(
@@ -112,6 +124,12 @@ class SilverPriceBuilder:
                     "tcgplayer_usd",
                     "tcgplayer_usd_foil",
                     "tcgplayer_buylist_usd",
+                    "cardkingdom_usd",
+                    "cardkingdom_usd_foil",
+                    "cardkingdom_buylist_usd",
+                    "cardkingdom_buylist_usd_foil",
+                    "manapool_usd",
+                    "manapool_usd_foil",
                 ]
             ],
             today,

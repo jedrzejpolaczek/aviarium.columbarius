@@ -498,6 +498,12 @@ def _mtgjson_eav_hist(*uuids_and_dates: tuple[str, str]) -> pd.DataFrame:
         ("tcgplayer", "retail", "normal", 3.50),
         ("tcgplayer", "retail", "foil", 9.00),
         ("tcgplayer", "buylist", "normal", 2.10),
+        ("cardkingdom", "retail", "normal", 12.00),
+        ("cardkingdom", "retail", "foil", 28.00),
+        ("cardkingdom", "buylist", "normal", 6.50),
+        ("cardkingdom", "buylist", "foil", 15.00),
+        ("manapool", "retail", "normal", 11.75),
+        ("manapool", "retail", "foil", 26.50),
     ]
     for uuid, date in uuids_and_dates:
         for retailer, tx_type, finish, price in combos:
@@ -599,6 +605,27 @@ class TestSilverPriceBuilder:
             assert row["cardmarket_buylist_eur"] == pytest.approx(1.80)
             assert row["tcgplayer_usd"] == pytest.approx(3.50)
 
+    def test_new_retailer_prices_are_captured(self, tmp_path):
+        with _make_storage_with_bronze(
+            tmp_path,
+            {
+                "bronze_scryfall_prices_history": _scryfall_hist(("s1", "2026-05-11")),
+                "bronze_mtgjson_prices_history": _mtgjson_eav_hist(
+                    ("u1", "2026-05-11")
+                ),
+            },
+        ) as s:
+            _seed_silver_cards(s, [("u1", "s1")])
+            result = s._prices.build("2026-05-11")
+
+            row = result.iloc[0]
+            assert row["cardkingdom_usd"] == pytest.approx(12.00)
+            assert row["cardkingdom_usd_foil"] == pytest.approx(28.00)
+            assert row["cardkingdom_buylist_usd"] == pytest.approx(6.50)
+            assert row["cardkingdom_buylist_usd_foil"] == pytest.approx(15.00)
+            assert row["manapool_usd"] == pytest.approx(11.75)
+            assert row["manapool_usd_foil"] == pytest.approx(26.50)
+
     def test_happy_path_has_all_expected_columns(self, tmp_path):
         with _make_storage_with_bronze(
             tmp_path,
@@ -621,6 +648,12 @@ class TestSilverPriceBuilder:
                 "tcgplayer_usd",
                 "tcgplayer_usd_foil",
                 "tcgplayer_buylist_usd",
+                "cardkingdom_usd",
+                "cardkingdom_usd_foil",
+                "cardkingdom_buylist_usd",
+                "cardkingdom_buylist_usd_foil",
+                "manapool_usd",
+                "manapool_usd_foil",
             ]
             assert list(result.columns) == expected_columns
 
