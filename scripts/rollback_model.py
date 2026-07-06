@@ -23,6 +23,7 @@ import sys
 import mlflow
 
 from src.logger import get_logger, setup_logging
+from src.ml.training.tracking import setup_experiment
 from src.monitoring.retraining import MODEL_REGISTRY_NAME
 
 logger = get_logger(__name__)
@@ -45,6 +46,7 @@ def rollback(version: str, model_name: str = MODEL_REGISTRY_NAME) -> None:
 
 def main() -> int:
     setup_logging()
+    setup_experiment()
     parser = argparse.ArgumentParser(
         description="Roll back the production model to a previous MLflow Registry version."
     )

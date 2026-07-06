@@ -21,6 +21,7 @@ def test_main_returns_0_on_success(monkeypatch):
     monkeypatch.setattr(
         rollback_model.sys, "argv", ["rollback_model.py", "--version", "3"]
     )
+    monkeypatch.setattr(rollback_model, "setup_experiment", lambda: None)
     fake_client = MagicMock()
     with patch("mlflow.tracking.MlflowClient", return_value=fake_client):
         exit_code = rollback_model.main()
@@ -35,6 +36,7 @@ def test_main_returns_1_on_missing_version(monkeypatch):
     monkeypatch.setattr(
         rollback_model.sys, "argv", ["rollback_model.py", "--version", "999"]
     )
+    monkeypatch.setattr(rollback_model, "setup_experiment", lambda: None)
     fake_client = MagicMock()
     fake_client.set_registered_model_alias.side_effect = (
         mlflow.exceptions.MlflowException("not found")
@@ -43,3 +45,20 @@ def test_main_returns_1_on_missing_version(monkeypatch):
         exit_code = rollback_model.main()
 
     assert exit_code == 1
+
+
+def test_main_passes_model_name_override(monkeypatch):
+    monkeypatch.setattr(
+        rollback_model.sys,
+        "argv",
+        ["rollback_model.py", "--version", "3", "--model-name", "other_model"],
+    )
+    monkeypatch.setattr(rollback_model, "setup_experiment", lambda: None)
+    fake_client = MagicMock()
+    with patch("mlflow.tracking.MlflowClient", return_value=fake_client):
+        exit_code = rollback_model.main()
+
+    assert exit_code == 0
+    fake_client.set_registered_model_alias.assert_called_once_with(
+        "other_model", "production", "3"
+    )
