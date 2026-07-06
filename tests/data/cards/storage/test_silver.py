@@ -1511,6 +1511,27 @@ class TestBuildSilverCardsSql:
             assert row[0] == "uuid-a"
             assert row[1] == "oracle-a"
 
+    def test_joins_mtgjson_row_with_whitespace_in_scryfall_id(self, tmp_path):
+        # identifiers.scryfall_id can come from upstream MTGJson data with incidental
+        # whitespace; the join to Scryfall must still succeed (both sides trimmed).
+        whitespace_mtgjson = {
+            **_MTGJSON_ROW,
+            "uuid": "uuid-whitespace",
+            "identifiers": '{"scryfall_id": "  scryfall-a  "}',
+        }
+        scryfall_with_oracle = {**_SCRYFALL_ROW, "oracle_id": "oracle-a"}
+        with _make_storage_with_cards_bronze(
+            tmp_path,
+            [whitespace_mtgjson],
+            [scryfall_with_oracle],
+        ) as s:
+            s._build_silver_cards_sql()
+            row = s._silver_con.execute(
+                "SELECT oracle_id FROM silver_cards WHERE uuid = 'uuid-whitespace'"
+            ).fetchone()
+            assert row is not None
+            assert row[0] is not None, "join failed -- oracle_id is NULL despite a matching Scryfall row"
+
     def test_scryfall_only_row_has_null_uuid(self, tmp_path):
         scryfall_only = {**_SCRYFALL_ROW, "id": "scryfall-only", "lang": "ja"}
         with _make_storage_with_cards_bronze(

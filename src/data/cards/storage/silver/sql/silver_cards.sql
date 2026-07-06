@@ -19,7 +19,7 @@ mtgjson_filtered AS (
 mtgjson AS (
     SELECT
         TRIM(uuid)                                             AS uuid,
-        json_extract_string(identifiers, '$.scryfall_id')       AS scryfall_id,
+        TRIM(json_extract_string(identifiers, '$.scryfall_id')) AS scryfall_id,
         TRIM(name)                                             AS name,
         COALESCE(TRIM(ascii_name), TRIM(name))                 AS ascii_name,
         UPPER(TRIM(set_code))                                  AS set_code,
