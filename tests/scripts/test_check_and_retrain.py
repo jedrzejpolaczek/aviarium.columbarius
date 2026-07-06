@@ -66,3 +66,30 @@ def test_main_retrains_when_triggered(tmp_path, monkeypatch):
     assert status["result"] == "retrained"
     assert status["reason"] == "mape_threshold"
     assert status["run_id"] == "abc123"
+
+
+def test_main_writes_error_status_when_retrain_raises(tmp_path, monkeypatch):
+    db_path = tmp_path / "cards.duckdb"
+    db_path.touch()
+    monkeypatch.setattr(check_and_retrain, "GOLD_DB_PATH", str(db_path))
+    monkeypatch.setattr(check_and_retrain, "STATUS_PATH", tmp_path / "status.json")
+
+    fake_conn = MagicMock()
+    fake_conn.execute.return_value.fetchone.return_value = ("2026-07-01",)
+    monkeypatch.setattr(check_and_retrain.duckdb, "connect", lambda *a, **k: fake_conn)
+    monkeypatch.setattr(
+        check_and_retrain, "should_retrain", lambda conn: (True, "mape_threshold")
+    )
+
+    def _raise(conn, snapshot_date):
+        raise RuntimeError("mlflow boom")
+
+    monkeypatch.setattr(check_and_retrain, "retrain", _raise)
+
+    exit_code = check_and_retrain.main()
+
+    assert exit_code == 1
+    status = json.loads((tmp_path / "status.json").read_text())
+    assert status["result"] == "error"
+    assert status["reason"] == "retrain_failed"
+    assert "mlflow boom" in status["error"]

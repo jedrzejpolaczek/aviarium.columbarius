@@ -89,7 +89,20 @@ def main() -> int:
             reason,
             snapshot_date,
         )
-        run_id = retrain(conn, snapshot_date)
+        try:
+            run_id = retrain(conn, snapshot_date)
+        except Exception as exc:
+            logger.error("Retrain failed: %s", exc)
+            _write_status(
+                {
+                    "checked_at": datetime.now(timezone.utc).isoformat(),
+                    "result": "error",
+                    "reason": "retrain_failed",
+                    "error": str(exc),
+                }
+            )
+            return 1
+
         logger.info("Retrain complete. New run_id: %s", run_id)
         _write_status(
             {
