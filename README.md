@@ -322,7 +322,7 @@ Exploratory and confirmatory analysis behind the feature set and modelling choic
 
 **Model status:** the LightGBM pipeline trains, logs to MLflow, and serves predictions through the [API](#api--ui) using the tiered pricing strategy from [ADR-018](docs/adr/ADR-018-tier-based-model-selection.md).
 
-> **Known gap:** [`notebooks/ml_models/ML_FINDINGS.md`](notebooks/ml_models/ML_FINDINGS.md) (baseline-vs-LightGBM comparison, SHAP importance) has not been filled in yet, and the most recently logged MLflow runs show suspicious `mae_test = 0.0` metrics that need triage before being quoted anywhere. Treat any specific accuracy number as unverified until that investigation happens — it is tracked as separate follow-up work, not covered by this section.
+> **Known gap:** [`notebooks/ml_models/ML_FINDINGS.md`](notebooks/ml_models/ML_FINDINGS.md) (baseline-vs-LightGBM comparison, SHAP importance) has not been filled in yet, and the most recently logged MLflow runs show suspicious `mae_test = 0.0` metrics that need triage before being quoted anywhere. Treat any specific accuracy number as unverified until that investigation happens — this is flagged here for follow-up investigation, not covered by this section.
 
 ---
 
