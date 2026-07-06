@@ -19,8 +19,9 @@ type-check:
 	uv run mypy
 
 test:
-	uv run pytest --ignore=tests/ml/training/test_tracking.py
-	uv run pytest tests/ml/training/test_tracking.py
+	uv run pytest --ignore=tests/ml/training/test_tracking.py; s1=$$?; \
+	uv run pytest tests/ml/training/test_tracking.py; s2=$$?; \
+	[ $$s1 -eq 0 ] && [ $$s2 -eq 0 ]
 
 coverage:
 	uv run pytest --cov=src --cov=app --cov-report=term-missing

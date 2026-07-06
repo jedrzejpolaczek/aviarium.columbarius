@@ -14,9 +14,20 @@ echo ">>> [pre-push] mypy..."
 uv run mypy .
 
 echo ">>> [pre-push] pytest (main suite)..."
+set +e
 uv run pytest --ignore=tests/ml/training/test_tracking.py
+s1=$?
+set -e
 
 echo ">>> [pre-push] pytest (mlflow tracking, isolated process)..."
+set +e
 uv run pytest tests/ml/training/test_tracking.py
+s2=$?
+set -e
+
+if [ $s1 -ne 0 ] || [ $s2 -ne 0 ]; then
+  echo ">>> [pre-push] pytest FAILED (main suite exit=$s1, mlflow suite exit=$s2)"
+  exit 1
+fi
 
 echo ">>> [pre-push] All checks passed."

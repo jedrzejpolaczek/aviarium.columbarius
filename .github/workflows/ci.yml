@@ -74,4 +74,5 @@ jobs:
         run: uv run pytest --ignore=tests/ml/training/test_tracking.py
 
       - name: pytest (mlflow tracking, isolated process)
+        if: always()
         run: uv run pytest tests/ml/training/test_tracking.py

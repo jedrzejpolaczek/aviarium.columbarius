@@ -339,9 +339,14 @@ Full column schemas for all 22 DuckDB tables (7 Bronze · 6 Silver · 9 Gold), d
 
 ## Testing
 
+Tests are split into two invocations — see [ADR-026](docs/adr/ADR-026-isolate-mlflow-tracking-tests.md) for why.
+
 ```bash
-uv run pytest
+uv run pytest --ignore=tests/ml/training/test_tracking.py
+uv run pytest tests/ml/training/test_tracking.py
 ```
+
+Or simply `make test`, which runs both.
 
 Tests are in `tests/` and mirror the `src/` layout. No network access or real files are required — I/O is covered with `tmp_path` and `unittest.mock`.
 
