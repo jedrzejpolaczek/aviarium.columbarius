@@ -16,12 +16,12 @@
 6. [Configuration](#configuration)
 7. [Usage](#usage)
 8. [Model Training](#model-training)
-15. [Monitoring & Scheduled Retraining](#monitoring--scheduled-retraining)
 9. [API & UI](#api--ui)
 10. [Data Catalog](#data-catalog)
 11. [Testing](#testing)
 13. [Architecture Decision Records](#architecture-decision-records)
 14. [References](#references)
+15. [Monitoring & Scheduled Retraining](#monitoring--scheduled-retraining)
 
 ---
 
@@ -180,6 +180,7 @@ make install-hooks
 | `make install-hooks` | Register git hooks from `scripts/` |
 | `make pipeline` | Run the daily ETL pipeline |
 | `make train` | Train the LightGBM model and log to MLflow |
+| `make monitor` | Run the drift/MAPE check and conditionally retrain |
 | `make lint` | Run `ruff check` |
 | `make format` | Run `ruff format` |
 | `make type-check` | Run `mypy` |
@@ -308,7 +309,7 @@ uv run python -m scripts.train_model --db-path path/to/gold/cards.duckdb
 
 ## Monitoring & Scheduled Retraining
 
-`scripts/check_and_retrain.py` checks for a ban/unban event or a 3-day MAPE alert (`src/monitoring/retraining.should_retrain`) and only retrains when one fires. Run it once a day, after the ETL pipeline:
+`scripts/check_and_retrain.py` checks for a ban/unban event or a 3-day MAPE alert (see `src/monitoring/retraining.py` (`should_retrain`)) and only retrains when one fires. Run it once a day, after the ETL pipeline:
 
 ```bash
 make pipeline
@@ -324,8 +325,10 @@ make monitor
 **Windows (Task Scheduler)** — create a daily trigger running:
 
 ```powershell
-uv run python -m scripts.run_pipeline; uv run python -m scripts.check_and_retrain
+uv run python -m scripts.run_pipeline; if ($?) { uv run python -m scripts.check_and_retrain }
 ```
+
+(Set the task's "Start in (optional)" field to the project root — relative paths like `logs/` and `data/gold/cards.duckdb` won't resolve otherwise.)
 
 Every run writes `logs/last_check_status.json` with one of `no_retrain` / `retrained` / `error`, so the outcome can be checked without reading log files. See [docs/runbooks/model-incidents.md](docs/runbooks/model-incidents.md) for what to do with each result.
 
