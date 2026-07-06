@@ -1563,7 +1563,9 @@ class TestBuildSilverCardsSql:
                 "SELECT oracle_id FROM silver_cards WHERE uuid = 'uuid-whitespace'"
             ).fetchone()
             assert row is not None
-            assert row[0] is not None, "join failed -- oracle_id is NULL despite a matching Scryfall row"
+            assert row[0] is not None, (
+                "join failed -- oracle_id is NULL despite a matching Scryfall row"
+            )
 
     def test_scryfall_only_row_has_null_uuid(self, tmp_path):
         scryfall_only = {**_SCRYFALL_ROW, "id": "scryfall-only", "lang": "ja"}

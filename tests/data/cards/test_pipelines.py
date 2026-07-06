@@ -249,7 +249,9 @@ class TestBronzeConfigDownloadFlags:
         # actually re-download fresh source data every run -- if "flag" is false,
         # the pipeline silently re-ingests the same static local JSON file forever,
         # producing byte-identical bronze/silver/gold data on every "daily" run.
-        config_path = Path(__file__).resolve().parents[3] / "configs" / "bronze_config.json"
+        config_path = (
+            Path(__file__).resolve().parents[3] / "configs" / "bronze_config.json"
+        )
         config = json.loads(config_path.read_text())
         for source in config["sources"]:
             assert source["flag"] is True, (
