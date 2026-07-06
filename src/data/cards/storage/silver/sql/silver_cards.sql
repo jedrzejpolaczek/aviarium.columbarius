@@ -3,10 +3,16 @@ WITH
 
 -- ── MTGJson: filter rows ─────────────────────────────────────────────────────
 mtgjson_filtered AS (
-    SELECT * FROM _bronze.bronze_mtgjson_cards
-    WHERE COALESCE(is_online_only::BOOLEAN, false) = false
-      AND COALESCE(is_funny::BOOLEAN,       false) = false
-      AND COALESCE(is_oversized::BOOLEAN,   false) = false
+    SELECT m.*
+    FROM _bronze.bronze_mtgjson_cards m
+    LEFT JOIN (
+        SELECT id, LOWER(TRIM(set_type)) AS set_type
+        FROM _bronze.bronze_scryfall_cards
+    ) sc ON TRIM(json_extract_string(m.identifiers, '$.scryfall_id')) = TRIM(sc.id)
+    WHERE COALESCE(m.is_online_only::BOOLEAN, false) = false
+      AND COALESCE(m.is_funny::BOOLEAN,       false) = false
+      AND COALESCE(m.is_oversized::BOOLEAN,   false) = false
+      AND COALESCE(sc.set_type, '') NOT IN ('funny', 'memorabilia')
 ),
 
 -- ── MTGJson: clean all columns ───────────────────────────────────────────────

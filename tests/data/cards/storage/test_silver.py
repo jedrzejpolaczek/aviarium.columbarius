@@ -1456,6 +1456,48 @@ class TestBuildSilverCardsSql:
             assert "scryfall-funny" not in ids
             assert "scryfall-memorabilia" not in ids
 
+    def test_excludes_mtgjson_rows_whose_scryfall_counterpart_is_funny_or_memorabilia(
+        self, tmp_path
+    ):
+        # MTGJson's own is_funny flag is False/unset here, but the matching Scryfall
+        # printing (joined via scryfall_id) is funny/memorabilia -- the MTGJson row
+        # must still be excluded. Previously it leaked into silver_cards with
+        # oracle_id=NULL because mtgjson_filtered only checked MTGJson's own flag.
+        memorabilia_mtgjson = {
+            **_MTGJSON_ROW,
+            "uuid": "uuid-memorabilia",
+            "identifiers": '{"scryfall_id": "scryfall-memorabilia-2"}',
+        }
+        memorabilia_scryfall = {
+            **_SCRYFALL_ROW,
+            "id": "scryfall-memorabilia-2",
+            "set_type": "memorabilia",
+        }
+        funny_mtgjson = {
+            **_MTGJSON_ROW,
+            "uuid": "uuid-funny-mismatch",
+            "identifiers": '{"scryfall_id": "scryfall-funny-2"}',
+        }
+        funny_scryfall = {
+            **_SCRYFALL_ROW,
+            "id": "scryfall-funny-2",
+            "set_type": "funny",
+        }
+        with _make_storage_with_cards_bronze(
+            tmp_path,
+            [_MTGJSON_ROW, memorabilia_mtgjson, funny_mtgjson],
+            [_SCRYFALL_ROW, memorabilia_scryfall, funny_scryfall],
+        ) as s:
+            s._build_silver_cards_sql()
+            uuids = {
+                r[0]
+                for r in s._silver_con.execute(
+                    "SELECT uuid FROM silver_cards WHERE uuid IS NOT NULL"
+                ).fetchall()
+            }
+            assert "uuid-memorabilia" not in uuids
+            assert "uuid-funny-mismatch" not in uuids
+
     def test_joined_row_has_uuid_and_oracle_id(self, tmp_path):
         scryfall_with_oracle = {**_SCRYFALL_ROW, "oracle_id": "oracle-a"}
         with _make_storage_with_cards_bronze(
