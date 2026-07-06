@@ -16,6 +16,7 @@
 6. [Configuration](#configuration)
 7. [Usage](#usage)
 8. [Model Training](#model-training)
+15. [Monitoring & Scheduled Retraining](#monitoring--scheduled-retraining)
 9. [API & UI](#api--ui)
 10. [Data Catalog](#data-catalog)
 11. [Testing](#testing)
@@ -302,6 +303,31 @@ uv run python -m scripts.train_model --db-path path/to/gold/cards.duckdb
 ```
 
 > **Data requirement:** Walk-forward CV needs at least 50 days of daily snapshots (≥ 3 folds of 30-day train + 7-day validation windows). If fewer snapshots are available, the script skips CV and trains a final model directly.
+
+---
+
+## Monitoring & Scheduled Retraining
+
+`scripts/check_and_retrain.py` checks for a ban/unban event or a 3-day MAPE alert (`src/monitoring/retraining.should_retrain`) and only retrains when one fires. Run it once a day, after the ETL pipeline:
+
+```bash
+make pipeline
+make monitor
+```
+
+**Linux/macOS (cron)** — run daily at 07:00, after the pipeline:
+
+```cron
+0 7 * * * cd /path/to/aviarium.columbarius && make pipeline && make monitor >> logs/cron.log 2>&1
+```
+
+**Windows (Task Scheduler)** — create a daily trigger running:
+
+```powershell
+uv run python -m scripts.run_pipeline; uv run python -m scripts.check_and_retrain
+```
+
+Every run writes `logs/last_check_status.json` with one of `no_retrain` / `retrained` / `error`, so the outcome can be checked without reading log files. See [docs/runbooks/model-incidents.md](docs/runbooks/model-incidents.md) for what to do with each result.
 
 ---
 
