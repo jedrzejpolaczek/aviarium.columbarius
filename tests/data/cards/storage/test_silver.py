@@ -1172,6 +1172,34 @@ class TestOracleIdConflictCheck:
         assert len(warning_records) == 1
         assert "Fire // Ice" in warning_records[0].message
 
+    def test_warning_reports_true_count_beyond_five_examples(self, tmp_path, caplog):
+        # 7 conflicting names exist; the old LIMIT 5 in the query truncated the
+        # list before Python counted it, so the log always said "5" regardless
+        # of the true total.
+        with _make_storage(tmp_path) as s:
+            rows = []
+            for i in range(7):
+                rows.append(
+                    {"scryfall_id": f"s{i}a", "name": f"Card{i}", "oracle_id": f"o{i}a"}
+                )
+                rows.append(
+                    {"scryfall_id": f"s{i}b", "name": f"Card{i}", "oracle_id": f"o{i}b"}
+                )
+            self._seed_silver_cards_with_oracle(s, rows)
+            with caplog.at_level(
+                logging.WARNING,
+                logger="src.data.cards.storage.silver.storage",
+            ):
+                s._check_oracle_id_conflicts()
+
+        warning_records = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "Oracle ID conflict" in r.message
+        ]
+        assert len(warning_records) == 1
+        assert "7 name(s)" in warning_records[0].message
+
 
 # ---------------------------------------------------------------------------
 # SilverWriter (silver/persistence.py)

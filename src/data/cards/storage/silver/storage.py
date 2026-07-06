@@ -300,14 +300,13 @@ class SilverStorage(TransformStorage):
             WHERE oracle_id IS NOT NULL AND name IS NOT NULL
             GROUP BY name
             HAVING COUNT(DISTINCT oracle_id) > 1
-            LIMIT 5
         """).fetchall()
         if conflicts:
             logger.warning(
                 "Oracle ID conflict check: %d name(s) map to multiple oracle_ids"
                 " — split card handling may have regressed. Examples: %s",
                 len(conflicts),
-                [r[0] for r in conflicts],
+                [r[0] for r in conflicts[:5]],
             )
         else:
             logger.info("Oracle ID conflict check: 0 conflicts")
