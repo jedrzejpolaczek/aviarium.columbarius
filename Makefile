@@ -1,4 +1,4 @@
-.PHONY: install install-hooks lint format format-check type-check test coverage check pipeline train
+.PHONY: install install-hooks lint format format-check type-check test coverage check pipeline train monitor
 
 install:
 	uv sync --all-groups
@@ -33,3 +33,6 @@ pipeline:
 
 train:
 	uv run python -m scripts.train_model
+
+monitor:
+	uv run python -m scripts.check_and_retrain
