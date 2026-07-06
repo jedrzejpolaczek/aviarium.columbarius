@@ -1,18 +1,24 @@
 CREATE OR REPLACE TABLE silver_cards AS
 WITH
 
+-- ── Scryfall ids belonging to funny/memorabilia sets (joke/playtest/promo cards that
+-- intentionally reuse real card names) -- computed once, referenced by both filters below.
+excluded_scryfall_ids AS (
+    SELECT id
+    FROM _bronze.bronze_scryfall_cards
+    WHERE COALESCE(LOWER(TRIM(set_type)), '') IN ('funny', 'memorabilia')
+),
+
 -- ── MTGJson: filter rows ─────────────────────────────────────────────────────
 mtgjson_filtered AS (
     SELECT m.*
     FROM _bronze.bronze_mtgjson_cards m
-    LEFT JOIN (
-        SELECT id, LOWER(TRIM(set_type)) AS set_type
-        FROM _bronze.bronze_scryfall_cards
-    ) sc ON TRIM(json_extract_string(m.identifiers, '$.scryfall_id')) = TRIM(sc.id)
     WHERE COALESCE(m.is_online_only::BOOLEAN, false) = false
       AND COALESCE(m.is_funny::BOOLEAN,       false) = false
       AND COALESCE(m.is_oversized::BOOLEAN,   false) = false
-      AND COALESCE(sc.set_type, '') NOT IN ('funny', 'memorabilia')
+      AND TRIM(json_extract_string(m.identifiers, '$.scryfall_id')) NOT IN (
+          SELECT id FROM excluded_scryfall_ids
+      )
 ),
 
 -- ── MTGJson: clean all columns ───────────────────────────────────────────────
@@ -105,7 +111,7 @@ scryfall_filtered AS (
     WHERE COALESCE(digital::BOOLEAN,   false) = false
       AND COALESCE(oversized::BOOLEAN, false) = false
       AND COALESCE(layout, '') NOT IN ('token', 'double_faced_token', 'emblem')
-      AND COALESCE(LOWER(TRIM(set_type)), '') NOT IN ('funny', 'memorabilia')
+      AND id NOT IN (SELECT id FROM excluded_scryfall_ids)
 ),
 
 -- ── Scryfall: clean all columns ──────────────────────────────────────────────
