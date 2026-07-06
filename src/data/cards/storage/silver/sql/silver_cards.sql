@@ -99,6 +99,7 @@ scryfall_filtered AS (
     WHERE COALESCE(digital::BOOLEAN,   false) = false
       AND COALESCE(oversized::BOOLEAN, false) = false
       AND COALESCE(layout, '') NOT IN ('token', 'double_faced_token', 'emblem')
+      AND COALESCE(LOWER(TRIM(set_type)), '') NOT IN ('funny', 'memorabilia')
 ),
 
 -- ── Scryfall: clean all columns ──────────────────────────────────────────────

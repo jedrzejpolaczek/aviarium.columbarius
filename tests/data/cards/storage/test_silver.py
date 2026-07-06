@@ -1430,6 +1430,32 @@ class TestBuildSilverCardsSql:
             }
             assert "scryfall-token" not in ids
 
+    def test_filters_out_funny_and_memorabilia_set_type_scryfall_rows(self, tmp_path):
+        funny_scryfall = {
+            **_SCRYFALL_ROW,
+            "id": "scryfall-funny",
+            "set_type": "funny",
+        }
+        memorabilia_scryfall = {
+            **_SCRYFALL_ROW,
+            "id": "scryfall-memorabilia",
+            "set_type": "memorabilia",
+        }
+        with _make_storage_with_cards_bronze(
+            tmp_path,
+            [_MTGJSON_ROW],
+            [_SCRYFALL_ROW, funny_scryfall, memorabilia_scryfall],
+        ) as s:
+            s._build_silver_cards_sql()
+            ids = {
+                r[0]
+                for r in s._silver_con.execute(
+                    "SELECT scryfall_id FROM silver_cards"
+                ).fetchall()
+            }
+            assert "scryfall-funny" not in ids
+            assert "scryfall-memorabilia" not in ids
+
     def test_joined_row_has_uuid_and_oracle_id(self, tmp_path):
         scryfall_with_oracle = {**_SCRYFALL_ROW, "oracle_id": "oracle-a"}
         with _make_storage_with_cards_bronze(
