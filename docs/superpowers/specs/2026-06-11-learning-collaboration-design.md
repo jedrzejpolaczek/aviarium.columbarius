@@ -61,7 +61,7 @@ Każda warstwa projektu przebiega w 4 krokach:
 - [x] Etap 2: Silver — ukończony 2026-06-16
 - [x] Etap 3: Gold — ukończony 2026-06-20
 - [x] Etap 4: ML Features — ukończony 2026-07-02
-- [ ] Etap 5: Modele
+- [x] Etap 5: Modele
 - [ ] Etap 6: Trening
 - [ ] Etap 7: SHAP
 - [ ] Etap 8: Rekomendacje

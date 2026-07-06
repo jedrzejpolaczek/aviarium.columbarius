@@ -20,7 +20,7 @@
 
 ### Zadanie 1: Koncepcja — po co baseline i czym jest LightGBM?
 
-- [ ] **Krok 1: Odpowiedz na pytania Claude**
+- [X] **Krok 1: Odpowiedz na pytania Claude**
 
   Claude zadaje pytania jedno po jednym. Ty odpowiadasz.
 
@@ -35,7 +35,7 @@
 
 **Pliki:** `src/ml/models/baseline.py`
 
-- [ ] **Krok 1: Przeczytaj plik**
+- [X] **Krok 1: Przeczytaj plik**
 
   Zwróć uwagę na:
   - `NaiveForecast` — co zwraca `predict`? Dlaczego `fit` nic nie robi?
@@ -43,9 +43,9 @@
   - `MovingAverageForecast` — skąd bierze `rolling_mean_7d`?
   - `AR1Forecast` — jedyny który używa `LinearRegression` — dlaczego?
 
-- [ ] **Krok 2: Odpowiedz na pytania Claude**
+- [X] **Krok 2: Odpowiedz na pytania Claude**
 
-- [ ] **Krok 3: Sprawdź zrozumienie**
+- [X] **Krok 3: Sprawdź zrozumienie**
 
   - Jeśli LightGBM przegrywa z `NaiveForecast` — co to znaczy o modelu?
   - Jeśli LightGBM przegrywa z `MeanForecast` — co to znaczy?
@@ -57,7 +57,7 @@
 
 **Pliki:** `src/ml/models/lightgbm_model.py`
 
-- [ ] **Krok 1: Przeczytaj plik**
+- [X] **Krok 1: Przeczytaj plik**
 
   Zwróć uwagę na:
   - `LightGBMParams` — co to `num_leaves`, `learning_rate`, `subsample`?
@@ -65,9 +65,9 @@
   - `early_stopping(stopping_rounds=50)` — co zatrzymuje trening?
   - `best_iteration` w `predict` — dlaczego nie ostatnia iteracja?
 
-- [ ] **Krok 2: Odpowiedz na pytania Claude**
+- [X] **Krok 2: Odpowiedz na pytania Claude**
 
-- [ ] **Krok 3: Sprawdź zrozumienie**
+- [X] **Krok 3: Sprawdź zrozumienie**
 
   - Co to `lgb.Dataset` i czym różni się od pandas DataFrame?
   - Dlaczego `fit` ma osobny `X_val` / `y_val` zamiast robić split wewnętrznie?
@@ -79,7 +79,7 @@
 
 **Pliki:** `src/ml/models/tiered.py`
 
-- [ ] **Krok 1: Przeczytaj plik**
+- [X] **Krok 1: Przeczytaj plik**
 
   Zwróć uwagę na:
   - `assign_tier` — jakie są granice tierów i dlaczego akurat <100 / 100-1000 / >1000?
@@ -87,9 +87,9 @@
   - `MIN_TIER2_ROWS = 50` — co się dzieje gdy Tier 2 ma za mało danych?
   - Tier 3 — dlaczego brak modelu ML? Co zwraca `predict` dla Tier 3?
 
-- [ ] **Krok 2: Odpowiedz na pytania Claude**
+- [X] **Krok 2: Odpowiedz na pytania Claude**
 
-- [ ] **Krok 3: Sprawdź zrozumienie**
+- [X] **Krok 3: Sprawdź zrozumienie**
 
   - Dlaczego jeden globalny LightGBM na wszystkich kartach byłby gorszy?
   - Co to `setattr(self, attr, model)` i dlaczego zamiast `if tier == 1: ...`?
@@ -101,7 +101,7 @@
 
 **Stwórz:** `_ADDONS/_TRAINING/training_models.py`
 
-- [ ] **Krok 1: Przeczytaj spec i zaimplementuj**
+- [X] **Krok 1: Przeczytaj spec i zaimplementuj**
 
   ```
   Napisz trzy klasy:
@@ -126,7 +126,7 @@
   Nie używaj LightGBM. Tylko numpy, pandas.
   ```
 
-- [ ] **Krok 2: Przetestuj ręcznie**
+- [X] **Krok 2: Przetestuj ręcznie**
 
   ```python
   import pandas as pd
@@ -147,7 +147,7 @@
   print(preds)
   ```
 
-- [ ] **Krok 3: Porównaj z oryginałem**
+- [X] **Krok 3: Porównaj z oryginałem**
 
   - Co `TieredRouter` robi co `MiniTieredPredict` pomija? (LightGBM, walidacja)
   - Dlaczego oryginał ma `MIN_TIER2_ROWS = 50`? Co by się stało bez tego guardu?

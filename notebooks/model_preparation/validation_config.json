@@ -1,7 +1,8 @@
 {
-  "status": "DEFERRED",
-  "reason": "Only 5 snapshots; need \u226551",
-  "min_test_days": 14,
+  "status": "ACTIVE",
+  "test_start": "2026-06-14",
+  "test_end": "2026-07-05",
+  "n_cv_folds": 0,
   "min_train_days": 30,
   "val_window": 7,
   "step": 7

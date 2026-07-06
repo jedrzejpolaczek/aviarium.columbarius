@@ -32,6 +32,7 @@ def assign_tier(eur: float) -> int:
     """Map a card's current EUR price to its pricing tier.
 
     NaN and None are treated as Tier 1 (safe default — assume cheap card).
+    Tier boundires are described in module docstring.
 
     Args:
         eur: Current EUR price of the card.

@@ -150,17 +150,20 @@ class MovingAverageForecast:
 
 class AR1Forecast:
     """
-    Baseline: first-order autoregression — predicts log_return_7d from
-    the previous day's price change (lag_1d_return).
+    Baseline: first-order autoregression (AR(1)) — predicts log_return_7d from
+    the previous day's price change (lag_1d_return). AR(1) means the model uses
+    exactly one lagged value of the series as its sole predictor.
 
     lag_1d_return: (price_today - price_yesterday) / price_yesterday — the 1-day
-                   momentum feature from lag.py. Captures whether the card gained
-                   or lost value yesterday.
+                momentum feature from lag.py. Captures whether the card gained
+                or lost value yesterday.
 
-    Rationale: if Ljung-Box test (statistical_properties/02 notebook) shows
-    significant autocorrelation at lag=1, yesterday's move should predict the
-    next 7-day move and AR1 will beat NaiveForecast. If not — the autocorrelation
-    does not carry signal at a 7-day horizon and AR1 will lose to Naive.
+    Rationale: the Ljung-Box test (statistical_properties/02 notebook) checks
+    whether lag-1 autocorrelation is statistically significant, i.e. whether
+    yesterday's price move is non-randomly correlated with future moves. If
+    significant, yesterday's move should predict the next 7-day move and AR1
+    will beat NaiveForecast. If not — the autocorrelation does not carry signal
+    at a 7-day horizon and AR1 will lose to Naive.
     """
 
     def __init__(self) -> None:

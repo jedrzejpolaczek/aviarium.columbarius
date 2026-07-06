@@ -1,68 +1,19 @@
 {
   "tier1": [
-    "rarity_ord",
-    "set_type",
-    "edhrec_rank",
     "edhrec_saltiness",
     "foil_premium",
+    "format_count",
     "is_full_art",
-    "is_reserved",
-    "in_tournament",
-    "top8_appearances_30d",
     "price_rank_global",
     "print_count",
-    "variation_count",
-    "mana_value",
-    "color_identity_count",
-    "primary_type",
-    "deck_pct_vintage",
-    "deck_pct_commander"
+    "variation_count"
   ],
-  "tier2": "Same as tier1 + rarity interaction terms. Train separate model instance (STAT S-03: 4.6x variance ratio).",
   "tier3": [
-    "rarity_ord",
-    "set_type",
-    "edhrec_rank",
     "foil_premium",
+    "format_count",
     "is_full_art",
-    "is_reserved",
     "price_rank_global",
     "print_count",
-    "variation_count",
-    "mana_value",
-    "deck_pct_vintage"
-  ],
-  "transforms": {
-    "print_count": "log1p",
-    "set_type": "one_hot_merge_rare",
-    "rarity_ord": "ordinal_0123",
-    "top8_appearances_30d": "fill_0",
-    "edhrec_saltiness": "fill_0",
-    "foil_premium": "fill_1.0",
-    "is_full_art": "fill_false",
-    "is_reserved": "fill_false",
-    "in_tournament": "fill_false",
-    "edhrec_rank": "log_then_sentinel_max_plus_1",
-    "mana_value": "cap_at_16_then_median_impute_per_rarity",
-    "color_identity_count": "bucket_0_1_2_3plus",
-    "primary_type": "one_hot",
-    "deck_pct_vintage": "fill_0",
-    "deck_pct_commander": "fill_0"
-  },
-  "imputation_notes": {
-    "set_type": "Merge set types with <500 cards into 'other' (spellbook=24, arsenal=17). One-hot encode remaining categories.",
-    "rarity_ord": "common=0, uncommon=1, rare=2, mythic=3, special=2",
-    "top8_appearances_30d": "0 for non-tournament cards (sparse: 0.5% coverage)",
-    "foil_premium": "1.0 means no foil premium data; keep rows where foil_premium < 1.0 (real signal, pre-8th Edition)",
-    "edhrec_rank": "NULL (~6% of cards) -> sentinel MAX+1 (31,059); preserves monotonic ordering. Apply log() after sentinel fill.",
-    "mana_value": "NULL for Scryfall-only cards (no MTGJson data); impute median within rarity. Cap at 16 (EDA D-09).",
-    "color_identity_count": "Bucket as 0 (colorless) / 1 (mono) / 2 (two-color) / 3+ (multi). Non-monotone gradient: colorless highest (Power Nine effect).",
-    "primary_type": "One-hot encode: Creature, Instant, Sorcery, Artifact, Enchantment, Land, Planeswalker, Kindred.",
-    "deck_pct_vintage": "0 for non-vintage-tracked cards (sparse: ~0.5% coverage). MTGGoldfish selection bias: tracked cards are pre-selected expensive cards — non-null values correlate with price by construction. Signal direction: r=+0.491 (4th strongest individual signal in EDA). Leakage: SAFE — snapshotted daily, joined date-exact (P-22).",
-    "deck_pct_commander": "0 for non-commander-tracked cards. Inverted signal: r=-0.232 after rarity control (higher commander play does not predict higher price at the oracle level). Tier 1 only — direction is ambiguous for Tier 3 expensive cards."
-  },
-  "pending_resolution": {
-    "price_rank_global": "Highest MI (5.33) but near-circular with price level target. Safe per MP-01 (cross-sectional rank, no future data). Re-evaluate MI against log-return target at >=8 snapshots (P-17).",
-    "is_price_spike": "Leakage confirmed SAFE (backward-only LAG(1)). Currently 0 for all rows due to UUID linkage bug — add to feature sets once UUID bug is fixed (EDA blocker)."
-  }
+    "variation_count"
+  ]
 }
