@@ -1,6 +1,6 @@
 [project]
 name = "columbarius"
-version = "0.1.0"
+version = "0.1.1"
 description = "Magic: The Gathering card price prediction using a Bronze/Silver/Gold medallion architecture and LightGBM."
 readme = "README.md"
 requires-python = ">=3.13, <3.15"
