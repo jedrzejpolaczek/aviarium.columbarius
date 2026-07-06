@@ -79,10 +79,10 @@ The pipeline follows a **Medallion architecture** (Bronze → Silver → Gold).
                      │ Silver DuckDB (read-only)
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  GOLD  —  DuckDB  (data/gold/cards.duckdb)  [stub]          │
+│  GOLD  —  DuckDB  (data/gold/cards.duckdb)  (done)          │
 │  Aggregated views ready for ML                              │
 └────────────────────┬────────────────────────────────────────┘
-                     │  (planned)
+                     │  (trained)
                      ▼
               ML price prediction model
 ```
