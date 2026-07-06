@@ -13,7 +13,10 @@ uv run ruff format --check .
 echo ">>> [pre-push] mypy..."
 uv run mypy .
 
-echo ">>> [pre-push] pytest..."
-uv run pytest
+echo ">>> [pre-push] pytest (main suite)..."
+uv run pytest --ignore=tests/ml/training/test_tracking.py
+
+echo ">>> [pre-push] pytest (mlflow tracking, isolated process)..."
+uv run pytest tests/ml/training/test_tracking.py
 
 echo ">>> [pre-push] All checks passed."

@@ -19,7 +19,8 @@ type-check:
 	uv run mypy
 
 test:
-	uv run pytest
+	uv run pytest --ignore=tests/ml/training/test_tracking.py
+	uv run pytest tests/ml/training/test_tracking.py
 
 coverage:
 	uv run pytest --cov=src --cov=app --cov-report=term-missing
