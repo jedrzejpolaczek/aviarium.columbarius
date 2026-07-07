@@ -20,6 +20,7 @@ Performance note:
 
 from datetime import date
 
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, Query, Request
@@ -27,7 +28,6 @@ from fastapi import APIRouter, Depends, Query, Request
 from app.dependencies import require_model
 from app.routers.predict import inverse_log_return
 from app.schemas.responses import UnderpricedCard, UnderpricedResponse
-from src.ml.models.lightgbm_model import LightGBMPriceModel
 from src.ml.recommendation.underpriced import flag_underpriced
 
 
@@ -37,11 +37,11 @@ router = APIRouter(prefix="/underpriced", tags=["recommendation"])
 def _run_underpriced_inference(
     X_all: pd.DataFrame,
     X_all_t: pd.DataFrame,
-    model: LightGBMPriceModel,
+    model: lgb.Booster,
     tier: int | None,
     min_confidence: float,
 ) -> pd.DataFrame:
-    log_returns: np.ndarray = model.predict(X_all_t)
+    log_returns: np.ndarray = np.asarray(model.predict(X_all_t))
     eur = X_all["eur"].to_numpy()
     predicted_eur = inverse_log_return(eur, log_returns)
 
@@ -86,7 +86,7 @@ def get_underpriced_cards(
     min_confidence: float = Query(
         default=1.3, ge=1.0, description="Minimum predicted/actual ratio"
     ),
-    model: LightGBMPriceModel = Depends(require_model),
+    model: lgb.Booster = Depends(require_model),
 ) -> UnderpricedResponse:
     """Return all cards the model considers underpriced at the latest snapshot.
 

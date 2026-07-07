@@ -17,13 +17,13 @@ URL encoding:
     ``GET /predict/Lightning%20Bolt``.
 """
 
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, Request
 
 from app.dependencies import require_match, require_model
 from app.schemas.responses import PredictionResponse
-from src.ml.models.lightgbm_model import LightGBMPriceModel
 from src.ml.models.tiered import assign_tier
 
 
@@ -84,7 +84,7 @@ router = APIRouter(prefix="/predict", tags=["prediction"])
 def predict_price_by_uuid(
     uuid: str,
     request: Request,
-    model: LightGBMPriceModel = Depends(require_model),
+    model: lgb.Booster = Depends(require_model),
 ) -> PredictionResponse:
     """Predict the EUR price of a card identified by its MTGJson UUID.
 
@@ -118,7 +118,7 @@ def predict_price_by_uuid(
 def predict_price(
     card_name: str,
     request: Request,
-    model: LightGBMPriceModel = Depends(require_model),
+    model: lgb.Booster = Depends(require_model),
 ) -> PredictionResponse:
     """Predict the EUR price of a single card seven days from now.
 

@@ -5,7 +5,7 @@ appropriate resource from ``request.app.state``.
 
     get_db                — open DuckDB connection
     get_similarity_index  — built CardSimilarityIndex (or None before first build)
-    require_model         — loaded LightGBMPriceModel, or raises 503
+    require_model         — loaded lgb.Booster, or raises 503
 
 ``require_match`` is also defined here but is not a ``Depends()`` target — see
 its own docstring for why.
@@ -14,10 +14,10 @@ its own docstring for why.
 from typing import cast
 
 import duckdb
+import lightgbm as lgb
 import pandas as pd
 from fastapi import HTTPException, Request
 
-from src.ml.models.lightgbm_model import LightGBMPriceModel
 from src.ml.recommendation.similarity import CardSimilarityIndex
 
 
@@ -45,7 +45,7 @@ def get_similarity_index(request: Request) -> CardSimilarityIndex | None:
     return cast(CardSimilarityIndex | None, request.app.state.similarity_index)
 
 
-def require_model(request: Request) -> LightGBMPriceModel:
+def require_model(request: Request) -> lgb.Booster:
     """Return the loaded model from application state, or raise 503.
 
     Use this (instead of reading ``request.app.state.model`` directly) in
@@ -57,7 +57,9 @@ def require_model(request: Request) -> LightGBMPriceModel:
         request: Incoming FastAPI request carrying ``app.state``.
 
     Returns:
-        Loaded LightGBMPriceModel.
+        Loaded lgb.Booster (see ``load_model_from_mlflow`` in
+        ``src.ml.training.tracking``, which is what actually populates
+        ``app.state.model`` at startup).
 
     Raises:
         HTTPException: 503 if no model has been trained/loaded yet.
@@ -67,7 +69,7 @@ def require_model(request: Request) -> LightGBMPriceModel:
         raise HTTPException(
             503, detail="Model not loaded. Set MODEL_RUN_ID env variable."
         )
-    return cast(LightGBMPriceModel, model)
+    return cast(lgb.Booster, model)
 
 
 def require_match(
