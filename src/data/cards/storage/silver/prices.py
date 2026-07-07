@@ -368,5 +368,9 @@ MTGJSON_PRICE_COMBOS: frozenset[tuple[str, str, str]] = frozenset(
 
 Consumed by health.py's schema-drift check. Kept as a module-level constant
 (not a class attribute reach-through) so callers outside this module don't
-depend on SilverPriceBuilder's internal naming.
+depend on SilverPriceBuilder's internal naming. This is the sanctioned access
+point for these combinations — new code needing them should import
+MTGJSON_PRICE_COMBOS rather than reaching into
+SilverPriceBuilder._MTGJSON_PRICE_MAP directly, even though Python won't stop
+you from doing so.
 """
