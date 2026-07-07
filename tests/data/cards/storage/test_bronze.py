@@ -148,6 +148,22 @@ class TestExtractPaperEavRows:
         rows = _extract_paper_eav_rows(paper, "u1", "2026-05-11")
         assert isinstance(rows[0]["price"], float)
 
+    def test_none_value_at_latest_date_raises_type_error(self):
+        """Regression test: the winning date is selected by date-key comparison
+        alone (max date <= snapshot_date), not by whether its value is usable.
+
+        A None at the most recent eligible date must raise TypeError from
+        float(None) rather than silently falling back to an earlier date's
+        valid price — matching pre-refactor behavior exactly.
+        """
+        paper = {
+            "cardmarket": {
+                "retail": {"normal": {"2026-05-10": 1.0, "2026-05-11": None}}
+            }
+        }
+        with pytest.raises(TypeError):
+            _extract_paper_eav_rows(paper, "u1", "2026-05-11")
+
 
 # ---------------------------------------------------------------------------
 # BronzeStorage._full_load_table

@@ -34,16 +34,19 @@ def _records_to_df(records: Sequence[BaseModel]) -> pd.DataFrame:
 
 def _walk_paper_prices(
     paper_dict: dict[str, Any] | None,
-) -> list[tuple[str, str, str, str, float]]:
-    """Yield every (retailer, tx_type, finish, date, price) leaf in a paper dict.
+) -> list[tuple[str, str, str, str, Any]]:
+    """Yield every (retailer, tx_type, finish, date, raw_value) leaf in a paper dict.
 
     Single source of truth for the 4-level nesting (retailer -> tx_type ->
     finish -> date) shared by _extract_paper_eav_rows (latest-before selection)
-    and seed_historical_prices (all-dates selection).
+    and seed_historical_prices (all-dates selection). The raw value is passed
+    through unfiltered and unconverted (it may be None) — callers decide
+    whether/when to drop Nones and coerce to float, since the two consumers
+    have different semantics for None-valued leaves.
     """
     if not paper_dict:
         return []
-    rows: list[tuple[str, str, str, str, float]] = []
+    rows: list[tuple[str, str, str, str, Any]] = []
     for retailer, retailer_data in paper_dict.items():
         if not retailer_data:
             continue
@@ -53,8 +56,7 @@ def _walk_paper_prices(
                 if not isinstance(prices, dict):
                     continue
                 for d, val in prices.items():
-                    if val is not None:
-                        rows.append((retailer, tx_type, finish, d, float(val)))
+                    rows.append((retailer, tx_type, finish, d, val))
     return rows
 
 
@@ -66,15 +68,18 @@ def _extract_paper_eav_rows(
     Iterates every (retailer, tx_type, finish) found in paper_dict without
     pre-selection — all retailers present in the feed are captured. Uses
     look-back semantics: selects the most recent price per combination where
-    date key <= snapshot_date.
+    date key <= snapshot_date, regardless of whether that date's value is
+    None — matching the original implementation, a None value at the winning
+    (most recent, <= snapshot_date) date raises TypeError from float(None)
+    rather than silently falling back to an earlier date's value.
     """
-    by_combo: dict[tuple[str, str, str], tuple[str, float]] = {}
-    for retailer, tx_type, finish, d, price in _walk_paper_prices(paper_dict):
+    by_combo: dict[tuple[str, str, str], tuple[str, Any]] = {}
+    for retailer, tx_type, finish, d, value in _walk_paper_prices(paper_dict):
         if d > snapshot_date:
             continue
         key = (retailer, tx_type, finish)
         if key not in by_combo or d > by_combo[key][0]:
-            by_combo[key] = (d, price)
+            by_combo[key] = (d, value)
 
     return [
         {
@@ -83,9 +88,9 @@ def _extract_paper_eav_rows(
             "retailer": retailer,
             "tx_type": tx_type,
             "finish": finish,
-            "price": price,
+            "price": float(value),
         }
-        for (retailer, tx_type, finish), (_, price) in by_combo.items()
+        for (retailer, tx_type, finish), (_, value) in by_combo.items()
     ]
 
 
@@ -205,7 +210,9 @@ class BronzeStorage(BaseStorage):
             uuid_str = dump["uuid"]
             paper = dump.get("paper") or {}
 
-            for retailer, tx_type, finish, d, price in _walk_paper_prices(paper):
+            for retailer, tx_type, finish, d, val in _walk_paper_prices(paper):
+                if val is None:
+                    continue
                 rows.append(
                     {
                         "uuid": uuid_str,
@@ -213,7 +220,7 @@ class BronzeStorage(BaseStorage):
                         "retailer": retailer,
                         "tx_type": tx_type,
                         "finish": finish,
-                        "price": price,
+                        "price": float(val),
                     }
                 )
 
