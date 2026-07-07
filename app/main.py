@@ -57,7 +57,7 @@ logger = get_logger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # pragma: no cover
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup and shutdown context manager for the FastAPI application.
 
     Startup (before ``yield``):
