@@ -94,6 +94,9 @@ def retrain(
         RuntimeError: ``snapshot_date`` produces an empty training dataset
                       (either no lag features or no t+7 targets available).
     """
+    # Deferred: lightgbm/mlflow/sklearn are only needed when actually retraining,
+    # not for the lightweight should_retrain() drift/MAPE checks other monitoring
+    # modules run continuously — keeps `import src.monitoring.retraining` cheap.
     from src.ml.features.lag import build_target
     from src.ml.features.pipeline import (
         build_feature_pipeline,
@@ -194,7 +197,7 @@ def _compare_and_promote(cv_results: pd.DataFrame, new_run_id: str) -> None:
                      insufficient data was available for CV).
         new_run_id:  MLflow run_id of the newly trained model.
     """
-    import mlflow
+    import mlflow  # deferred for the same reason as the ml.* imports in retrain() above
 
     client = mlflow.tracking.MlflowClient()
     model_name = MODEL_REGISTRY_NAME
@@ -255,7 +258,7 @@ def promote_to_production(run_id: str, model_name: str = MODEL_REGISTRY_NAME) ->
         model_name: Registered model name in MLflow Registry.
                     Defaults to :data:`MODEL_REGISTRY_NAME`.
     """
-    import mlflow
+    import mlflow  # deferred for the same reason as the ml.* imports in retrain() above
 
     client = mlflow.tracking.MlflowClient()
 
