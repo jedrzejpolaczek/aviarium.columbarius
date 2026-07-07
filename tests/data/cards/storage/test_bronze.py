@@ -1,5 +1,6 @@
 """Unit tests for src/data/cards/storage/bronze/ (config, writers, storage)."""
 
+import json
 from unittest.mock import MagicMock, patch
 
 import duckdb
@@ -12,7 +13,7 @@ from src.data.cards.storage.bronze.storage import (
     _extract_paper_eav_rows,
     _records_to_df,
 )
-from src.data.cards.storage.errors import StorageWriteError
+from src.data.cards.storage.errors import StorageConnectionError, StorageWriteError
 
 
 # ---------------------------------------------------------------------------
@@ -26,6 +27,20 @@ class _Card(BaseModel):
     tags: list[str] | None = None
 
 
+class _CardWithNested(BaseModel):
+    id: str
+    name: str
+    tags: list[str] | None = None
+    meta: dict[str, str] | None = None
+
+
+class _PricedCard(BaseModel):
+    id: str
+    name: str
+    price: float
+    score: int | None = None
+
+
 class _Item(BaseModel):
     uuid: str
     value: float | None = None
@@ -34,6 +49,45 @@ class _Item(BaseModel):
 def _bronze() -> BronzeStorage:
     """Return a BronzeStorage backed by an in-memory DuckDB database."""
     return BronzeStorage(":memory:")
+
+
+# ---------------------------------------------------------------------------
+# BronzeStorage.__init__ / context manager
+# ---------------------------------------------------------------------------
+
+
+class TestBronzeStorageInit:
+    def test_memory_db_opens_successfully(self):
+        s = BronzeStorage(":memory:")
+        row = s._con.execute("SELECT 42").fetchone()
+        assert row is not None
+        result = row[0]
+        s.close()
+        assert result == 42
+
+    def test_file_db_creates_parent_directory(self, tmp_path):
+        db_path = tmp_path / "nested" / "subdir" / "cards.duckdb"
+        s = BronzeStorage(str(db_path))
+        s.close()
+        assert db_path.exists()
+
+    def test_context_manager_returns_self(self):
+        with BronzeStorage(":memory:") as s:
+            assert isinstance(s, BronzeStorage)
+
+    def test_context_manager_closes_connection_on_exit(self):
+        with BronzeStorage(":memory:") as s:
+            con = s._con
+        with pytest.raises(duckdb.Error):
+            con.execute("SELECT 1")
+
+    def test_connection_error_raises_storage_connection_error(self):
+        with patch(
+            "src.data.cards.storage.base.storage.duckdb.connect",
+            side_effect=duckdb.Error("locked"),
+        ):
+            with pytest.raises(StorageConnectionError, match="Cannot open DuckDB"):
+                BronzeStorage(":memory:")
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +269,45 @@ class TestFullLoadTable:
             with pytest.raises(StorageWriteError, match="Failed to full-load"):
                 b._full_load_table([_Card(id="1", name="X")], "test_table")
 
+    def test_list_values_serialized_as_json_string(self):
+        with _bronze() as b:
+            b._full_load_table(
+                [
+                    _CardWithNested(id="1", name="A", tags=None),
+                    _CardWithNested(id="2", name="B", tags=["x", "y"]),
+                ],
+                "test_table",
+            )
+            row = b._con.execute(
+                "SELECT tags FROM test_table WHERE id = '2'"
+            ).fetchone()
+        assert row is not None and json.loads(row[0]) == ["x", "y"]
+
+    def test_dict_values_serialized_as_json_string(self):
+        with _bronze() as b:
+            b._full_load_table(
+                [
+                    _CardWithNested(id="1", name="A", meta=None),
+                    _CardWithNested(id="2", name="B", meta={"key": "val"}),
+                ],
+                "test_table",
+            )
+            row = b._con.execute(
+                "SELECT meta FROM test_table WHERE id = '2'"
+            ).fetchone()
+        assert row is not None and json.loads(row[0]) == {"key": "val"}
+
+    def test_none_optional_fields_stored_as_null(self):
+        with _bronze() as b:
+            b._full_load_table(
+                [_CardWithNested(id="1", name="A", tags=None, meta=None)],
+                "test_table",
+            )
+            row = b._con.execute("SELECT tags, meta FROM test_table").fetchone()
+        assert row is not None
+        assert row[0] is None
+        assert row[1] is None
+
 
 # ---------------------------------------------------------------------------
 # BronzeStorage._incremental_load
@@ -265,6 +358,24 @@ class TestIncrementalLoad:
             b._writer._con = mock_con
             with pytest.raises(StorageWriteError, match="Failed to upsert"):
                 b._incremental_load([_Card(id="1", name="X")], "test_table", "id")
+
+    def test_upsert_preserves_non_matching_rows(self):
+        with _bronze() as b:
+            b._incremental_load(
+                [_Card(id="1", name="Keep"), _Card(id="2", name="Also keep")],
+                "test_table",
+                "id",
+            )
+            b._incremental_load([_Card(id="2", name="Updated")], "test_table", "id")
+
+            row = b._con.execute(
+                "SELECT count(*) FROM test_table"
+            ).fetchone()
+            assert row is not None and row[0] == 2
+            row = b._con.execute(
+                "SELECT name FROM test_table WHERE id = '1'"
+            ).fetchone()
+        assert row is not None and row[0] == "Keep"
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +453,48 @@ class TestSnapshot:
             b._writer._con = mock_con
             with pytest.raises(StorageWriteError, match="Failed to append"):
                 b._snapshot([_Card(id="1", name="X")], "id", "test_history")
+
+    def test_snapshot_row_contains_key_and_date(self):
+        from datetime import date as date_cls
+
+        with _bronze() as b:
+            with patch("src.data.cards.storage.bronze.storage.date") as mock_date:
+                mock_date.today.return_value = date_cls.fromisoformat("2026-01-01")
+                b._snapshot(
+                    [_Card(id="42", name="A")], "id", "test_history"
+                )
+            row = b._con.execute(
+                "SELECT id, snapshot_date FROM test_history"
+            ).fetchone()
+        assert row is not None
+        assert row[0] == "42"
+        assert row[1] == "2026-01-01"
+
+    def test_key_and_snapshot_date_always_present(self):
+        with _bronze() as b:
+            b._snapshot(
+                [_PricedCard(id="7", name="A", price=0.5)],
+                "id",
+                "test_history",
+                fields=["price"],
+            )
+            cols = {r[0] for r in b._con.execute("DESCRIBE test_history").fetchall()}
+        assert "id" in cols
+        assert "snapshot_date" in cols
+
+    def test_multiple_records_all_snapshotted(self):
+        with _bronze() as b:
+            b._snapshot(
+                [
+                    _Card(id="1", name="A"),
+                    _Card(id="2", name="B"),
+                    _Card(id="3", name="C"),
+                ],
+                "id",
+                "test_history",
+            )
+            row = b._con.execute("SELECT count(*) FROM test_history").fetchone()
+        assert row is not None and row[0] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -501,6 +654,101 @@ class TestPopulate:
             ):
                 b.populate({})
 
+    def test_calls_full_load_for_all_configured_sources(self):
+        with _bronze() as b:
+            with (
+                patch.object(b, "_full_load_table") as mock_full,
+                patch.object(b, "_snapshot"),
+            ):
+                b.populate(
+                    {
+                        "scryfall": ([MagicMock()], []),
+                        "mtgjson_cards": ([MagicMock()], []),
+                        "mtgjson_prices": ([MagicMock()], []),
+                    }
+                )
+            # scryfall + mtgjson_cards + tournament_results (mtgjson_prices has no table)
+            assert mock_full.call_count == 3
+
+    def test_calls_snapshot_for_configured_sources(self):
+        with _bronze() as b:
+            with (
+                patch.object(b, "_full_load_table"),
+                patch.object(b, "_snapshot") as mock_snap,
+                patch.object(b, "_snapshot_scryfall_prices"),
+                patch.object(b, "seed_historical_prices"),
+            ):
+                b.populate(
+                    {
+                        "scryfall": ([MagicMock()], []),
+                        "mtgjson_cards": ([], []),
+                        "mtgjson_prices": ([MagicMock()], []),
+                    }
+                )
+            # scryfall meta (1) + format_staples (1) = 2
+            # mtgjson_prices snapshots are handled by _snapshot_mtgjson_prices (not _snapshot)
+            assert mock_snap.call_count == 2
+
+    def test_missing_source_in_results_treated_as_empty(self):
+        with _bronze() as b:
+            with (
+                patch.object(b, "_full_load_table") as mock_full,
+                patch.object(b, "_snapshot"),
+            ):
+                b.populate({})  # no results at all
+
+            # _full_load_table called with empty list for each source -> all skipped
+            for c in mock_full.call_args_list:
+                assert c.args[0] == []
+
+    def test_error_in_one_source_does_not_block_others(self):
+        call_log: list[str] = []
+
+        def fake_full(records, table_name):
+            if table_name == "bronze_scryfall_cards":
+                raise StorageWriteError("scryfall failed")
+            call_log.append(table_name)
+
+        with _bronze() as b:
+            with (
+                patch.object(b, "_full_load_table", side_effect=fake_full),
+                patch.object(b, "_snapshot"),
+                patch.object(b, "seed_historical_prices"),
+            ):
+                b.populate(
+                    {
+                        "scryfall": ([MagicMock()], []),
+                        "mtgjson_cards": ([MagicMock()], []),
+                    }
+                )
+
+            assert "bronze_mtgjson_cards" in call_log
+
+    def test_calls_seed_historical_prices_with_mtgjson_prices(self):
+        price_records: list[BaseModel] = [MagicMock()]
+        with _bronze() as b:
+            with (
+                patch.object(b, "_full_load_table"),
+                patch.object(b, "_snapshot"),
+                patch.object(b, "seed_historical_prices") as mock_seed,
+            ):
+                b.populate({"mtgjson_prices": (price_records, [])})
+
+            mock_seed.assert_called_once_with(price_records)
+
+    def test_seed_error_skips_without_raising(self):
+        with _bronze() as b:
+            with (
+                patch.object(b, "_full_load_table"),
+                patch.object(b, "_snapshot"),
+                patch.object(
+                    b,
+                    "seed_historical_prices",
+                    side_effect=StorageWriteError("seed boom"),
+                ),
+            ):
+                b.populate({"mtgjson_prices": ([MagicMock()], [])})  # must not raise
+
 
 # ---------------------------------------------------------------------------
 # BronzeStorage.daily_update
@@ -554,6 +802,70 @@ class TestDailyUpdate:
                 patch.object(b, "_snapshot"),
             ):
                 b.daily_update({})
+
+    def test_incremental_source_calls_incremental_load(self):
+        with _bronze() as b:
+            with (
+                patch.object(b, "_incremental_load") as mock_inc,
+                patch.object(b, "_full_load_table"),
+                patch.object(b, "_snapshot"),
+            ):
+                b.daily_update(
+                    {
+                        "scryfall": ([MagicMock()], []),
+                        "mtgjson_cards": ([MagicMock()], []),
+                    }
+                )
+
+            # scryfall, mtgjson_cards, and tournament_results are incremental=True
+            assert mock_inc.call_count == 3
+            inc_tables = {c.args[1] for c in mock_inc.call_args_list}
+            assert "bronze_scryfall_cards" in inc_tables
+            assert "bronze_mtgjson_cards" in inc_tables
+            assert "bronze_tournament_results" in inc_tables
+
+    def test_daily_update_calls_snapshot(self):
+        with _bronze() as b:
+            with (
+                patch.object(b, "_incremental_load"),
+                patch.object(b, "_snapshot") as mock_snap,
+                patch.object(b, "_snapshot_scryfall_prices") as mock_scryfall_prices,
+                patch.object(b, "_snapshot_mtgjson_prices") as mock_mtgjson_prices,
+            ):
+                b.daily_update(
+                    {
+                        "scryfall": ([MagicMock()], []),
+                        "mtgjson_prices": ([MagicMock()], []),
+                        "mtgjson_cards": ([], []),
+                    }
+                )
+            # _process_sources: scryfall meta (1) + format_staples (1) = 2
+            assert mock_snap.call_count == 2
+            mock_scryfall_prices.assert_called_once()
+            mock_mtgjson_prices.assert_called_once()
+
+    def test_error_in_one_source_does_not_block_others(self):
+        call_log: list[str] = []
+
+        def fake_inc(records, table_name, key_column):
+            if table_name == "bronze_scryfall_cards":
+                raise StorageWriteError("scryfall failed")
+            call_log.append(table_name)
+
+        with _bronze() as b:
+            with (
+                patch.object(b, "_incremental_load", side_effect=fake_inc),
+                patch.object(b, "_snapshot"),
+            ):
+                b.daily_update(
+                    {
+                        "scryfall": ([MagicMock()], []),
+                        "mtgjson_cards": ([MagicMock()], []),
+                        "mtgjson_prices": ([], []),
+                    }
+                )
+
+            assert "bronze_mtgjson_cards" in call_log
 
 
 # ---------------------------------------------------------------------------
@@ -799,3 +1111,173 @@ class TestSnapshotMtgjsonPrices:
             ).fetchone()
             count = int(_row[0]) if _row else 0
         assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# BronzeStorage.seed_historical_prices
+# ---------------------------------------------------------------------------
+
+
+class _PriceRecord(BaseModel):
+    uuid: str
+    paper: dict | None = None
+    mtgo: dict | None = None
+
+
+_PAPER_PRICES = {
+    "cardmarket": {
+        "retail": {
+            "normal": {"2026-04-01": 1.0, "2026-04-02": 1.1},
+            "foil": {"2026-04-01": 2.0},
+        },
+    },
+    "cardkingdom": {
+        "retail": {"normal": {"2026-04-01": 3.5}},
+    },
+}
+
+
+class TestSeedHistoricalPrices:
+    HISTORY_TABLE = "bronze_mtgjson_prices_history"
+
+    def test_empty_records_is_noop(self):
+        with _bronze() as b:
+            b.seed_historical_prices([])
+            tables = b._con.execute(
+                f"SELECT table_name FROM information_schema.tables "
+                f"WHERE table_name = '{self.HISTORY_TABLE}'"
+            ).fetchall()
+        assert tables == []
+
+    def test_creates_history_table_on_first_call(self):
+        with _bronze() as b:
+            record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
+            b.seed_historical_prices([record])
+            row = b._con.execute(
+                f"SELECT count(*) FROM {self.HISTORY_TABLE}"
+            ).fetchone()
+        assert row is not None and row[0] > 0
+
+    def test_row_count_matches_eav_leaf_entries(self):
+        with _bronze() as b:
+            record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
+            b.seed_historical_prices([record])
+            # 4 EAV leaf entries: cm/retail/normal/04-01, cm/retail/normal/04-02,
+            # cm/retail/foil/04-01, ck/retail/normal/04-01
+            row = b._con.execute(
+                f"SELECT count(*) FROM {self.HISTORY_TABLE}"
+            ).fetchone()
+        assert row is not None and row[0] == 4
+
+    def test_row_contains_uuid_and_snapshot_date(self):
+        with _bronze() as b:
+            record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
+            b.seed_historical_prices([record])
+            dates = {
+                row[1]
+                for row in b._con.execute(
+                    f"SELECT uuid, snapshot_date FROM {self.HISTORY_TABLE}"
+                ).fetchall()
+            }
+        assert dates == {"2026-04-01", "2026-04-02"}
+
+    def test_idempotent_second_call_does_not_duplicate(self):
+        with _bronze() as b:
+            record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
+            b.seed_historical_prices([record])
+            b.seed_historical_prices([record])
+            row = b._con.execute(
+                f"SELECT count(*) FROM {self.HISTORY_TABLE}"
+            ).fetchone()
+        assert row is not None and row[0] == 4
+
+    def test_multiple_cards_all_seeded(self):
+        with _bronze() as b:
+            r1 = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
+            r2 = _PriceRecord(uuid="uuid-2", paper=_PAPER_PRICES)
+            b.seed_historical_prices([r1, r2])
+            row = b._con.execute(
+                f"SELECT count(*) FROM {self.HISTORY_TABLE}"
+            ).fetchone()
+        assert row is not None and row[0] == 8
+
+    def test_record_with_no_dates_produces_no_rows(self):
+        with _bronze() as b:
+            record = _PriceRecord(uuid="uuid-1", paper=None, mtgo=None)
+            b.seed_historical_prices([record])
+            tables = b._con.execute(
+                f"SELECT table_name FROM information_schema.tables "
+                f"WHERE table_name = '{self.HISTORY_TABLE}'"
+            ).fetchall()
+        assert tables == []
+
+    def test_mtgo_prices_not_collected(self):
+        with _bronze() as b:
+            record = _PriceRecord(
+                uuid="uuid-1",
+                paper=None,
+                mtgo={"cardhoarder": {"retail": {"normal": {"2026-03-15": 0.5}}}},
+            )
+            b.seed_historical_prices([record])
+            tables = b._con.execute(
+                f"SELECT table_name FROM information_schema.tables"
+                f" WHERE table_name = '{self.HISTORY_TABLE}'"
+            ).fetchall()
+        assert tables == []
+
+    def test_eav_schema_has_correct_columns(self):
+        with _bronze() as b:
+            record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
+            b.seed_historical_prices([record])
+            cols = {
+                r[0]
+                for r in b._con.execute(f"DESCRIBE {self.HISTORY_TABLE}").fetchall()
+            }
+        assert cols == {
+            "uuid",
+            "snapshot_date",
+            "retailer",
+            "tx_type",
+            "finish",
+            "price",
+        }
+
+    def test_eav_row_has_correct_values(self):
+        with _bronze() as b:
+            record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
+            b.seed_historical_prices([record])
+            row = b._con.execute(
+                f"SELECT uuid, snapshot_date, retailer, tx_type, finish, price"
+                f" FROM {self.HISTORY_TABLE}"
+                f" WHERE retailer='cardmarket' AND tx_type='retail'"
+                f"   AND finish='normal' AND snapshot_date='2026-04-01'"
+            ).fetchone()
+        assert row is not None
+        assert row[0] == "uuid-1"
+        assert str(row[1]) == "2026-04-01"
+        assert row[2] == "cardmarket"
+        assert row[3] == "retail"
+        assert row[4] == "normal"
+        assert row[5] == pytest.approx(1.0)
+
+    def test_captures_cardkingdom(self):
+        with _bronze() as b:
+            record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
+            b.seed_historical_prices([record])
+            retailers = {
+                r[0]
+                for r in b._con.execute(
+                    f"SELECT DISTINCT retailer FROM {self.HISTORY_TABLE}"
+                ).fetchall()
+            }
+        assert "cardkingdom" in retailers
+
+    def test_duckdb_error_raises_storage_write_error(self):
+        with _bronze() as b:
+            record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
+            mock_con = MagicMock()
+            mock_con.execute.side_effect = duckdb.Error("disk full")
+            b._con = mock_con
+            b._writer._con = mock_con
+            with pytest.raises(StorageWriteError, match="Failed to append into"):
+                b.seed_historical_prices([record])
