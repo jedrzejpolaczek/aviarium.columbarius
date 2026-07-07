@@ -19,10 +19,11 @@ URL encoding:
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 
-from app.dependencies import get_model
+from app.dependencies import require_match, require_model
 from app.schemas.responses import PredictionResponse
+from src.ml.models.lightgbm_model import LightGBMPriceModel
 from src.ml.models.tiered import assign_tier
 
 
@@ -83,7 +84,7 @@ router = APIRouter(prefix="/predict", tags=["prediction"])
 def predict_price_by_uuid(
     uuid: str,
     request: Request,
-    model: object | None = Depends(get_model),
+    model: LightGBMPriceModel = Depends(require_model),
 ) -> PredictionResponse:
     """Predict the EUR price of a card identified by its MTGJson UUID.
 
@@ -93,7 +94,7 @@ def predict_price_by_uuid(
     Args:
         uuid: MTGJson UUID of the specific card printing.
         request: FastAPI request object for accessing ``app.state``.
-        model: LightGBM booster injected via ``get_model`` dependency.
+        model: LightGBM booster injected via ``require_model`` dependency.
 
     Returns:
         PredictionResponse identical in shape to the name-based endpoint.
@@ -102,18 +103,11 @@ def predict_price_by_uuid(
         HTTPException 404: UUID not found in the feature matrix.
         HTTPException 503: Model not loaded.
     """
-    if model is None:
-        raise HTTPException(
-            503, detail="Model not loaded. Set MODEL_RUN_ID env variable."
-        )
-
     X_all: pd.DataFrame = request.app.state.X_all
     X_all_t: pd.DataFrame = request.app.state.X_all_t
     model_run_id: str = getattr(request.app.state, "model_run_id", "")
 
-    matches = X_all[X_all["uuid"] == uuid]
-    if matches.empty:
-        raise HTTPException(404, detail=f"UUID '{uuid}' not found.")
+    matches = require_match(X_all, "uuid", uuid, "UUID")
 
     idx = int(matches.index[0])
     card_name = str(X_all.at[idx, "name"])
@@ -124,7 +118,7 @@ def predict_price_by_uuid(
 def predict_price(
     card_name: str,
     request: Request,
-    model: object | None = Depends(get_model),
+    model: LightGBMPriceModel = Depends(require_model),
 ) -> PredictionResponse:
     """Predict the EUR price of a single card seven days from now.
 
@@ -138,7 +132,7 @@ def predict_price(
     Args:
         card_name: Exact card name, URL-decoded by FastAPI (e.g. "Force of Will").
         request:   FastAPI request object for accessing ``app.state``.
-        model:     LightGBM booster injected via ``get_model`` dependency.
+        model:     LightGBM booster injected via ``require_model`` dependency.
                    Sourced from ``app.state.model``.
 
     Returns:
@@ -151,18 +145,11 @@ def predict_price(
         HTTPException 404: Card not found in the feature matrix.
         HTTPException 503: Model not loaded (MODEL_RUN_ID not set or load failed).
     """
-    if model is None:
-        raise HTTPException(
-            503, detail="Model not loaded. Set MODEL_RUN_ID env variable."
-        )
-
     X_all: pd.DataFrame = request.app.state.X_all
     X_all_t: pd.DataFrame = request.app.state.X_all_t
     model_run_id: str = getattr(request.app.state, "model_run_id", "")
 
-    matches = X_all[X_all["name"] == card_name]
-    if matches.empty:
-        raise HTTPException(404, detail=f"Card '{card_name}' not found.")
+    matches = require_match(X_all, "name", card_name, "Card")
 
     idx = int(matches.index[0])
     return _predict_from_index(idx, card_name, X_all, X_all_t, model, model_run_id)

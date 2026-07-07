@@ -22,11 +22,12 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 
-from app.dependencies import get_model
+from app.dependencies import require_model
 from app.routers.predict import inverse_log_return
 from app.schemas.responses import UnderpricedCard, UnderpricedResponse
+from src.ml.models.lightgbm_model import LightGBMPriceModel
 from src.ml.recommendation.underpriced import flag_underpriced
 
 
@@ -42,7 +43,7 @@ def get_underpriced_cards(
     min_confidence: float = Query(
         default=1.3, ge=1.0, description="Minimum predicted/actual ratio"
     ),
-    model: object | None = Depends(get_model),
+    model: LightGBMPriceModel = Depends(require_model),
 ) -> UnderpricedResponse:
     """Return all cards the model considers underpriced at the latest snapshot.
 
@@ -60,7 +61,7 @@ def get_underpriced_cards(
         min_confidence: Minimum predicted/actual ratio to include in results.
                         Default 1.3 matches the ``TIER1_FLAG_THRESHOLD``
                         constant in ``flag_underpriced``.
-        model:          LightGBM booster injected via ``get_model`` dependency.
+        model:          LightGBM booster injected via ``require_model`` dependency.
 
     Returns:
         UnderpricedResponse containing a list of UnderpricedCard objects, the
@@ -69,16 +70,11 @@ def get_underpriced_cards(
     Raises:
         HTTPException 503: Model not loaded (MODEL_RUN_ID not set or load failed).
     """
-    if model is None:
-        raise HTTPException(
-            503, detail="Model not loaded. Set MODEL_RUN_ID env variable."
-        )
-
     X_all: pd.DataFrame = request.app.state.X_all
     X_all_t: pd.DataFrame = request.app.state.X_all_t
     model_run_id: str = getattr(request.app.state, "model_run_id", "")
 
-    log_returns: np.ndarray = model.predict(X_all_t)  # type: ignore[attr-defined]
+    log_returns: np.ndarray = model.predict(X_all_t)
     eur = X_all["eur"].to_numpy()
     predicted_eur = inverse_log_return(eur, log_returns)
 

@@ -17,7 +17,7 @@ URL encoding:
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.dependencies import get_similarity_index
+from app.dependencies import get_similarity_index, require_match
 from app.schemas.responses import SimilarCard, SimilarCardsResponse
 from src.ml.recommendation.similarity import CardSimilarityIndex
 
@@ -61,9 +61,7 @@ def find_similar_cards(
     if similarity_index is None or similarity_index.cards_df is None:
         raise HTTPException(503, detail="Similarity index not available.")
 
-    matches = similarity_index.cards_df[similarity_index.cards_df["name"] == card_name]
-    if matches.empty:
-        raise HTTPException(404, detail=f"Card '{card_name}' not found.")
+    matches = require_match(similarity_index.cards_df, "name", card_name, "Card")
 
     card_uuid = str(matches.iloc[0]["uuid"])
 
