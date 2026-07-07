@@ -29,13 +29,7 @@ with_change_label AS (
 )
 SELECT
     wc.*,
-    {card_cols}
-    {demand_cols}
-    {tournament_cols}
-    {staples_cols}
+    {cols}
 FROM with_change_label wc
-{card_join}
-{demand_join}
-{tournament_join}
-{staples_joins}
+{joins}
 ORDER BY wc.uuid, wc.snapshot_date
