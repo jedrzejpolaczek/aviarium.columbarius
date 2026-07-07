@@ -34,6 +34,49 @@ from src.ml.recommendation.underpriced import flag_underpriced
 router = APIRouter(prefix="/underpriced", tags=["recommendation"])
 
 
+def _run_underpriced_inference(
+    X_all: pd.DataFrame,
+    X_all_t: pd.DataFrame,
+    model: LightGBMPriceModel,
+    tier: int | None,
+    min_confidence: float,
+) -> pd.DataFrame:
+    log_returns: np.ndarray = model.predict(X_all_t)
+    eur = X_all["eur"].to_numpy()
+    predicted_eur = inverse_log_return(eur, log_returns)
+
+    result_df = pd.DataFrame(
+        {
+            "uuid": X_all["uuid"].values,
+            "name": X_all["name"].values,
+            "eur": eur,
+            "predicted_eur": predicted_eur,
+        }
+    )
+    result_df = result_df[result_df["eur"].notna()].copy()
+
+    flagged = flag_underpriced(result_df)
+    flagged = flagged[flagged["is_underpriced"]]
+    if tier is not None:
+        flagged = flagged[flagged["tier"] == tier]
+    return flagged[flagged["confidence"] >= min_confidence]
+
+
+def _to_underpriced_cards(flagged: pd.DataFrame) -> list[UnderpricedCard]:
+    return [
+        UnderpricedCard(
+            name=str(row["name"]),
+            uuid=str(row["uuid"]),
+            actual_price=float(row["eur"]),
+            predicted_price=float(row["predicted_eur"]),
+            confidence=float(row["confidence"]),
+            tier=int(row["tier"]),
+            reason=str(row["reason"]),
+        )
+        for _, row in flagged.iterrows()
+    ]
+
+
 @router.get("/", response_model=UnderpricedResponse)
 def get_underpriced_cards(
     request: Request,
@@ -74,39 +117,8 @@ def get_underpriced_cards(
     X_all_t: pd.DataFrame = request.app.state.X_all_t
     model_run_id: str = getattr(request.app.state, "model_run_id", "")
 
-    log_returns: np.ndarray = model.predict(X_all_t)
-    eur = X_all["eur"].to_numpy()
-    predicted_eur = inverse_log_return(eur, log_returns)
-
-    result_df = pd.DataFrame(
-        {
-            "uuid": X_all["uuid"].values,
-            "name": X_all["name"].values,
-            "eur": eur,
-            "predicted_eur": predicted_eur,
-        }
-    )
-    result_df = result_df[result_df["eur"].notna()].copy()
-
-    flagged = flag_underpriced(result_df)
-    flagged = flagged[flagged["is_underpriced"]]
-
-    if tier is not None:
-        flagged = flagged[flagged["tier"] == tier]
-    flagged = flagged[flagged["confidence"] >= min_confidence]
-
-    cards = [
-        UnderpricedCard(
-            name=str(row["name"]),
-            uuid=str(row["uuid"]),
-            actual_price=float(row["eur"]),
-            predicted_price=float(row["predicted_eur"]),
-            confidence=float(row["confidence"]),
-            tier=int(row["tier"]),
-            reason=str(row["reason"]),
-        )
-        for _, row in flagged.iterrows()
-    ]
+    flagged = _run_underpriced_inference(X_all, X_all_t, model, tier, min_confidence)
+    cards = _to_underpriced_cards(flagged)
 
     return UnderpricedResponse(
         cards=cards,
