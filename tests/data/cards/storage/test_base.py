@@ -164,27 +164,21 @@ class TestTransformStoragePipeline:
 
 
 class TestGetTables:
-    def test_returns_table_names(self):
-        conn = duckdb.connect(":memory:")
-        conn.execute("CREATE TABLE test_table AS SELECT 1 AS col")
-        tables = get_tables(conn)
+    def test_returns_table_names(self, memory_con):
+        memory_con.execute("CREATE TABLE test_table AS SELECT 1 AS col")
+        tables = get_tables(memory_con)
         assert "test_table" in tables
-        conn.close()
 
-    def test_returns_empty_set_for_empty_database(self):
-        conn = duckdb.connect(":memory:")
-        tables = get_tables(conn)
+    def test_returns_empty_set_for_empty_database(self, memory_con):
+        tables = get_tables(memory_con)
         assert tables == set()
-        conn.close()
 
-    def test_returns_multiple_tables(self):
-        conn = duckdb.connect(":memory:")
-        conn.execute("CREATE TABLE table1 AS SELECT 1 AS col")
-        conn.execute("CREATE TABLE table2 AS SELECT 2 AS col")
-        tables = get_tables(conn)
+    def test_returns_multiple_tables(self, memory_con):
+        memory_con.execute("CREATE TABLE table1 AS SELECT 1 AS col")
+        memory_con.execute("CREATE TABLE table2 AS SELECT 2 AS col")
+        tables = get_tables(memory_con)
         assert "table1" in tables
         assert "table2" in tables
-        conn.close()
 
 
 # ---------------------------------------------------------------------------
