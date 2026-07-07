@@ -179,18 +179,12 @@ class GoldStorage(TransformStorage):
         # (silver_meta_history) — kept as a pair with one combined warning so
         # a missing-table log line doesn't repeat itself twice for one cause.
         if "silver_meta_history" in silver_tables:
-            self._build_if_present(
-                ("silver_meta_history",),
-                silver_tables,
-                self._signals.build_demand_signals,
-                "gold_demand_signals",
+            logger.progress("Building gold_demand_signals")
+            self._writer.full_load(
+                self._signals.build_demand_signals(), "gold_demand_signals"
             )
-            self._build_if_present(
-                ("silver_meta_history",),
-                silver_tables,
-                self._signals.build_events,
-                "gold_events",
-            )
+            logger.progress("Building gold_events")
+            self._writer.full_load(self._signals.build_events(), "gold_events")
         else:
             logger.warning(
                 "silver_meta_history not found — skipping gold_demand_signals, gold_events"
