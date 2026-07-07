@@ -4,10 +4,11 @@ Each function is used with ``Depends()`` in route handlers to inject the
 appropriate resource from ``request.app.state``.
 
     get_db                — open DuckDB connection
-    get_model             — loaded LightGBMPriceModel (or None before first train)
     get_similarity_index  — built CardSimilarityIndex (or None before first build)
     require_model         — loaded LightGBMPriceModel, or raises 503
-    require_match         — rows of a DataFrame matching a column value, or raises 404
+
+``require_match`` is also defined here but is not a ``Depends()`` target — see
+its own docstring for why.
 """
 
 from typing import cast
@@ -32,18 +33,6 @@ def get_db(request: Request) -> duckdb.DuckDBPyConnection:
     return request.app.state.db  # type: ignore[no-any-return]
 
 
-def get_model(request: Request) -> LightGBMPriceModel | None:
-    """Return the loaded price model from application state, or None.
-
-    Args:
-        request: Incoming FastAPI request carrying ``app.state``.
-
-    Returns:
-        Loaded LightGBMPriceModel, or None if no model has been trained yet.
-    """
-    return cast(LightGBMPriceModel | None, request.app.state.model)
-
-
 def get_similarity_index(request: Request) -> CardSimilarityIndex | None:
     """Return the card similarity index from application state, or None.
 
@@ -57,11 +46,21 @@ def get_similarity_index(request: Request) -> CardSimilarityIndex | None:
 
 
 def require_model(request: Request) -> LightGBMPriceModel:
-    """Return the loaded model, or raise 503 if it isn't loaded.
+    """Return the loaded model from application state, or raise 503.
 
-    Use this instead of get_model in handlers that cannot proceed without a
-    model — it removes the `if model is None: raise HTTPException(503, ...)`
-    boilerplate repeated across predict.py and underpriced.py.
+    Use this (instead of reading ``request.app.state.model`` directly) in
+    handlers that cannot proceed without a model — it removes the
+    `if model is None: raise HTTPException(503, ...)` boilerplate repeated
+    across predict.py and underpriced.py.
+
+    Args:
+        request: Incoming FastAPI request carrying ``app.state``.
+
+    Returns:
+        Loaded LightGBMPriceModel.
+
+    Raises:
+        HTTPException: 503 if no model has been trained/loaded yet.
     """
     model = request.app.state.model
     if model is None:
@@ -74,7 +73,31 @@ def require_model(request: Request) -> LightGBMPriceModel:
 def require_match(
     df: pd.DataFrame, column: str, value: str, entity_name: str
 ) -> pd.DataFrame:
-    """Return rows of df where df[column] == value, or raise 404 if none match."""
+    """Return rows of df where df[column] == value, or raise 404 if none match.
+
+    Unlike ``require_model``, this is a plain function rather than a
+    ``Depends()`` target: FastAPI dependencies are resolved once per request
+    from request-scoped state (e.g. ``app.state.model``), but the DataFrame,
+    column, and lookup value here differ per call site within the same
+    handler (uuid vs. name lookups, different entity names for the error
+    message), which doesn't fit the no-argument ``Depends()`` shape. Call it
+    directly from inside a handler body instead. If a future guard needs
+    per-request singleton state, prefer the ``require_model``/``Depends()``
+    pattern; if it needs per-call arguments, prefer this pattern.
+
+    Args:
+        df: DataFrame to filter.
+        column: Name of the column to match against.
+        value: Value to look up in ``column``.
+        entity_name: Human-readable entity name used in the 404 detail
+            message (e.g. "UUID", "Card").
+
+    Returns:
+        The subset of df where df[column] == value. Guaranteed non-empty.
+
+    Raises:
+        HTTPException: 404 if no rows match.
+    """
     matches = df[df[column] == value]
     if matches.empty:
         raise HTTPException(404, detail=f"{entity_name} '{value}' not found.")
