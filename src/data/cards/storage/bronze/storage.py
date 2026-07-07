@@ -32,6 +32,32 @@ def _records_to_df(records: Sequence[BaseModel]) -> pd.DataFrame:
     return pd.DataFrame([r.model_dump(mode="json") for r in records])
 
 
+def _walk_paper_prices(
+    paper_dict: dict[str, Any] | None,
+) -> list[tuple[str, str, str, str, float]]:
+    """Yield every (retailer, tx_type, finish, date, price) leaf in a paper dict.
+
+    Single source of truth for the 4-level nesting (retailer -> tx_type ->
+    finish -> date) shared by _extract_paper_eav_rows (latest-before selection)
+    and seed_historical_prices (all-dates selection).
+    """
+    if not paper_dict:
+        return []
+    rows: list[tuple[str, str, str, str, float]] = []
+    for retailer, retailer_data in paper_dict.items():
+        if not retailer_data:
+            continue
+        for tx_type in ("buylist", "retail"):
+            listing = (retailer_data.get(tx_type)) or {}
+            for finish, prices in listing.items():
+                if not isinstance(prices, dict):
+                    continue
+                for d, val in prices.items():
+                    if val is not None:
+                        rows.append((retailer, tx_type, finish, d, float(val)))
+    return rows
+
+
 def _extract_paper_eav_rows(
     paper_dict: dict[str, Any] | None, uuid: str, snapshot_date: str
 ) -> list[dict[str, Any]]:
@@ -42,30 +68,25 @@ def _extract_paper_eav_rows(
     look-back semantics: selects the most recent price per combination where
     date key <= snapshot_date.
     """
-    if not paper_dict:
-        return []
-    rows = []
-    for retailer, retailer_data in paper_dict.items():
-        if not retailer_data:
+    by_combo: dict[tuple[str, str, str], tuple[str, float]] = {}
+    for retailer, tx_type, finish, d, price in _walk_paper_prices(paper_dict):
+        if d > snapshot_date:
             continue
-        for tx_type in ("buylist", "retail"):
-            listing = (retailer_data.get(tx_type)) or {}
-            for finish, prices in listing.items():
-                if not isinstance(prices, dict):
-                    continue
-                candidates = {k: v for k, v in prices.items() if k <= snapshot_date}
-                if candidates:
-                    rows.append(
-                        {
-                            "uuid": uuid,
-                            "snapshot_date": snapshot_date,
-                            "retailer": retailer,
-                            "tx_type": tx_type,
-                            "finish": finish,
-                            "price": float(candidates[max(candidates)]),
-                        }
-                    )
-    return rows
+        key = (retailer, tx_type, finish)
+        if key not in by_combo or d > by_combo[key][0]:
+            by_combo[key] = (d, price)
+
+    return [
+        {
+            "uuid": uuid,
+            "snapshot_date": snapshot_date,
+            "retailer": retailer,
+            "tx_type": tx_type,
+            "finish": finish,
+            "price": price,
+        }
+        for (retailer, tx_type, finish), (_, price) in by_combo.items()
+    ]
 
 
 class BronzeStorage(BaseStorage):
@@ -184,26 +205,17 @@ class BronzeStorage(BaseStorage):
             uuid_str = dump["uuid"]
             paper = dump.get("paper") or {}
 
-            for retailer, retailer_data in paper.items():
-                if not retailer_data:
-                    continue
-                for tx_type in ("buylist", "retail"):
-                    listing = (retailer_data.get(tx_type)) or {}
-                    for finish, prices in listing.items():
-                        if not isinstance(prices, dict):
-                            continue
-                        for d, val in prices.items():
-                            if val is not None:
-                                rows.append(
-                                    {
-                                        "uuid": uuid_str,
-                                        "snapshot_date": d,
-                                        "retailer": retailer,
-                                        "tx_type": tx_type,
-                                        "finish": finish,
-                                        "price": float(val),
-                                    }
-                                )
+            for retailer, tx_type, finish, d, price in _walk_paper_prices(paper):
+                rows.append(
+                    {
+                        "uuid": uuid_str,
+                        "snapshot_date": d,
+                        "retailer": retailer,
+                        "tx_type": tx_type,
+                        "finish": finish,
+                        "price": price,
+                    }
+                )
 
         if not rows:
             logger.warning("No date-keyed prices found in records — skipping seed")
