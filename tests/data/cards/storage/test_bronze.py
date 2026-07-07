@@ -321,6 +321,26 @@ class TestIncrementalLoad:
             row = b._con.execute("SELECT count(*) FROM test_table").fetchone()
         assert row is not None and row[0] == 1
 
+    def test_inserts_rows_on_first_call(self):
+        with _bronze() as b:
+            b._incremental_load(
+                [_Card(id="1", name="Alpha"), _Card(id="2", name="Beta")],
+                "test_table",
+                "id",
+            )
+            ids = {
+                row[0]
+                for row in b._con.execute("SELECT id FROM test_table").fetchall()
+            }
+        assert ids == {"1", "2"}
+
+    def test_new_key_appended_when_table_exists(self):
+        with _bronze() as b:
+            b._incremental_load([_Card(id="1", name="A")], "test_table", "id")
+            b._incremental_load([_Card(id="2", name="B")], "test_table", "id")
+            row = b._con.execute("SELECT count(*) FROM test_table").fetchone()
+        assert row is not None and row[0] == 2
+
     def test_upserts_existing_record(self):
         with _bronze() as b:
             b._incremental_load([_Card(id="1", name="Old")], "test_table", "id")
