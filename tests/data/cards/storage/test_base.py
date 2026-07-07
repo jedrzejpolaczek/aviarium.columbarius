@@ -189,6 +189,8 @@ class TestGetTables:
 @pytest.fixture
 def mem_con():
     """In-memory DuckDB connection, closed after each test."""
+    # Pre-existing local fixture, functionally identical to conftest.py's memory_con;
+    # not consolidated in this pilot — see Task 13 in the maintainability remediation plan.
     con = duckdb.connect(":memory:")
     yield con
     con.close()
