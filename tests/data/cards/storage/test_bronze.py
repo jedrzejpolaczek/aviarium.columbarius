@@ -221,6 +221,15 @@ class TestExtractPaperEavRows:
 
 # ---------------------------------------------------------------------------
 # BronzeStorage._full_load_table
+#
+# Note: a "staging view cleaned up after write" test existed for each of
+# _full_load_table / _incremental_load / _snapshot in the pre-merge
+# tests/cards/test_storage.py, checking for pre-unification view names
+# (_save_staging / _incremental_staging / _snapshot_staging respectively).
+# DuckDBWriter now always registers a single "_staging" view regardless of
+# operation, so those old assertions checked a name that's never created —
+# they passed vacuously whether or not cleanup actually happened. They were
+# intentionally not ported here rather than carried forward as dead weight.
 # ---------------------------------------------------------------------------
 
 
@@ -329,8 +338,7 @@ class TestIncrementalLoad:
                 "id",
             )
             ids = {
-                row[0]
-                for row in b._con.execute("SELECT id FROM test_table").fetchall()
+                row[0] for row in b._con.execute("SELECT id FROM test_table").fetchall()
             }
         assert ids == {"1", "2"}
 
@@ -388,9 +396,7 @@ class TestIncrementalLoad:
             )
             b._incremental_load([_Card(id="2", name="Updated")], "test_table", "id")
 
-            row = b._con.execute(
-                "SELECT count(*) FROM test_table"
-            ).fetchone()
+            row = b._con.execute("SELECT count(*) FROM test_table").fetchone()
             assert row is not None and row[0] == 2
             row = b._con.execute(
                 "SELECT name FROM test_table WHERE id = '1'"
@@ -480,9 +486,7 @@ class TestSnapshot:
         with _bronze() as b:
             with patch("src.data.cards.storage.bronze.storage.date") as mock_date:
                 mock_date.today.return_value = date_cls.fromisoformat("2026-01-01")
-                b._snapshot(
-                    [_Card(id="42", name="A")], "id", "test_history"
-                )
+                b._snapshot([_Card(id="42", name="A")], "id", "test_history")
             row = b._con.execute(
                 "SELECT id, snapshot_date FROM test_history"
             ).fetchone()
