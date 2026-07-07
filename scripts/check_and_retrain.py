@@ -39,6 +39,49 @@ def _write_status(status: dict[str, object]) -> None:
     STATUS_PATH.write_text(json.dumps(status, indent=2))
 
 
+def _check_preconditions(
+    conn: duckdb.DuckDBPyConnection,
+) -> tuple[bool, str, str | None]:
+    """Check whether a retrain should run.
+
+    Returns (triggered, reason, snapshot_date). ``snapshot_date`` is None
+    when not applicable (no trigger fired, or no gold snapshot exists).
+    """
+    triggered, reason = should_retrain(conn)
+    if not triggered:
+        return False, reason, None
+    snapshot_date = get_latest_gold_snapshot_date(conn)
+    return True, reason, snapshot_date
+
+
+def _do_retrain(
+    conn: duckdb.DuckDBPyConnection, snapshot_date: str, reason: str
+) -> tuple[bool, dict[str, object]]:
+    logger.warning(
+        "Retrain triggered (reason=%s) — retraining on snapshot %s.",
+        reason,
+        snapshot_date,
+    )
+    try:
+        run_id = retrain(conn, snapshot_date)
+    except Exception as exc:
+        logger.error("Retrain failed: %s", exc)
+        return False, {
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "result": "error",
+            "reason": "retrain_failed",
+            "error": str(exc),
+        }
+
+    logger.info("Retrain complete. New run_id: %s", run_id)
+    return True, {
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "result": "retrained",
+        "reason": reason,
+        "run_id": run_id,
+    }
+
+
 def main() -> int:
     setup_logging(log_dir=Path("logs"))
 
@@ -57,7 +100,7 @@ def main() -> int:
 
     conn = duckdb.connect(GOLD_DB_PATH, read_only=True)
     try:
-        triggered, reason = should_retrain(conn)
+        triggered, reason, snapshot_date = _check_preconditions(conn)
 
         if not triggered:
             logger.info("No retrain trigger fired (reason=%s).", reason)
@@ -70,7 +113,6 @@ def main() -> int:
             )
             return 0
 
-        snapshot_date = get_latest_gold_snapshot_date(conn)
         if snapshot_date is None:
             logger.error("gold_price_features is empty — cannot retrain.")
             _write_status(
@@ -82,35 +124,9 @@ def main() -> int:
             )
             return 1
 
-        logger.warning(
-            "Retrain triggered (reason=%s) — retraining on snapshot %s.",
-            reason,
-            snapshot_date,
-        )
-        try:
-            run_id = retrain(conn, snapshot_date)
-        except Exception as exc:
-            logger.error("Retrain failed: %s", exc)
-            _write_status(
-                {
-                    "checked_at": datetime.now(timezone.utc).isoformat(),
-                    "result": "error",
-                    "reason": "retrain_failed",
-                    "error": str(exc),
-                }
-            )
-            return 1
-
-        logger.info("Retrain complete. New run_id: %s", run_id)
-        _write_status(
-            {
-                "checked_at": datetime.now(timezone.utc).isoformat(),
-                "result": "retrained",
-                "reason": reason,
-                "run_id": run_id,
-            }
-        )
-        return 0
+        ok, status = _do_retrain(conn, snapshot_date, reason)
+        _write_status(status)
+        return 0 if ok else 1
     finally:
         conn.close()
 
