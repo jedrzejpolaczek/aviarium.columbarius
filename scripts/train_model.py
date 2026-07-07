@@ -5,6 +5,7 @@ import sys
 
 import duckdb
 
+from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
 from src.ml.training.tracking import setup_experiment
 
 GOLD_DB_PATH = os.getenv("GOLD_DB_PATH", "data/gold/cards.duckdb")
@@ -30,14 +31,12 @@ def main() -> None:
         sys.exit(1)
 
     conn = duckdb.connect(args.db_path, read_only=True)
-    row = conn.execute("SELECT MAX(snapshot_date) FROM gold_price_features").fetchone()
-    snapshot_date = row[0] if row else None
+    snapshot_date = get_latest_gold_snapshot_date(conn)
 
     if snapshot_date is None:
         logger.error("gold_price_features is empty — run the ETL pipeline first.")
         sys.exit(1)
 
-    snapshot_date = str(snapshot_date)
     logger.info("Training on snapshot: %s", snapshot_date)
 
     setup_experiment()

@@ -24,6 +24,7 @@ from pathlib import Path
 
 import duckdb as duckdb
 
+from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
 from src.logger import get_logger, setup_logging
 from src.monitoring.retraining import retrain, should_retrain
 
@@ -69,10 +70,8 @@ def main() -> int:
             )
             return 0
 
-        row = conn.execute(
-            "SELECT MAX(snapshot_date) FROM gold_price_features"
-        ).fetchone()
-        if row is None or row[0] is None:
+        snapshot_date = get_latest_gold_snapshot_date(conn)
+        if snapshot_date is None:
             logger.error("gold_price_features is empty — cannot retrain.")
             _write_status(
                 {
@@ -82,7 +81,6 @@ def main() -> int:
                 }
             )
             return 1
-        snapshot_date = str(row[0])
 
         logger.warning(
             "Retrain triggered (reason=%s) — retraining on snapshot %s.",

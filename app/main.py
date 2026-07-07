@@ -40,6 +40,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import cards, health, predict, similar, underpriced
+from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
 from src.ml.features.pipeline import (
     build_feature_pipeline,
     build_inference_features,
@@ -84,12 +85,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.db = duckdb.connect(GOLD_DB_PATH, read_only=True)
 
     # 2. Latest snapshot available in the database
-    _row = app.state.db.execute(
-        "SELECT MAX(snapshot_date) FROM gold_price_features"
-    ).fetchone()
-    if _row is None or _row[0] is None:
+    snapshot_date = get_latest_gold_snapshot_date(app.state.db)
+    if snapshot_date is None:
         raise RuntimeError("gold_price_features is empty — run the ETL pipeline first.")
-    snapshot_date = str(_row[0])
     app.state.snapshot_date = snapshot_date
 
     # 3. Build full feature matrix (lag + card features, log transforms, stub cols)

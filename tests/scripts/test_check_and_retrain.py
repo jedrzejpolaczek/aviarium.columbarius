@@ -6,6 +6,29 @@ from unittest.mock import MagicMock
 from scripts import check_and_retrain
 
 
+def _make_fake_conn_with_snapshot(snapshot_date: str) -> MagicMock:
+    """Build a fake DuckDB connection whose gold_price_features MAX(snapshot_date)
+    resolves to `snapshot_date`.
+
+    get_latest_gold_snapshot_date() first checks table presence via a
+    ``SHOW TABLES`` query (get_tables) before running the MAX query, so the
+    fake execute() must respond to both statements rather than always
+    returning the same canned fetchone() result.
+    """
+
+    def _execute(sql, *args, **kwargs):
+        result = MagicMock()
+        if "SHOW TABLES" in sql:
+            result.fetchall.return_value = [("gold_price_features",)]
+        else:
+            result.fetchone.return_value = (snapshot_date,)
+        return result
+
+    fake_conn = MagicMock()
+    fake_conn.execute.side_effect = _execute
+    return fake_conn
+
+
 def test_main_returns_1_when_gold_db_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(
         check_and_retrain, "GOLD_DB_PATH", str(tmp_path / "missing.duckdb")
@@ -49,8 +72,7 @@ def test_main_retrains_when_triggered(tmp_path, monkeypatch):
     monkeypatch.setattr(check_and_retrain, "GOLD_DB_PATH", str(db_path))
     monkeypatch.setattr(check_and_retrain, "STATUS_PATH", tmp_path / "status.json")
 
-    fake_conn = MagicMock()
-    fake_conn.execute.return_value.fetchone.return_value = ("2026-07-01",)
+    fake_conn = _make_fake_conn_with_snapshot("2026-07-01")
     monkeypatch.setattr(check_and_retrain.duckdb, "connect", lambda *a, **k: fake_conn)
     monkeypatch.setattr(
         check_and_retrain, "should_retrain", lambda conn: (True, "mape_threshold")
@@ -74,8 +96,7 @@ def test_main_writes_error_status_when_retrain_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(check_and_retrain, "GOLD_DB_PATH", str(db_path))
     monkeypatch.setattr(check_and_retrain, "STATUS_PATH", tmp_path / "status.json")
 
-    fake_conn = MagicMock()
-    fake_conn.execute.return_value.fetchone.return_value = ("2026-07-01",)
+    fake_conn = _make_fake_conn_with_snapshot("2026-07-01")
     monkeypatch.setattr(check_and_retrain.duckdb, "connect", lambda *a, **k: fake_conn)
     monkeypatch.setattr(
         check_and_retrain, "should_retrain", lambda conn: (True, "mape_threshold")

@@ -27,6 +27,7 @@ Composition:
 
 from collections.abc import Callable
 
+import duckdb
 import pandas as pd
 
 from src.data.cards.storage.base.storage import get_tables
@@ -45,6 +46,21 @@ logger = get_logger(__name__)
 # the training frame has zero usable rows. Matches validation_config.json
 # min_train_days intent; the hard floor is the prediction horizon itself.
 _MIN_ML_HORIZON_DAYS = 7
+
+
+def get_latest_gold_snapshot_date(con: duckdb.DuckDBPyConnection) -> str | None:
+    """Return the latest snapshot_date in gold_price_features, or None if empty/absent.
+
+    Shared by app/main.py, scripts/train_model.py, and scripts/check_and_retrain.py,
+    each of which need the latest available price snapshot from a raw DuckDB
+    connection (not a GoldStorage instance) and previously ran this query inline.
+    """
+    if "gold_price_features" not in get_tables(con):
+        return None
+    row = con.execute("SELECT MAX(snapshot_date) FROM gold_price_features").fetchone()
+    if row is None or row[0] is None:
+        return None
+    return str(row[0])
 
 
 class GoldStorage(TransformStorage):
