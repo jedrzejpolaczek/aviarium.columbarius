@@ -49,11 +49,23 @@ class GoldSignalBuilders:
         "price_change_30d_pct",
     ]
 
+    # Shared by build_demand_signals(), build_events() and
+    # build_ban_price_impact(): computes each format's current legality plus
+    # its previous-snapshot value via LAG() over (id, snapshot_date), along
+    # with edhrec_rank/prev_rank. Canonical columns: id, snapshot_date,
+    # edhrec_rank, prev_rank, curr_<format>, prev_<format> for each of
+    # commander/standard/modern/legacy/vintage.
+    _LEGALITY_LAG_CTE = (_SQL_DIR / "_legality_lag_cte.sql").read_text()
+
     # Shared by build_events() and build_ban_price_impact(): detects every
     # ban/unban legality transition per (card id, snapshot_date, format) by
     # comparing each snapshot's legality to the previous one via LAG().
     # Canonical columns: id, snapshot_date, format, event_type.
-    _TRANSITIONS_CTE = (_SQL_DIR / "transitions_cte.sql").read_text()
+    _TRANSITIONS_CTE = (
+        (_SQL_DIR / "transitions_cte.sql")
+        .read_text()
+        .format(legality_lag=_LEGALITY_LAG_CTE)
+    )
 
     def __init__(self, silver_con: duckdb.DuckDBPyConnection) -> None:
         self._silver_con = silver_con
@@ -78,7 +90,11 @@ class GoldSignalBuilders:
         silver_tables = get_tables(self._silver_con)
         if "silver_meta_history" not in silver_tables:
             return pd.DataFrame()
-        sql = (_SQL_DIR / "demand_signals.sql").read_text()
+        sql = (
+            (_SQL_DIR / "demand_signals.sql")
+            .read_text()
+            .format(legality_lag=self._LEGALITY_LAG_CTE)
+        )
         return self._silver_con.execute(sql).df()
 
     def build_events(self) -> pd.DataFrame:
