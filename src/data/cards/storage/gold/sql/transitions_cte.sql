@@ -1,3 +1,5 @@
+-- {{legality_lag}} is substituted by GoldSignalBuilders._TRANSITIONS_CTE (see signals.py),
+-- which itself interpolates sql/_legality_lag_cte.sql's "lagged AS (...)" CTE body here.
 {legality_lag},
 transitions AS (
     SELECT id, snapshot_date, 'commander' AS format,

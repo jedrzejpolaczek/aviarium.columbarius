@@ -1,3 +1,5 @@
+-- {{legality_lag}} is substituted by build_demand_signals() with
+-- sql/_legality_lag_cte.sql's "lagged AS (...)" CTE body (see signals.py).
 WITH {legality_lag}
 SELECT
     id,

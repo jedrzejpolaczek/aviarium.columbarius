@@ -1,3 +1,5 @@
+-- edhrec_rank/prev_rank are consumed only by demand_signals.sql;
+-- unused (harmless no-op) for events.sql/ban_price_impact_events.sql.
 lagged AS (
     SELECT
         id,
