@@ -25,6 +25,10 @@ Composition:
     _writer    (DuckDBWriter)         — DROP-AND-REPLACE write helper
 """
 
+from collections.abc import Callable
+
+import pandas as pd
+
 from src.data.cards.storage.base.storage import get_tables
 from src.data.cards.storage.base.transformer import TransformStorage
 from src.data.cards.storage.gold.features import GoldFeatureBuilders
@@ -110,6 +114,27 @@ class GoldStorage(TransformStorage):
     # Pipeline
     # ------------------------------------------------------------------
 
+    def _build_if_present(
+        self,
+        required: tuple[str, ...],
+        silver_tables: set[str],
+        build_fn: Callable[[], pd.DataFrame],
+        gold_table: str,
+    ) -> None:
+        """Build and write `gold_table` iff every table in `required` exists.
+
+        Otherwise logs which of `required` is missing and skips the build —
+        the shared shape behind the guard clauses in _pipeline.
+        """
+        missing = [t for t in required if t not in silver_tables]
+        if missing:
+            logger.warning(
+                "Missing Silver tables %s — skipping %s", missing, gold_table
+            )
+            return
+        logger.progress("Building %s", gold_table)
+        self._writer.full_load(build_fn(), gold_table)
+
     def _pipeline(self, update: bool) -> None:
         """Run the full Silver → Gold transformation pipeline.
 
@@ -131,91 +156,64 @@ class GoldStorage(TransformStorage):
         """
         silver_tables = get_tables(self._silver_con)
 
-        if "silver_cards" in silver_tables:
-            logger.progress("Building gold_card_features")
-            self._writer.full_load(
-                self._features.build_card_features(), "gold_card_features"
-            )
-        else:
-            logger.warning("silver_cards not found — skipping gold_card_features")
+        self._build_if_present(
+            ("silver_cards",),
+            silver_tables,
+            self._features.build_card_features,
+            "gold_card_features",
+        )
+        self._build_if_present(
+            ("silver_prices_history",),
+            silver_tables,
+            self._features.build_price_features,
+            "gold_price_features",
+        )
+        self._build_if_present(
+            ("silver_language_prices_history", "silver_prices_history"),
+            silver_tables,
+            self._features.build_language_premiums,
+            "gold_language_premiums",
+        )
 
-        if "silver_prices_history" in silver_tables:
-            logger.progress("Building gold_price_features")
-            self._writer.full_load(
-                self._features.build_price_features(), "gold_price_features"
-            )
-        else:
-            logger.warning(
-                "silver_prices_history not found — skipping gold_price_features"
-            )
-
-        if (
-            "silver_language_prices_history" in silver_tables
-            and "silver_prices_history" in silver_tables
-        ):
-            logger.progress("Building gold_language_premiums")
-            self._writer.full_load(
-                self._features.build_language_premiums(), "gold_language_premiums"
-            )
-        else:
-            missing = [
-                t
-                for t in ("silver_language_prices_history", "silver_prices_history")
-                if t not in silver_tables
-            ]
-            logger.warning(
-                "Missing Silver tables %s — skipping gold_language_premiums", missing
-            )
-
+        # gold_demand_signals and gold_events share a single Silver dependency
+        # (silver_meta_history) — kept as a pair with one combined warning so
+        # a missing-table log line doesn't repeat itself twice for one cause.
         if "silver_meta_history" in silver_tables:
-            logger.progress("Building gold_demand_signals")
-            self._writer.full_load(
-                self._signals.build_demand_signals(), "gold_demand_signals"
+            self._build_if_present(
+                ("silver_meta_history",),
+                silver_tables,
+                self._signals.build_demand_signals,
+                "gold_demand_signals",
             )
-            logger.progress("Building gold_events")
-            self._writer.full_load(self._signals.build_events(), "gold_events")
+            self._build_if_present(
+                ("silver_meta_history",),
+                silver_tables,
+                self._signals.build_events,
+                "gold_events",
+            )
         else:
             logger.warning(
                 "silver_meta_history not found — skipping gold_demand_signals, gold_events"
             )
 
-        if "silver_format_staples_history" in silver_tables:
-            logger.progress("Building gold_format_staples")
-            self._writer.full_load(
-                self._signals.build_format_staples(), "gold_format_staples"
-            )
-        else:
-            logger.warning(
-                "silver_format_staples_history not found — skipping gold_format_staples"
-            )
-
-        if (
-            "silver_meta_history" in silver_tables
-            and "silver_prices_history" in silver_tables
-        ):
-            logger.progress("Building gold_ban_price_impact")
-            self._writer.full_load(
-                self._signals.build_ban_price_impact(), "gold_ban_price_impact"
-            )
-        else:
-            missing = [
-                t
-                for t in ("silver_meta_history", "silver_prices_history")
-                if t not in silver_tables
-            ]
-            logger.warning(
-                "Missing Silver tables %s — skipping gold_ban_price_impact", missing
-            )
-
-        if "silver_tournament_results_history" in silver_tables:
-            logger.progress("Building gold_tournament_signals")
-            self._writer.full_load(
-                self._signals.build_tournament_signals(), "gold_tournament_signals"
-            )
-        else:
-            logger.warning(
-                "silver_tournament_results_history not found — skipping gold_tournament_signals"
-            )
+        self._build_if_present(
+            ("silver_format_staples_history",),
+            silver_tables,
+            self._signals.build_format_staples,
+            "gold_format_staples",
+        )
+        self._build_if_present(
+            ("silver_meta_history", "silver_prices_history"),
+            silver_tables,
+            self._signals.build_ban_price_impact,
+            "gold_ban_price_impact",
+        )
+        self._build_if_present(
+            ("silver_tournament_results_history",),
+            silver_tables,
+            self._signals.build_tournament_signals,
+            "gold_tournament_signals",
+        )
 
         gold_tables = get_tables(self._gold_con)
         if "gold_price_features" in gold_tables:
