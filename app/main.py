@@ -32,12 +32,15 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import NamedTuple
 
 import duckdb
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sklearn.pipeline import Pipeline
 
 from app.routers import cards, health, predict, similar, underpriced
 from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
@@ -57,6 +60,15 @@ MODEL_RUN_ID = os.getenv("MODEL_RUN_ID", "")
 logger = get_logger(__name__)
 
 
+class FeatureMatrices(NamedTuple):
+    """Result of :func:`_build_feature_matrices` — one field per pipeline artifact."""
+
+    X_all: pd.DataFrame
+    X_all_t: pd.DataFrame
+    pipeline: Pipeline
+    feature_names: list[str]
+
+
 def _connect_db() -> duckdb.DuckDBPyConnection:
     """Open a read-only DuckDB connection (API never writes)."""
     return duckdb.connect(GOLD_DB_PATH, read_only=True)
@@ -64,7 +76,7 @@ def _connect_db() -> duckdb.DuckDBPyConnection:
 
 def _build_feature_matrices(
     db: duckdb.DuckDBPyConnection, snapshot_date: str
-) -> tuple[pd.DataFrame, pd.DataFrame, object, list[str]]:
+) -> FeatureMatrices:
     """Build the full feature matrix and fit the sklearn pipeline once.
 
     Returns the raw feature matrix ``X_all``, the pipeline-transformed matrix
@@ -76,10 +88,10 @@ def _build_feature_matrices(
     X_t = pipeline.fit_transform(X_all)
     feature_names = get_feature_names(pipeline)
     X_all_t = pd.DataFrame(np.array(X_t, dtype=np.float64), columns=feature_names)
-    return X_all, X_all_t, pipeline, feature_names
+    return FeatureMatrices(X_all, X_all_t, pipeline, feature_names)
 
 
-def _load_model_or_degrade(model_run_id: str) -> tuple[object | None, str]:
+def _load_model_or_degrade(model_run_id: str) -> tuple[lgb.Booster | None, str]:
     """Load the LightGBM booster from MLflow, or start in degraded mode.
 
     Degraded mode (model=None) is entered if ``model_run_id`` is empty or the
@@ -143,19 +155,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.snapshot_date = snapshot_date
 
     # 3-4. Build full feature matrix and fit sklearn pipeline once
-    X_all, X_all_t, pipeline, feature_names = _build_feature_matrices(
-        app.state.db, snapshot_date
-    )
-    app.state.X_all = X_all
-    app.state.X_all_t = X_all_t
-    app.state.pipeline = pipeline
-    app.state.feature_names = feature_names
+    features = _build_feature_matrices(app.state.db, snapshot_date)
+    app.state.X_all = features.X_all
+    app.state.X_all_t = features.X_all_t
+    app.state.pipeline = features.pipeline
+    app.state.feature_names = features.feature_names
 
     # 5. Load LightGBM booster from MLflow (optional — degraded mode on failure)
     app.state.model, app.state.model_run_id = _load_model_or_degrade(MODEL_RUN_ID)
 
     # 6. Build CardSimilarityIndex with n_neighbors=50 (max returned by /similar)
-    app.state.similarity_index = _build_similarity_index(X_all)
+    app.state.similarity_index = _build_similarity_index(features.X_all)
 
     yield
 
