@@ -2099,6 +2099,41 @@ def _gcf(rows: list[dict]) -> pd.DataFrame:
     )
 
 
+def _gds(rows: list[dict]) -> pd.DataFrame:
+    """Minimal gold_demand_signals rows."""
+    return pd.DataFrame(
+        [
+            {
+                "id": r["id"],
+                "snapshot_date": r["snapshot_date"],
+                "commander_banned": r.get("commander_banned", False),
+                "modern_banned": r.get("modern_banned", False),
+                "legacy_banned": r.get("legacy_banned", False),
+                "standard_banned": r.get("standard_banned", False),
+                "commander_unbanned": r.get("commander_unbanned", False),
+                "modern_unbanned": r.get("modern_unbanned", False),
+                "edhrec_rank_change": r.get("edhrec_rank_change", None),
+            }
+            for r in rows
+        ]
+    )
+
+
+def _gts(rows: list[dict]) -> pd.DataFrame:
+    """Minimal gold_tournament_signals rows."""
+    return pd.DataFrame(
+        [
+            {
+                "oracle_id": r["oracle_id"],
+                "top8_appearances_30d": r.get("top8_appearances_30d", 0),
+                "top8_appearances_90d": r.get("top8_appearances_90d", 0),
+                "top8_copies_avg": r.get("top8_copies_avg", 0.0),
+            }
+            for r in rows
+        ]
+    )
+
+
 def _gfs(rows: list[dict]) -> pd.DataFrame:
     """Minimal gold_format_staples rows."""
     return pd.DataFrame(
@@ -2340,3 +2375,59 @@ class TestBuildMLDataset:
         for col in ("rarity", "mana_value", "is_reserved", "set_type"):
             assert col in result.columns, f"Column {col} missing"
             assert pd.isna(result.iloc[0][col]), f"{col} should be NULL"
+
+    def test_demand_and_tournament_columns_populated_when_present(self):
+        """Regression test for the has_signals=True/has_tournament=True combination.
+
+        Every other test in this class leaves gold_demand_signals and
+        gold_tournament_signals absent, so this is the only committed coverage
+        of build_ml_dataset's data-driven cols_sql/joins_sql assembly actually
+        joining real (non-NULL) demand and tournament values together.
+        """
+        pf = _gpf(
+            [
+                {
+                    "uuid": "u1",
+                    "scryfall_id": "s1",
+                    "snapshot_date": "2026-05-01",
+                    "eur": 5.0,
+                }
+            ]
+        )
+        cf = _gcf(
+            [{"uuid": "u1", "scryfall_id": "s1", "oracle_id": "o1", "name": "Sol Ring"}]
+        )
+        ds = _gds(
+            [
+                {
+                    "id": "s1",
+                    "snapshot_date": "2026-05-01",
+                    "commander_banned": False,
+                    "edhrec_rank_change": -5.0,
+                }
+            ]
+        )
+        ts = _gts(
+            [
+                {
+                    "oracle_id": "o1",
+                    "top8_appearances_30d": 3,
+                    "top8_appearances_90d": 9,
+                    "top8_copies_avg": 1.5,
+                }
+            ]
+        )
+        result = _build_ml(
+            {
+                "gold_price_features": pf,
+                "gold_card_features": cf,
+                "gold_demand_signals": ds,
+                "gold_tournament_signals": ts,
+            }
+        )
+        row = result.iloc[0]
+        assert row["commander_banned"] == False  # noqa: E712
+        assert row["edhrec_rank_change"] == pytest.approx(-5.0)
+        assert row["top8_30d_total"] == pytest.approx(3.0)
+        assert row["top8_90d_total"] == pytest.approx(9.0)
+        assert row["top8_copies_avg"] == pytest.approx(1.5)

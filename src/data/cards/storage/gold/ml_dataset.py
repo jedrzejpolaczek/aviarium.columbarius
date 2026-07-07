@@ -64,7 +64,7 @@ class GoldMLDatasetBuilder:
         # tuple. When the flag is False the real columns are replaced by NULL
         # placeholders of the same names and the join is omitted entirely, so
         # missing Gold tables degrade gracefully rather than raising.
-        optional_joins = [
+        optional_joins: list[tuple[bool, str, str, str]] = [
             (
                 has_card,
                 """cf.rarity, cf.mana_value, cf.is_reserved, cf.is_reprint,
@@ -146,9 +146,7 @@ class GoldMLDatasetBuilder:
             real_cols if flag else null_cols
             for flag, real_cols, null_cols, _ in optional_joins
         )
-        joins_sql = "\n".join(
-            join for flag, _, _, join in optional_joins if flag
-        )
+        joins_sql = "\n".join(join for flag, _, _, join in optional_joins if flag)
 
         sql = (
             (_SQL_DIR / "ml_dataset.sql")
