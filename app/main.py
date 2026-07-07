@@ -57,6 +57,58 @@ MODEL_RUN_ID = os.getenv("MODEL_RUN_ID", "")
 logger = get_logger(__name__)
 
 
+def _connect_db() -> duckdb.DuckDBPyConnection:
+    """Open a read-only DuckDB connection (API never writes)."""
+    return duckdb.connect(GOLD_DB_PATH, read_only=True)
+
+
+def _build_feature_matrices(
+    db: duckdb.DuckDBPyConnection, snapshot_date: str
+) -> tuple[pd.DataFrame, pd.DataFrame, object, list[str]]:
+    """Build the full feature matrix and fit the sklearn pipeline once.
+
+    Returns the raw feature matrix ``X_all``, the pipeline-transformed matrix
+    ``X_all_t`` (pre-computed for O(1) per-request inference), the fitted
+    pipeline, and the resulting feature names.
+    """
+    X_all = build_inference_features(db, snapshot_date)
+    pipeline = build_feature_pipeline()
+    X_t = pipeline.fit_transform(X_all)
+    feature_names = get_feature_names(pipeline)
+    X_all_t = pd.DataFrame(np.array(X_t, dtype=np.float64), columns=feature_names)
+    return X_all, X_all_t, pipeline, feature_names
+
+
+def _load_model_or_degrade(model_run_id: str) -> tuple[object | None, str]:
+    """Load the LightGBM booster from MLflow, or start in degraded mode.
+
+    Degraded mode (model=None) is entered if ``model_run_id`` is empty or the
+    MLflow load raises — /predict and /underpriced return 503 in that case.
+    """
+    if not model_run_id:
+        logger.info("No MODEL_RUN_ID set — /predict and /underpriced will return 503.")
+        return None, ""
+    try:
+        model = load_model_from_mlflow(model_run_id)
+        logger.info("Model loaded: %s", model_run_id)
+        return model, model_run_id
+    except Exception as exc:
+        logger.warning("Model load failed (%s): %s", model_run_id, exc)
+        return None, ""
+
+
+def _build_similarity_index(X_all: pd.DataFrame) -> CardSimilarityIndex:
+    """Build a CardSimilarityIndex with n_neighbors=50 (max returned by /similar)."""
+    sim_df = X_all.copy()
+    for feat in SIMILARITY_FEATURES:
+        if feat not in sim_df.columns:
+            sim_df[feat] = 0
+
+    sim_index = CardSimilarityIndex(n_neighbors=50)
+    sim_index.fit(sim_df)
+    return sim_index
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup and shutdown context manager for the FastAPI application.
@@ -82,7 +134,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup_logging(logging.INFO)
 
     # 1. Connect DuckDB (read-only — API never writes)
-    app.state.db = duckdb.connect(GOLD_DB_PATH, read_only=True)
+    app.state.db = _connect_db()
 
     # 2. Latest snapshot available in the database
     snapshot_date = get_latest_gold_snapshot_date(app.state.db)
@@ -90,44 +142,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         raise RuntimeError("gold_price_features is empty — run the ETL pipeline first.")
     app.state.snapshot_date = snapshot_date
 
-    # 3. Build full feature matrix (lag + card features, log transforms, stub cols)
-    X_all = build_inference_features(app.state.db, snapshot_date)
+    # 3-4. Build full feature matrix and fit sklearn pipeline once
+    X_all, X_all_t, pipeline, feature_names = _build_feature_matrices(
+        app.state.db, snapshot_date
+    )
     app.state.X_all = X_all
-
-    # 4. Fit sklearn pipeline once; pre-transform for O(1) inference per request
-    pipeline = build_feature_pipeline()
-    X_t = pipeline.fit_transform(X_all)
-    feature_names = get_feature_names(pipeline)
+    app.state.X_all_t = X_all_t
     app.state.pipeline = pipeline
     app.state.feature_names = feature_names
-    app.state.X_all_t = pd.DataFrame(
-        np.array(X_t, dtype=np.float64), columns=feature_names
-    )
 
     # 5. Load LightGBM booster from MLflow (optional — degraded mode on failure)
-    if MODEL_RUN_ID:
-        try:
-            app.state.model = load_model_from_mlflow(MODEL_RUN_ID)
-            app.state.model_run_id = MODEL_RUN_ID
-            logger.info("Model loaded: %s", MODEL_RUN_ID)
-        except Exception as exc:
-            logger.warning("Model load failed (%s): %s", MODEL_RUN_ID, exc)
-            app.state.model = None
-            app.state.model_run_id = ""
-    else:
-        app.state.model = None
-        app.state.model_run_id = ""
-        logger.info("No MODEL_RUN_ID set — /predict and /underpriced will return 503.")
+    app.state.model, app.state.model_run_id = _load_model_or_degrade(MODEL_RUN_ID)
 
     # 6. Build CardSimilarityIndex with n_neighbors=50 (max returned by /similar)
-    sim_df = X_all.copy()
-    for feat in SIMILARITY_FEATURES:
-        if feat not in sim_df.columns:
-            sim_df[feat] = 0
-
-    sim_index = CardSimilarityIndex(n_neighbors=50)
-    sim_index.fit(sim_df)
-    app.state.similarity_index = sim_index
+    app.state.similarity_index = _build_similarity_index(X_all)
 
     yield
 
