@@ -17,6 +17,7 @@ Mock model always returns log_returns [0.5, -0.1, 0.0] regardless of input:
 
 from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager
+from typing import TypedDict
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -29,6 +30,24 @@ from app.routers import health, predict, similar, underpriced
 
 
 _LOG_RETURNS = np.array([0.5, -0.1, 0.0])
+
+
+class _StateOverrides(TypedDict, total=False):
+    """Overridable subset of ``app.state`` attributes for ``_build_test_app``.
+
+    ``total=False`` since each fixture only overrides the 1-2 keys it cares
+    about; the field list below is the authoritative set of overridable keys
+    and their real types, so mypy flags typos and wrong-type values at each
+    call site.
+    """
+
+    model: MagicMock | None
+    db: MagicMock
+    X_all: pd.DataFrame
+    X_all_t: pd.DataFrame
+    model_run_id: str
+    snapshot_date: str
+    similarity_index: MagicMock | None
 
 
 def _make_X_all() -> pd.DataFrame:
@@ -75,7 +94,7 @@ def _make_mock_model() -> MagicMock:
     return model
 
 
-def _build_test_app(state_overrides: dict[str, object]) -> FastAPI:
+def _build_test_app(state_overrides: _StateOverrides) -> FastAPI:
     """Build a test FastAPI app with a mock lifespan populating ``app.state``.
 
     All ``app.state`` attributes are populated with deterministic test data so
@@ -85,12 +104,13 @@ def _build_test_app(state_overrides: dict[str, object]) -> FastAPI:
 
     Args:
         state_overrides: Mapping of ``app.state`` attribute names to values
-            that override the defaults for this particular test app.
+            that override the defaults for this particular test app. Keys
+            must be a subset of ``_StateOverrides``'s fields.
 
     Returns:
         A configured but not-yet-started ``FastAPI`` instance.
     """
-    base_state: dict[str, object] = {
+    base_state: _StateOverrides = {
         "model": _make_mock_model(),
         "db": MagicMock(),
         "X_all": _make_X_all(),
@@ -99,7 +119,7 @@ def _build_test_app(state_overrides: dict[str, object]) -> FastAPI:
         "snapshot_date": "2026-01-01",
         "similarity_index": _make_similarity_index(),
     }
-    state = {**base_state, **state_overrides}
+    state: _StateOverrides = {**base_state, **state_overrides}
 
     @asynccontextmanager
     async def mock_lifespan(app: FastAPI) -> AsyncIterator[None]:
