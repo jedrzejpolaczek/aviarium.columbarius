@@ -359,3 +359,14 @@ class SilverPriceBuilder:
             "silver_language_prices_history",
             ["eur", "eur_foil", "usd", "usd_foil"],
         )
+
+
+MTGJSON_PRICE_COMBOS: frozenset[tuple[str, str, str]] = frozenset(
+    SilverPriceBuilder._MTGJSON_PRICE_MAP.values()
+)
+"""Public export of the (retailer, tx_type, finish) combinations Silver expects.
+
+Consumed by health.py's schema-drift check. Kept as a module-level constant
+(not a class attribute reach-through) so callers outside this module don't
+depend on SilverPriceBuilder's internal naming.
+"""

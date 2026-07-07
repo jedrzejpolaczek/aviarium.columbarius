@@ -5,14 +5,10 @@ from typing import Literal
 import duckdb
 
 from src.data.cards.storage.base.storage import get_tables
-from src.data.cards.storage.silver.prices import SilverPriceBuilder
+from src.data.cards.storage.silver.prices import MTGJSON_PRICE_COMBOS
 from src.logger import get_logger
 
 logger = get_logger(__name__)
-
-_SILVER_PRICE_COMBOS: frozenset[tuple[str, str, str]] = frozenset(
-    SilverPriceBuilder._MTGJSON_PRICE_MAP.values()
-)
 
 
 @dataclass
@@ -170,7 +166,7 @@ def _check_bronze_prices_schema_drift(
     Returns empty list if the EAV table is unavailable or has no EAV columns.
     """
     if expected is None:
-        expected = set(_SILVER_PRICE_COMBOS)
+        expected = set(MTGJSON_PRICE_COMBOS)
 
     try:
         rows = bronze_con.execute(

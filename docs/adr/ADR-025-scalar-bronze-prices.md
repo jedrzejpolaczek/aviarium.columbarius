@@ -26,8 +26,9 @@ Silver = semantic selection).
 - New retailers appearing in MTGJson (e.g. `cardkingdom`) are captured automatically in Bronze
   without code changes. Silver's CASE WHEN SQL is the single place that decides what downstream
   consumers see.
-- `_MTGJSON_PRICE_MAP` lives exclusively in `SilverPriceBuilder`. Bronze has no concept of
-  which combinations matter.
+- `_MTGJSON_PRICE_MAP` lives exclusively in `SilverPriceBuilder`, exported as the public
+  `MTGJSON_PRICE_COMBOS` module constant for consumers like `health.py`. Bronze has no
+  concept of which combinations matter.
 - Schema drift is detected post-pipeline by `_check_bronze_prices_schema_drift` (health.py),
   which produces WARN (not FAIL) when new or missing combinations are observed.
 - One-time migration via `scripts/migrate_bronze_prices.py` from `cards_copy.duckdb`.
