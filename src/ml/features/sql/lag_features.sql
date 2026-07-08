@@ -3,6 +3,10 @@
 -- all computed from gold_price_features with backward-only window functions
 -- (no future leakage). See src/ml/features/lag.py's module docstring for
 -- the full leakage-safety rationale.
+-- rolling_mean_7d and momentum_7d are numerically identical to
+-- price_features.sql's price_7d_avg and price_change_7d_pct — this is
+-- intentional, not an untracked duplication bug. See
+-- docs/investigations/repo-quirks.md for why they aren't merged.
 WITH lagged AS (
     SELECT
         uuid,

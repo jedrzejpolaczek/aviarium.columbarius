@@ -24,6 +24,9 @@ SELECT
 
     {edhrec_col}
 
+    -- price_7d_avg and price_change_7d_pct are intentionally recomputed
+    -- (not read back) by src/ml/features/sql/lag_features.sql as
+    -- rolling_mean_7d/momentum_7d — see docs/investigations/repo-quirks.md.
     AVG(p.eur) OVER w7  AS price_7d_avg,
     AVG(p.eur) OVER w30 AS price_30d_avg,
 
