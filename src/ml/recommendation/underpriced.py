@@ -3,9 +3,12 @@ Detects cards the model considers underpriced (predicted >> actual).
 
 STRATEGY PER TIER (from project pricing strategy and BAYESIAN_FINDINGS.md):
 - Tier 1 (< 100 EUR):     predicted/actual > 1.3 → ML flag
-- Tier 2 (100–1000 EUR):  ML flag + Bayesian guardrail — flag only when BA-02 HDI
-                          confirms the signal. Eliminates false alarms for expensive
-                          cards with wide credible intervals.
+- Tier 2 (100–1000 EUR):  ML flag only, same threshold as Tier 1 (see
+                          TIER2_FLAG_THRESHOLD below). The Bayesian guardrail
+                          (BA-02 HDI) described in BAYESIAN_FINDINGS.md is NOT
+                          YET wired in — flag_underpriced() does not gate
+                          Tier 2 on it. See the inline comment at the
+                          tier2_flag assignment.
 - Tier 3 (> 1000 EUR):    No ML flagging — too little data. Check Cardmarket manually.
 
 VALIDATION — BACKTEST (important for portfolio!):
