@@ -16,6 +16,7 @@ from src.data.dataclasses.format_staples import FormatStaple
 from src.data.dataclasses.mtgjson import MtgjsonCard, MtgjsonCardPrices
 from src.data.dataclasses.scryfall import ScryfallCard
 from src.data.dataclasses.tournament import TournamentResult
+from src.data.json_files import load_json_file
 from src.logger import get_logger
 
 T = TypeVar("T", bound=BaseModel)
@@ -73,13 +74,13 @@ def load_from_json(
     """
     logger.progress("Loading %s from %s", model.__name__, input_file_path)
 
-    try:
-        with open(Path(input_file_path), encoding="utf-8") as f:
-            raw = json.load(f)
-    except FileNotFoundError:
-        raise SourceLoadError(f"File not found: {input_file_path}") from None
-    except json.JSONDecodeError as e:
-        raise SourceLoadError(f"Invalid JSON in {input_file_path}: {e}") from e
+    raw = load_json_file(
+        input_file_path,
+        not_found_error=SourceLoadError,
+        not_found_message=f"File not found: {input_file_path}",
+        invalid_json_error=SourceLoadError,
+        invalid_json_message=f"Invalid JSON in {input_file_path}",
+    )
 
     records, errors = [], []
     for entry in extractor(raw):

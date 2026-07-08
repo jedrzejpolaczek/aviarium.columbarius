@@ -19,7 +19,6 @@ Typical usage:
 """
 
 import datetime
-import json
 from pathlib import Path
 
 import duckdb
@@ -29,6 +28,7 @@ from src.data.cards.storage.base.transformer import TransformStorage
 from src.data.cards.storage.errors import StorageConnectionError, StorageWriteError
 from src.data.cards.storage.base.writers import DuckDBWriter as SilverWriter
 from src.data.cards.storage.silver.prices import SilverPriceBuilder
+from src.data.json_files import load_json_file
 from src.logger import get_logger
 
 _SQL_DIR = Path(__file__).parent / "sql"
@@ -82,16 +82,13 @@ class SilverStorage(TransformStorage):
         self._bronze_con = self._open_connection(bronze_db_path, read_only=True)
         self._silver_con = self._open_connection(silver_db_path, read_only=False)
 
-        try:
-            self._config = json.loads(Path(config_path).read_text())
-        except FileNotFoundError:
-            raise StorageConnectionError(
-                f"Silver config not found: {config_path}"
-            ) from None
-        except json.JSONDecodeError as e:
-            raise StorageConnectionError(
-                f"Invalid JSON in silver config {config_path}: {e}"
-            ) from e
+        self._config = load_json_file(
+            config_path,
+            not_found_error=StorageConnectionError,
+            not_found_message=f"Silver config not found: {config_path}",
+            invalid_json_error=StorageConnectionError,
+            invalid_json_message=f"Invalid JSON in silver config {config_path}",
+        )
 
         self._writer = SilverWriter(self._silver_con)
         self._prices = SilverPriceBuilder(self._bronze_con, self._silver_con)

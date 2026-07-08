@@ -14,7 +14,6 @@ Silver from configs/silver_config.json.
 
 import asyncio
 import datetime
-import json
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -29,6 +28,7 @@ from src.data.cards.storage.bronze import BronzeStorage
 from src.data.cards.storage.silver import SilverStorage
 from src.data.cards.storage.gold import GoldStorage
 from src.data.cards.storage.health import run_health_checks
+from src.data.json_files import load_json_file
 
 
 logger = get_logger(__name__)
@@ -39,17 +39,16 @@ _StageResult = tuple[str, float, str]  # (name, elapsed_s, "ok" | "error")
 def _load_json_config(config_path: str) -> dict[str, Any]:
     """Load and parse a JSON config file, raising with a clear message on failure.
 
-    Shared by initial_bronze_pipeline and daily_bronze_pipeline, which
-    previously duplicated this exact try/except block, differing only in
-    which config file path they were given.
+    Shared by initial_bronze_pipeline and daily_bronze_pipeline.
     """
-    try:
-        result: dict[str, Any] = json.loads(Path(config_path).read_text())
-        return result
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Bronze config not found: {config_path}") from None
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in {config_path}: {e}") from e
+    result: dict[str, Any] = load_json_file(
+        config_path,
+        not_found_error=FileNotFoundError,
+        not_found_message=f"Bronze config not found: {config_path}",
+        invalid_json_error=ValueError,
+        invalid_json_message=f"Invalid JSON in {config_path}",
+    )
+    return result
 
 
 def _run_timed(
