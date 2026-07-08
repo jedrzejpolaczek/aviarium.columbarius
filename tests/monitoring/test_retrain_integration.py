@@ -7,7 +7,6 @@ so the full MLflow logging + promotion path runs for real without
 needing 50+ days of synthetic price history for walk-forward CV.
 """
 
-import duckdb
 import mlflow
 import pytest
 
@@ -25,38 +24,8 @@ def mlflow_tmp(tmp_path):
         mlflow.end_run()
 
 
-@pytest.fixture
-def tiny_conn():
-    con = duckdb.connect(":memory:")
-    con.execute("""
-        CREATE TABLE gold_price_features AS
-        SELECT * FROM (VALUES
-            ('uuid-1', '2026-06-01', 1.5, 100.0, NULL),
-            ('uuid-1', '2026-06-08', 1.8, 100.0, NULL),
-            ('uuid-2', '2026-06-01', 0.3, 200.0, NULL),
-            ('uuid-2', '2026-06-08', 0.4, 200.0, NULL)
-        ) AS t(uuid, snapshot_date, eur, edhrec_rank, foil_premium)
-    """)
-    # edhrec_saltiness is required here (not in gold_price_features) because
-    # IMPUTE_MEDIAN_COLS in src/ml/features/pipeline.py expects it, and in
-    # production it is sourced from gold_card_features (see
-    # GoldFeatureBuilders.build_card_features in
-    # src/data/cards/storage/gold/features.py) — build_inference_features()
-    # merges lag_df and card_df on uuid, so it must be present post-merge.
-    con.execute("""
-        CREATE TABLE gold_card_features AS
-        SELECT * FROM (VALUES
-            ('uuid-1', 'common', 3, 2.0, 1, false, false, true, NULL),
-            ('uuid-2', 'rare',   1, 1.0, 1, false, false, true, NULL)
-        ) AS t(uuid, rarity, print_count, mana_value, format_count,
-                is_reserved, is_legendary, is_commander_legal, edhrec_saltiness)
-    """)
-    yield con
-    con.close()
-
-
-def test_retrain_logs_to_real_mlflow_and_promotes(tiny_conn):
-    run_id = retrain(tiny_conn, "2026-06-01")
+def test_retrain_logs_to_real_mlflow_and_promotes(tiny_gold_conn):
+    run_id = retrain(tiny_gold_conn, "2026-06-01")
 
     run = mlflow.get_run(run_id)
     assert run.data.params.get("gold_snapshot_date") == "2026-06-01"
@@ -66,10 +35,10 @@ def test_retrain_logs_to_real_mlflow_and_promotes(tiny_conn):
     assert prod_version.run_id == run_id
 
 
-def test_retrain_second_call_reregisters_and_repromotes(tiny_conn):
-    first_run_id = retrain(tiny_conn, "2026-06-01")
+def test_retrain_second_call_reregisters_and_repromotes(tiny_gold_conn):
+    first_run_id = retrain(tiny_gold_conn, "2026-06-01")
 
-    second_run_id = retrain(tiny_conn, "2026-06-01")
+    second_run_id = retrain(tiny_gold_conn, "2026-06-01")
 
     client = mlflow.tracking.MlflowClient()
     prod_version = client.get_model_version_by_alias("mtg_price_model", "production")

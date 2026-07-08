@@ -3,7 +3,6 @@
 import json
 from unittest.mock import MagicMock
 
-import duckdb
 import mlflow
 import pytest
 
@@ -121,7 +120,7 @@ def test_main_writes_error_status_when_retrain_raises(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def mlflow_tmp_for_real_retrain(tmp_path, monkeypatch):
+def mlflow_tmp_for_real_retrain(tmp_path):
     db_path = tmp_path / "mlflow.db"
     mlflow.set_tracking_uri(f"sqlite:///{db_path}")
     yield
@@ -129,30 +128,12 @@ def mlflow_tmp_for_real_retrain(tmp_path, monkeypatch):
         mlflow.end_run()
 
 
-def test_do_retrain_calls_real_retrain_and_writes_run_id(tmp_path):
-    con = duckdb.connect(":memory:")
-    con.execute("""
-        CREATE TABLE gold_price_features AS
-        SELECT * FROM (VALUES
-            ('uuid-1', '2026-06-01', 1.5, 100.0, NULL),
-            ('uuid-1', '2026-06-08', 1.8, 100.0, NULL),
-            ('uuid-2', '2026-06-01', 0.3, 200.0, NULL),
-            ('uuid-2', '2026-06-08', 0.4, 200.0, NULL)
-        ) AS t(uuid, snapshot_date, eur, edhrec_rank, foil_premium)
-    """)
-    con.execute("""
-        CREATE TABLE gold_card_features AS
-        SELECT * FROM (VALUES
-            ('uuid-1', 'common', 3, 2.0, 1, false, false, true, NULL),
-            ('uuid-2', 'rare',   1, 1.0, 1, false, false, true, NULL)
-        ) AS t(uuid, rarity, print_count, mana_value, format_count,
-                is_reserved, is_legendary, is_commander_legal, edhrec_saltiness)
-    """)
-
-    ok, status = check_and_retrain._do_retrain(con, "2026-06-01", "mape_threshold")
+def test_do_retrain_calls_real_retrain_and_writes_run_id(tiny_gold_conn):
+    ok, status = check_and_retrain._do_retrain(
+        tiny_gold_conn, "2026-06-01", "mape_threshold"
+    )
 
     assert ok is True
     assert status["result"] == "retrained"
     assert status["reason"] == "mape_threshold"
     assert "run_id" in status and status["run_id"]
-    con.close()
