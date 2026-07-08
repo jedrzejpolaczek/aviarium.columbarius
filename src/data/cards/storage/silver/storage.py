@@ -102,6 +102,21 @@ class SilverStorage(TransformStorage):
         self._silver_con.close()
         logger.progress("Closed SilverStorage connections")
 
+    def _warn_if_missing(
+        self, required: tuple[str, ...], available: set[str], skip_target: str
+    ) -> bool:
+        """Return True (and log a warning) if any of `required` is absent from `available`.
+
+        Mirrors gold/storage.py's _build_if_present guard shape, generalized to
+        both the single-table and multi-table cases that existed as separate
+        inline checks before this refactor.
+        """
+        missing = [t for t in required if t not in available]
+        if missing:
+            logger.warning("Missing Bronze tables %s — skipping %s", missing, skip_target)
+            return True
+        return False
+
     # ------------------------------------------------------------------
     # History appenders
     # ------------------------------------------------------------------
@@ -115,10 +130,9 @@ class SilverStorage(TransformStorage):
         Bronze data is silently lost.
         """
         bronze_tables = get_tables(self._bronze_con)
-        if "bronze_tournament_results" not in bronze_tables:
-            logger.warning(
-                "bronze_tournament_results not found — skipping tournament results history"
-            )
+        if self._warn_if_missing(
+            ("bronze_tournament_results",), bronze_tables, "tournament results history"
+        ):
             return
 
         df = self._bronze_con.execute("SELECT * FROM bronze_tournament_results").df()
@@ -159,10 +173,9 @@ class SilverStorage(TransformStorage):
         are skipped.
         """
         bronze_tables = get_tables(self._bronze_con)
-        if "bronze_format_staples_history" not in bronze_tables:
-            logger.warning(
-                "bronze_format_staples_history not found — skipping format staples history"
-            )
+        if self._warn_if_missing(
+            ("bronze_format_staples_history",), bronze_tables, "format staples history"
+        ):
             return
         df = self._bronze_con.execute(
             "SELECT * FROM bronze_format_staples_history"
@@ -182,15 +195,11 @@ class SilverStorage(TransformStorage):
         not persist (identical semantics to the previous full_load call).
         """
         bronze_tables = get_tables(self._bronze_con)
-        missing = [
-            t
-            for t in ("bronze_mtgjson_cards", "bronze_scryfall_cards")
-            if t not in bronze_tables
-        ]
-        if missing:
-            logger.warning(
-                "Missing Bronze tables %s — skipping silver_cards build", missing
-            )
+        if self._warn_if_missing(
+            ("bronze_mtgjson_cards", "bronze_scryfall_cards"),
+            bronze_tables,
+            "silver_cards build",
+        ):
             return
         try:
             self._silver_con.execute(
@@ -229,10 +238,9 @@ class SilverStorage(TransformStorage):
         lowercase and Gold reads them via json_extract_string.
         """
         bronze_tables = get_tables(self._bronze_con)
-        if "bronze_scryfall_meta_history" not in bronze_tables:
-            logger.warning(
-                "bronze_scryfall_meta_history not found — skipping silver_meta_history"
-            )
+        if self._warn_if_missing(
+            ("bronze_scryfall_meta_history",), bronze_tables, "silver_meta_history"
+        ):
             return
 
         silver_tables = get_tables(self._silver_con)
