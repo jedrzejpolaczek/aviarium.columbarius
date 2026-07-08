@@ -3,10 +3,9 @@ import logging
 import os
 import sys
 
-import duckdb
-
 from scripts._common import gold_db_exists
 from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
+from src.data.repository import open_repository
 from src.ml.training.tracking import setup_experiment
 
 GOLD_DB_PATH = os.getenv("GOLD_DB_PATH", "data/gold/cards.duckdb")
@@ -28,7 +27,8 @@ def main() -> None:
     if not gold_db_exists(args.db_path):
         sys.exit(1)
 
-    conn = duckdb.connect(args.db_path, read_only=True)
+    repo = open_repository(args.db_path, read_only=True)
+    conn = repo.connection
     snapshot_date = get_latest_gold_snapshot_date(conn)
 
     if snapshot_date is None:
