@@ -53,3 +53,12 @@ def test_open_repository_wraps_connect_errors(tmp_path):
     # error the way it does on Linux.
     with pytest.raises(StorageConnectionError):
         open_repository(str(tmp_path), read_only=False)
+
+
+def test_context_manager_closes_connection_on_exit():
+    con = duckdb.connect(":memory:")
+    with DuckDBRepository(con) as repo:
+        repo.connection.execute("CREATE TABLE foo (x INT)")
+
+    with pytest.raises(duckdb.ConnectionException):
+        con.execute("SELECT 1")
