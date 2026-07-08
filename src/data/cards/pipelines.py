@@ -36,6 +36,22 @@ logger = get_logger(__name__)
 _StageResult = tuple[str, float, str]  # (name, elapsed_s, "ok" | "error")
 
 
+def _load_json_config(config_path: str) -> dict[str, Any]:
+    """Load and parse a JSON config file, raising with a clear message on failure.
+
+    Shared by initial_bronze_pipeline and daily_bronze_pipeline, which
+    previously duplicated this exact try/except block, differing only in
+    which config file path they were given.
+    """
+    try:
+        result: dict[str, Any] = json.loads(Path(config_path).read_text())
+        return result
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Bronze config not found: {config_path}") from None
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in {config_path}: {e}") from e
+
+
 def _run_timed(
     name: str,
     fn: Callable[[], None],
@@ -145,15 +161,7 @@ def initial_bronze_pipeline(config: dict[str, Any]) -> None:
     """
     logger.info("Starting bronze initial pipeline")
 
-    bronze_config_path = config["storage"]["bronze_config_seed_path"]
-    try:
-        bronze_config = json.loads(Path(bronze_config_path).read_text())
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f"Bronze config not found: {bronze_config_path}"
-        ) from None
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in {bronze_config_path}: {e}") from e
+    bronze_config = _load_json_config(config["storage"]["bronze_config_seed_path"])
     results = asyncio.run(ingesting_pipeline(bronze_config))
 
     bronze_db_path = config["storage"]["bronze_duckdb_path"]
@@ -250,15 +258,7 @@ def daily_bronze_pipeline(config: dict[str, Any]) -> None:
     """
     logger.info("Starting daily bronze data update pipeline")
 
-    bronze_config_path = config["storage"]["bronze_config_path"]
-    try:
-        bronze_config = json.loads(Path(bronze_config_path).read_text())
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f"Bronze config not found: {bronze_config_path}"
-        ) from None
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in {bronze_config_path}: {e}") from e
+    bronze_config = _load_json_config(config["storage"]["bronze_config_path"])
     results = asyncio.run(ingesting_pipeline(bronze_config))
 
     total_records = sum(len(records) for records, _ in results.values())
