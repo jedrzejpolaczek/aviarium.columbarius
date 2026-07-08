@@ -19,6 +19,13 @@ y_true is always clipped to clip_min=0.01 before computing MAPE.
 import numpy as np
 import pandas as pd
 
+MAPE_CLIP_MIN = 0.01
+"""Lower bound for the denominator in percent-error calculations, avoiding
+division-by-zero blowup for near-zero actual prices. Shared by mape() here
+and worst_predictions() in error_analysis.py — see that module's docstring
+cross-reference.
+"""
+
 
 def mae(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     """Mean Absolute Error on the log1p scale.
@@ -33,7 +40,7 @@ def mae(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.mean(np.abs(y_true - y_pred)))
 
 
-def mape(y_true: np.ndarray, y_pred: np.ndarray, clip_min: float = 0.01) -> float:
+def mape(y_true: np.ndarray, y_pred: np.ndarray, clip_min: float = MAPE_CLIP_MIN) -> float:
     """Mean Absolute Percentage Error, returned as a percentage (e.g. 12.5 = 12.5%).
 
     y_true is clipped to clip_min before division to avoid exploding errors
