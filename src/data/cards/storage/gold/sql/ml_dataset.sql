@@ -1,3 +1,10 @@
+-- Training frame for the price model: joins gold_price_features (spine)
+-- with its own t+7/t+30 future prices to compute regression targets
+-- (target_price_7d, target_price_30d) plus a 3-class label
+-- (target_change_30d) for exploratory classification. {{cols}}/{{joins}} are
+-- Python-side placeholders (see GoldMLDatasetBuilder.build_ml_dataset) for
+-- optional joins to gold_card_features/gold_demand_signals/etc. when those
+-- tables exist.
 WITH spine AS (
     SELECT * FROM gold_price_features
 ),
@@ -18,6 +25,10 @@ with_targets AS (
 ),
 with_change_label AS (
     SELECT *,
+        -- +/-20% over 30 days is the up/down threshold for the exploratory
+        -- 3-class label; chosen as a round, interpretable cutoff, not derived
+        -- from a statistical test — target_price_30d/target_price_7d (the
+        -- regression targets) are the primary model outputs.
         CASE
             WHEN target_price_30d IS NULL        THEN NULL
             WHEN target_price_30d > eur * 1.2   THEN 'up'

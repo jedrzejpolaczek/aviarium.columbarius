@@ -1,3 +1,9 @@
+-- Model target: log_return_7d = LN(1+eur_t+7) - LN(1+eur_t), joining a
+-- snapshot's price to its price exactly 7 days later. Cards missing either
+-- date are silently excluded (inner join). Mathematically equivalent to
+-- Python's log1p(eur_t+7) - log1p(eur_t) — computed here in SQL because the
+-- target is derived directly from gold_price_features, not from a Python
+-- feature-building step.
 WITH t0 AS (
     SELECT uuid, eur AS eur_t0
     FROM gold_price_features

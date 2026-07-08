@@ -1,3 +1,5 @@
+-- Rolling EDHREC format-staple percentages: 7d/30d trailing averages and
+-- 7d/30d deltas per (card, format), from silver_format_staples_history.
 SELECT
     id,
     card_name,

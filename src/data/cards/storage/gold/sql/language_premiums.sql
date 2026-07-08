@@ -1,3 +1,6 @@
+-- Price premium (or discount) for non-canonical language printings, computed
+-- as lang_eur / canonical_eur per (card, language, snapshot_date). A ratio
+-- > 1 means the language variant trades above the canonical printing.
 SELECT
     lp.scryfall_id,
     lp.canonical_uuid,

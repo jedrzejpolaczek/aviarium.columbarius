@@ -1,3 +1,7 @@
+-- Pivots the Bronze EAV price table (one row per retailer/tx_type/finish)
+-- into wide scalar columns per (uuid, snapshot_date) for MTGJson-sourced
+-- retailers (cardmarket, tcgplayer, cardkingdom, manapool). See ADR-025 for
+-- why Bronze stores prices as EAV instead of pre-selected scalar columns.
 SELECT
     uuid,
     snapshot_date,

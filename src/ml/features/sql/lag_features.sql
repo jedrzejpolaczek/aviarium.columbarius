@@ -1,3 +1,8 @@
+-- Time-based lag/rolling features for one snapshot date: lag_1d/7d/14d/30d,
+-- rolling_mean_7d, rolling_std_14d, rolling_min_30d/max_30d, and momentum_7d,
+-- all computed from gold_price_features with backward-only window functions
+-- (no future leakage). See src/ml/features/lag.py's module docstring for
+-- the full leakage-safety rationale.
 WITH lagged AS (
     SELECT
         uuid,

@@ -1,3 +1,6 @@
+-- Top-8 tournament appearance counts per (card, format): 30d/90d totals,
+-- average copies played, sideboard-vs-maindeck split, from
+-- silver_tournament_results_history.
 WITH base AS (
     SELECT *,
         CAST(tournament_date AS DATE) AS tournament_dt,

@@ -1,3 +1,7 @@
+-- Cleans one snapshot's worth of Scryfall metadata (legalities, edhrec_rank,
+-- reserved flag, promo_types, finishes) for append to silver_meta_history.
+-- {{join_clause}} is a Python-side placeholder for an optional join (check
+-- the calling code in silver/storage.py for what it's conditioned on).
 SELECT
     TRIM(b.id)            AS id,
     TRIM(b.snapshot_date) AS snapshot_date,
