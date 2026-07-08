@@ -25,6 +25,11 @@ _SQL_DIR = Path(__file__).parent / "sql"
 # Bronze entries (e.g. mana_value = 1_000_000 observed in raw data).
 _MANA_VALUE_MAX = 20
 
+# Shared by build_price_features() (and by GoldSignalBuilders.build_format_staples()
+# in signals.py): the standard 7d/30d trailing-window pair, parameterized by
+# partition/order column name. See sql/_rolling_7_30_window.sql.
+_ROLLING_7_30 = (_SQL_DIR / "_rolling_7_30_window.sql").read_text()
+
 
 class GoldFeatureBuilders:
     """Builds static and time-series feature tables from Silver card data."""
@@ -207,6 +212,12 @@ class GoldFeatureBuilders:
         sql = (
             (_SQL_DIR / "price_features.sql")
             .read_text()
-            .format(edhrec_col=edhrec_col, meta_join=meta_join)
+            .format(
+                rolling_7_30=_ROLLING_7_30.format(
+                    partition_col="p.uuid", order_col="p.snapshot_date"
+                ),
+                edhrec_col=edhrec_col,
+                meta_join=meta_join,
+            )
         )
         return self._silver_con.execute(sql).df()

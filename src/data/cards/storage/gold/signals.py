@@ -67,6 +67,11 @@ class GoldSignalBuilders:
         .format(legality_lag=_LEGALITY_LAG_CTE)
     )
 
+    # Shared by build_format_staples() (and by GoldFeatureBuilders.build_price_features()
+    # in features.py): the standard 7d/30d trailing-window pair, parameterized by
+    # partition/order column name. See sql/_rolling_7_30_window.sql.
+    _ROLLING_7_30 = (_SQL_DIR / "_rolling_7_30_window.sql").read_text()
+
     def __init__(self, silver_con: duckdb.DuckDBPyConnection) -> None:
         self._silver_con = silver_con
 
@@ -142,7 +147,15 @@ class GoldSignalBuilders:
         Returns:
             One row per (id, snapshot_date) with format staple feature columns.
         """
-        sql = (_SQL_DIR / "format_staples.sql").read_text()
+        sql = (
+            (_SQL_DIR / "format_staples.sql")
+            .read_text()
+            .format(
+                rolling_7_30=self._ROLLING_7_30.format(
+                    partition_col="id", order_col="snapshot_date"
+                )
+            )
+        )
         return self._silver_con.execute(sql).df()
 
     def build_ban_price_impact(self) -> pd.DataFrame:

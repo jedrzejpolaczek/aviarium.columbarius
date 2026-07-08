@@ -14,8 +14,5 @@ SELECT
         AS deck_pct_change_30d
 FROM silver_format_staples_history
 WINDOW
-    w7  AS (PARTITION BY id ORDER BY snapshot_date
-             ROWS BETWEEN 6 PRECEDING AND CURRENT ROW),
-    w30 AS (PARTITION BY id ORDER BY snapshot_date
-             ROWS BETWEEN 29 PRECEDING AND CURRENT ROW)
+    {rolling_7_30}
 ORDER BY id, snapshot_date
