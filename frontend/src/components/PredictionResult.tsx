@@ -1,14 +1,8 @@
 import type { PredictionResponse } from '../types'
-import { formatEur } from '../format'
+import { formatEur, formatPercent } from '../format'
 
 interface Props {
   result: PredictionResponse
-}
-
-function fmtReturn(value: number | null): string {
-  if (value === null) return '—'
-  const sign = value >= 0 ? '+' : ''
-  return `${sign}${(value * 100).toFixed(1)}%`
 }
 
 export function PredictionResult({ result }: Props) {
@@ -43,7 +37,7 @@ export function PredictionResult({ result }: Props) {
         <div className="text-center">
           <p className="text-xs text-gray-400">7d return</p>
           <p className={`mt-1 font-medium ${returnPositive ? 'text-green-600' : 'text-red-600'}`}>
-            {fmtReturn(result.log_return_7d)}
+            {formatPercent(result.log_return_7d)}
           </p>
         </div>
       </div>
