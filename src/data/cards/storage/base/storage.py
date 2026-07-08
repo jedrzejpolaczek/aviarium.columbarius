@@ -5,10 +5,6 @@ from abc import ABC, abstractmethod
 from typing import Self
 
 from src.data.db import open_connection
-from src.logger import get_logger
-
-
-logger = get_logger(__name__)
 
 
 def get_tables(conn: duckdb.DuckDBPyConnection) -> set[str]:
