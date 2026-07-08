@@ -19,6 +19,8 @@ Typical usage:
 """
 
 import datetime
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import duckdb
@@ -175,6 +177,24 @@ class SilverStorage(TransformStorage):
         ).df()
         self._writer.append(df, "silver_format_staples_history", key_column="id")
 
+    @contextmanager
+    def _attached_bronze(self) -> Iterator[None]:
+        """ATTACH the Bronze DuckDB file read-only for the duration of the block.
+
+        DETACH is always attempted on exit, including after an exception, and
+        DETACH failures are swallowed — the connection may already be in an
+        inconsistent state if the attached query itself failed, and the
+        original error is what the caller needs to see.
+        """
+        self._silver_con.execute(f"ATTACH '{self._bronze_db_path}' AS _bronze (READ_ONLY)")
+        try:
+            yield
+        finally:
+            try:
+                self._silver_con.execute("DETACH _bronze")
+            except duckdb.Error:
+                pass
+
     def _build_silver_cards_sql(self) -> None:
         """Build silver_cards entirely in DuckDB SQL via ATTACH of the Bronze file.
 
@@ -197,30 +217,23 @@ class SilverStorage(TransformStorage):
         ):
             return
         try:
-            self._silver_con.execute(
-                f"ATTACH '{self._bronze_db_path}' AS _bronze (READ_ONLY)"
-            )
-            logger.progress(
-                "Building silver_cards (MTGJson × Scryfall SQL join — long step)..."
-            )
-            self._silver_con.execute(
-                (_SQL_DIR / "silver_cards.sql").read_text(encoding="utf-8")
-            )
-            count = self._silver_con.execute(
-                "SELECT count(*) FROM silver_cards"
-            ).fetchone()
-            logger.info(
-                "Built silver_cards via SQL path: %d rows",
-                count[0] if count else 0,
-            )
+            with self._attached_bronze():
+                logger.progress(
+                    "Building silver_cards (MTGJson × Scryfall SQL join — long step)..."
+                )
+                self._silver_con.execute(
+                    (_SQL_DIR / "silver_cards.sql").read_text(encoding="utf-8")
+                )
+                count = self._silver_con.execute(
+                    "SELECT count(*) FROM silver_cards"
+                ).fetchone()
+                logger.info(
+                    "Built silver_cards via SQL path: %d rows",
+                    count[0] if count else 0,
+                )
         except duckdb.Error as e:
             logger.error("Failed to build silver_cards via SQL: %s", e)
             raise StorageWriteError(f"Failed to build silver_cards: {e}") from e
-        finally:
-            try:
-                self._silver_con.execute("DETACH _bronze")
-            except duckdb.Error:
-                pass
 
     def _append_meta_history_sql(self) -> None:
         """Append Bronze scryfall_meta_history to Silver via DuckDB SQL.
@@ -260,33 +273,26 @@ class SilverStorage(TransformStorage):
             .format(join_clause=join_clause)
         )
         try:
-            self._silver_con.execute(
-                f"ATTACH '{self._bronze_db_path}' AS _bronze (READ_ONLY)"
-            )
-            if "silver_meta_history" not in silver_tables:
-                self._silver_con.execute(
-                    f"CREATE TABLE silver_meta_history AS {transform_sql}"
-                )
-                logger.info("Created silver_meta_history via SQL path")
-            else:
-                self._silver_con.execute(f"""
-                    INSERT INTO silver_meta_history
-                    SELECT src.*
-                    FROM ({transform_sql}) src
-                    LEFT JOIN silver_meta_history t
-                        ON  t.id            = src.id
-                        AND t.snapshot_date = src.snapshot_date
-                    WHERE t.id IS NULL
-                """)
-                logger.info("Appended to silver_meta_history via SQL path")
+            with self._attached_bronze():
+                if "silver_meta_history" not in silver_tables:
+                    self._silver_con.execute(
+                        f"CREATE TABLE silver_meta_history AS {transform_sql}"
+                    )
+                    logger.info("Created silver_meta_history via SQL path")
+                else:
+                    self._silver_con.execute(f"""
+                        INSERT INTO silver_meta_history
+                        SELECT src.*
+                        FROM ({transform_sql}) src
+                        LEFT JOIN silver_meta_history t
+                            ON  t.id            = src.id
+                            AND t.snapshot_date = src.snapshot_date
+                        WHERE t.id IS NULL
+                    """)
+                    logger.info("Appended to silver_meta_history via SQL path")
         except duckdb.Error as e:
             logger.error("Failed to append silver_meta_history via SQL: %s", e)
             raise StorageWriteError(f"Failed to append silver_meta_history: {e}") from e
-        finally:
-            try:
-                self._silver_con.execute("DETACH _bronze")
-            except duckdb.Error:
-                pass
 
     # ------------------------------------------------------------------
     # Pipeline
