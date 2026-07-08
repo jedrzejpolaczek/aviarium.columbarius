@@ -103,4 +103,6 @@ def test_rollback_sets_real_alias_to_specified_version(tmp_path):
     rollback(version="1", model_name="mtg_price_model")
 
     prod = client.get_model_version_by_alias("mtg_price_model", "production")
+    # ModelVersion.version is typed str but comes back as int at runtime
+    # against the sqlite-backed store used here.
     assert str(prod.version) == "1"
