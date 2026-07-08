@@ -88,7 +88,19 @@ class RequestFeatures:
 
 
 def get_request_features(request: Request) -> RequestFeatures:
-    """Return the pre-computed feature matrices and active model_run_id."""
+    """Return the pre-computed feature matrices and active model_run_id.
+
+    app.main's lifespan always sets X_all/X_all_t/model_run_id together at
+    startup, so any handler using this dependency implicitly requires all
+    three to be present on app.state — including cards.py, which only reads
+    X_all itself. A hand-built test app that sets X_all without the other
+    two will fail here with AttributeError rather than at the call site.
+
+    model_run_id defaults to "" via getattr because it's legitimately empty
+    in degraded mode (no MODEL_RUN_ID set / model load failed, see
+    app.main._load_model_or_degrade); X_all/X_all_t have no such degraded
+    state, so a missing attribute there is a real bug, not a normal mode.
+    """
     return RequestFeatures(
         X_all=request.app.state.X_all,
         X_all_t=request.app.state.X_all_t,
