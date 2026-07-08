@@ -432,6 +432,8 @@ Current coverage (`src/data/cards/sources/`):
 
 The remaining gaps are defensive guards for near-impossible HTML states (empty `<div>` nodes, regex matches that can't fail given the earlier CSS selector, etc.) and one error branch for an individual deck-page download failure inside `_ingest_tournament_results`.
 
+All of the above covers the Python backend only. The `frontend/` app has its own Vitest suite — run it with `cd frontend && npm test`.
+
 ---
 
 ## Architecture Decision Records
