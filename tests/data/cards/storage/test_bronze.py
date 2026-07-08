@@ -897,7 +897,9 @@ class TestDailyUpdate:
                     side_effect=StorageWriteError("mtgjson price snapshot failed"),
                 ),
             ):
-                b.daily_update({"mtgjson_prices": ([MagicMock()], [])})  # must not raise
+                b.daily_update(
+                    {"mtgjson_prices": ([MagicMock()], [])}
+                )  # must not raise
 
     def test_error_in_one_source_does_not_block_others(self):
         call_log: list[str] = []

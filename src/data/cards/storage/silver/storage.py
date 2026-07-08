@@ -186,7 +186,9 @@ class SilverStorage(TransformStorage):
         inconsistent state if the attached query itself failed, and the
         original error is what the caller needs to see.
         """
-        self._silver_con.execute(f"ATTACH '{self._bronze_db_path}' AS _bronze (READ_ONLY)")
+        self._silver_con.execute(
+            f"ATTACH '{self._bronze_db_path}' AS _bronze (READ_ONLY)"
+        )
         try:
             yield
         finally:
