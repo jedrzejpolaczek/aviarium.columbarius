@@ -44,6 +44,7 @@ from sklearn.pipeline import Pipeline
 
 from app.routers import cards, health, predict, similar, underpriced
 from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
+from src.data.repository import DuckDBRepository, open_repository
 from src.ml.features.pipeline import (
     build_feature_pipeline,
     build_inference_features,
@@ -69,9 +70,9 @@ class FeatureMatrices(NamedTuple):
     feature_names: list[str]
 
 
-def _connect_db() -> duckdb.DuckDBPyConnection:
-    """Open a read-only DuckDB connection (API never writes)."""
-    return duckdb.connect(GOLD_DB_PATH, read_only=True)
+def _connect_db() -> DuckDBRepository:
+    """Open a read-only DuckDB repository (API never writes)."""
+    return open_repository(GOLD_DB_PATH, read_only=True)
 
 
 def _build_feature_matrices(
@@ -126,7 +127,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup and shutdown context manager for the FastAPI application.
 
     Startup (before ``yield``):
-        1. Open a read-only DuckDB connection and store it in ``app.state.db``.
+        1. Open a read-only DuckDB repository and store it in ``app.state.repo``.
         2. Determine the latest available price snapshot date.
         3. Build the full feature matrix ``X_all`` (raw) for all cards at that
            snapshot by joining lag features with static card attributes.
@@ -146,16 +147,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup_logging(logging.INFO)
 
     # 1. Connect DuckDB (read-only — API never writes)
-    app.state.db = _connect_db()
+    app.state.repo = _connect_db()
 
     # 2. Latest snapshot available in the database
-    snapshot_date = get_latest_gold_snapshot_date(app.state.db)
+    snapshot_date = get_latest_gold_snapshot_date(app.state.repo.connection)
     if snapshot_date is None:
         raise RuntimeError("gold_price_features is empty — run the ETL pipeline first.")
     app.state.snapshot_date = snapshot_date
 
     # 3-4. Build full feature matrix and fit sklearn pipeline once
-    features = _build_feature_matrices(app.state.db, snapshot_date)
+    features = _build_feature_matrices(app.state.repo.connection, snapshot_date)
     app.state.X_all = features.X_all
     app.state.X_all_t = features.X_all_t
     app.state.pipeline = features.pipeline
@@ -169,7 +170,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
-    app.state.db.close()
+    app.state.repo.close()
 
 
 app = FastAPI(

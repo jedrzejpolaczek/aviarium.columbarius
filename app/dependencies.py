@@ -3,7 +3,7 @@
 Each function is used with ``Depends()`` in route handlers to inject the
 appropriate resource from ``request.app.state``.
 
-    get_db                — open DuckDB connection
+    get_db                — DuckDBRepository wrapping the shared connection
     get_similarity_index  — built CardSimilarityIndex (or None before first build)
     require_model         — loaded lgb.Booster, or raises 503
     get_request_features  — RequestFeatures bundling X_all/X_all_t/model_run_id
@@ -15,24 +15,25 @@ its own docstring for why.
 from dataclasses import dataclass
 from typing import cast
 
-import duckdb
 import lightgbm as lgb
 import pandas as pd
 from fastapi import HTTPException, Request
 
+from src.data.repository import DuckDBRepository
 from src.ml.recommendation.similarity import CardSimilarityIndex
 
 
-def get_db(request: Request) -> duckdb.DuckDBPyConnection:
-    """Return the shared DuckDB connection from application state.
+def get_db(request: Request) -> DuckDBRepository:
+    """Return the shared DuckDB repository from application state.
 
     Args:
         request: Incoming FastAPI request carrying ``app.state``.
 
     Returns:
-        Open DuckDB connection set during application lifespan startup.
+        DuckDBRepository set during application lifespan startup
+        (app/main.py's ``_connect_db``).
     """
-    return request.app.state.db  # type: ignore[no-any-return]
+    return request.app.state.repo  # type: ignore[no-any-return]
 
 
 def get_similarity_index(request: Request) -> CardSimilarityIndex | None:

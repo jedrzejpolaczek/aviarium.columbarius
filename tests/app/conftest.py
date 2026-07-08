@@ -42,7 +42,7 @@ class _StateOverrides(TypedDict, total=False):
     """
 
     model: MagicMock | None
-    db: MagicMock
+    repo: MagicMock
     X_all: pd.DataFrame
     X_all_t: pd.DataFrame
     model_run_id: str
@@ -112,7 +112,7 @@ def _build_test_app(state_overrides: _StateOverrides) -> FastAPI:
     """
     base_state: _StateOverrides = {
         "model": _make_mock_model(),
-        "db": MagicMock(),
+        "repo": MagicMock(connection=MagicMock()),
         "X_all": _make_X_all(),
         "X_all_t": _make_X_all_t(),
         "model_run_id": "test-run-123",

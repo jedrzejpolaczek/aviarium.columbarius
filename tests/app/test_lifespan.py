@@ -153,7 +153,7 @@ def test_lifespan_closes_db_connection_on_shutdown(tiny_gold_db, monkeypatch):
 
     app = FastAPI(lifespan=lifespan)
     with TestClient(app):
-        db = app.state.db
+        db = app.state.repo.connection
 
     with pytest.raises(duckdb.ConnectionException):
         db.execute("SELECT 1")
