@@ -19,6 +19,7 @@ Usage:
 
 import argparse
 import sys as sys
+from pathlib import Path
 
 import mlflow
 
@@ -45,7 +46,7 @@ def rollback(version: str, model_name: str = MODEL_REGISTRY_NAME) -> None:
 
 
 def main() -> int:
-    setup_logging()
+    setup_logging(log_dir=Path("logs"))
     setup_experiment()
     parser = argparse.ArgumentParser(
         description="Roll back the production model to a previous MLflow Registry version."
