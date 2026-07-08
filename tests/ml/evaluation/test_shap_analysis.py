@@ -11,21 +11,11 @@ from src.ml.evaluation.shap_analysis import (
     plot_waterfall,
     run_optuna_tuning,
 )
-from src.ml.models.lightgbm_model import LightGBMParams, LightGBMPriceModel
+from src.ml.models.lightgbm_model import LightGBMPriceModel
+from tests.ml.conftest import FAST_LIGHTGBM_PARAMS as FAST_PARAMS
 
 # Use non-interactive backend so plt calls work in CI without a display.
 matplotlib.use("Agg")
-
-# Fast params keep each test under ~100 ms (same rationale as test_lightgbm_model.py).
-FAST_PARAMS = LightGBMParams(
-    n_estimators=10,
-    num_leaves=4,
-    min_child_samples=5,
-    learning_rate=0.3,
-    subsample=1.0,
-    colsample_bytree=1.0,
-    random_state=0,
-)
 
 
 # ---------------------------------------------------------------------------

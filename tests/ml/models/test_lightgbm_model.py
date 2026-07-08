@@ -6,19 +6,7 @@ import pandas as pd
 import pytest
 
 from src.ml.models.lightgbm_model import LightGBMParams, LightGBMPriceModel
-
-
-# Fast params keep each test under ~100 ms. Default params (n_estimators=1000,
-# min_child_samples=50) would make the suite take minutes for no coverage gain.
-FAST_PARAMS = LightGBMParams(
-    n_estimators=10,
-    num_leaves=4,
-    min_child_samples=5,
-    learning_rate=0.3,
-    subsample=1.0,
-    colsample_bytree=1.0,
-    random_state=0,
-)
+from tests.ml.conftest import FAST_LIGHTGBM_PARAMS as FAST_PARAMS
 
 
 @pytest.fixture
