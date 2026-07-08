@@ -249,32 +249,20 @@ class BronzeStorage(BaseStorage):
             logger.warning("No Scryfall records to snapshot prices for — skipping")
             return
 
+        price_columns = ("eur", "eur_foil", "usd", "usd_foil", "tix")
+
         today_iso = date.today().isoformat()
         rows = []
         for record in records:
             dump = record.model_dump(mode="json")
             prices = dump.get("prices") or {}
-            rows.append(
-                {
-                    "id": dump["id"],
-                    "snapshot_date": today_iso,
-                    "eur": float(prices["eur"])
-                    if prices.get("eur") is not None
-                    else None,
-                    "eur_foil": float(prices["eur_foil"])
-                    if prices.get("eur_foil") is not None
-                    else None,
-                    "usd": float(prices["usd"])
-                    if prices.get("usd") is not None
-                    else None,
-                    "usd_foil": float(prices["usd_foil"])
-                    if prices.get("usd_foil") is not None
-                    else None,
-                    "tix": float(prices["tix"])
-                    if prices.get("tix") is not None
-                    else None,
-                }
-            )
+            row: dict[str, str | float | None] = {
+                "id": dump["id"],
+                "snapshot_date": today_iso,
+            }
+            for col in price_columns:
+                row[col] = float(prices[col]) if prices.get(col) is not None else None
+            rows.append(row)
 
         df = pd.DataFrame(rows)
         logger.progress("Snapshotting %d Scryfall price rows", len(df))
