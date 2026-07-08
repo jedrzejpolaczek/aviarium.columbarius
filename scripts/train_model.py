@@ -6,7 +6,6 @@ from scripts._common import gold_db_exists
 from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
 from src.data.repository import GOLD_DB_PATH, open_repository
 from src.logger import get_logger, setup_logging
-from src.ml.training.tracking import setup_experiment
 
 logger = get_logger(__name__)
 
@@ -35,8 +34,6 @@ def main() -> None:
         sys.exit(1)
 
     logger.info("Training on snapshot: %s", snapshot_date)
-
-    setup_experiment()
 
     from src.monitoring.retraining import retrain
 
