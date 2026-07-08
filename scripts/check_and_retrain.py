@@ -24,6 +24,7 @@ from pathlib import Path
 
 import duckdb as duckdb
 
+from scripts._common import gold_db_exists
 from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
 from src.logger import get_logger, setup_logging
 from src.monitoring.retraining import retrain, should_retrain
@@ -85,10 +86,7 @@ def _do_retrain(
 def main() -> int:
     setup_logging(log_dir=Path("logs"))
 
-    if not os.path.exists(GOLD_DB_PATH):
-        logger.error(
-            "Gold DB not found: %s — run the ETL pipeline first.", GOLD_DB_PATH
-        )
+    if not gold_db_exists(GOLD_DB_PATH):
         _write_status(
             {
                 "checked_at": datetime.now(timezone.utc).isoformat(),

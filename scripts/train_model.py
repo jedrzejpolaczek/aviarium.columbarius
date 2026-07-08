@@ -5,6 +5,7 @@ import sys
 
 import duckdb
 
+from scripts._common import gold_db_exists
 from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
 from src.ml.training.tracking import setup_experiment
 
@@ -24,10 +25,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not os.path.exists(args.db_path):
-        logger.error(
-            "Gold DB not found: %s — run the ETL pipeline first.", args.db_path
-        )
+    if not gold_db_exists(args.db_path):
         sys.exit(1)
 
     conn = duckdb.connect(args.db_path, read_only=True)
