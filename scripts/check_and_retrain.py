@@ -26,6 +26,7 @@ import duckdb as duckdb
 
 from scripts._common import gold_db_exists
 from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
+from src.data.repository import open_repository
 from src.logger import get_logger, setup_logging
 from src.monitoring.retraining import retrain, should_retrain
 
@@ -96,7 +97,8 @@ def main() -> int:
         )
         return 1
 
-    conn = duckdb.connect(GOLD_DB_PATH, read_only=True)
+    repo = open_repository(GOLD_DB_PATH, read_only=True)
+    conn = repo.connection
     try:
         triggered, reason, snapshot_date = _check_preconditions(conn)
 
@@ -126,7 +128,7 @@ def main() -> int:
         _write_status(status)
         return 0 if ok else 1
     finally:
-        conn.close()
+        repo.close()
 
 
 if __name__ == "__main__":
