@@ -71,6 +71,18 @@ doesn't re-flag them as missed work:
   but with `n_estimators=5` instead of `10` — a genuinely different value,
   not a duplicate, so it was deliberately left out of the
   `tests/ml/conftest.py` consolidation.
+- `src/data/cards/storage/gold/sql/transitions_cte.sql`'s 5 near-identical
+  `UNION ALL` blocks (one per format: commander/standard/modern/legacy/
+  vintage) and `src/data/cards/storage/gold/sql/demand_signals.sql`'s 10
+  parallel `COALESCE(prev_x = 'legal' AND curr_x = 'banned', ...)` lines —
+  the round-4 maintainability audit (2026-07-09) considered unpivoting
+  formats into rows to collapse this into one expression, and rejected it:
+  each format's block is single, self-contained SQL: the MTG format list
+  changes rarely (the last addition predates this project), and an unpivot
+  would force `gold_events.sql` and `ml_dataset.py` — which consume these
+  columns in wide, per-format form — to pivot back, adding indirection for
+  no safety gain. Same cost/benefit as the `silver_cards.sql` COALESCE
+  precedent above.
 
 ## Consequences
 
