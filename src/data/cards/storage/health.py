@@ -6,6 +6,7 @@ import duckdb
 
 from src.data.cards.storage.base.storage import get_tables
 from src.data.cards.storage.silver.prices import MTGJSON_PRICE_COMBOS
+from src.data.repository import open_repository
 from src.logger import get_logger
 
 logger = get_logger(__name__)
@@ -264,9 +265,12 @@ def run_health_checks(
 ) -> list[CheckResult]:
     results: list[CheckResult] = []
 
-    bronze_con = duckdb.connect(str(bronze_path), read_only=True)
-    silver_con = duckdb.connect(str(silver_path), read_only=True)
-    gold_con = duckdb.connect(str(gold_path), read_only=True)
+    bronze_repo = open_repository(str(bronze_path), read_only=True)
+    silver_repo = open_repository(str(silver_path), read_only=True)
+    gold_repo = open_repository(str(gold_path), read_only=True)
+    bronze_con = bronze_repo.connection
+    silver_con = silver_repo.connection
+    gold_con = gold_repo.connection
 
     try:
         bronze_structure = [
@@ -300,9 +304,9 @@ def run_health_checks(
             results.append(_check_gold_ml_dataset_has_target(gold_con))
 
     finally:
-        bronze_con.close()
-        silver_con.close()
-        gold_con.close()
+        bronze_repo.close()
+        silver_repo.close()
+        gold_repo.close()
 
     for r in results:
         msg = f"[{r.status}] {r.layer} | {r.name} — {r.detail}"
