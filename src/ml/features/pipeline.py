@@ -178,6 +178,19 @@ def _enrich_card_df(card_df: pd.DataFrame) -> pd.DataFrame:
         top8_appearances_30d — stub 0.0 (tournament data not yet integrated).
         deck_pct            — stub 0.0 (EDHREC deck percentage not yet integrated).
 
+    BOOL_COLS present on input (is_reserved, is_legendary, is_commander_legal)
+    are cast to float64, matching has_mtgjson_data below. build_feature_pipeline()
+    passes BOOL_COLS through the ColumnTransformer in the same block as
+    NUMERIC_PASS_COLS; pandas' DataFrame.to_numpy() silently degrades that block
+    to dtype=object whenever it mixes bool with numeric dtypes (unlike plain
+    numpy, which upcasts bool+float to float64 without complaint), and once one
+    ColumnTransformer block is object-dtype, hstack propagates object to the
+    *entire* output array — which LightGBM's dtype validation then rejects with
+    "pandas dtypes must be int, float or bool" even though every value is
+    numeric. Casting here, the single enrichment choke point shared by
+    walk_forward_cv() and build_inference_features(), keeps the passthrough
+    block uniformly numeric so this never bites downstream.
+
     Args:
         card_df: gold_card_features DataFrame (one row per card printing).
 
@@ -193,6 +206,9 @@ def _enrich_card_df(card_df: pd.DataFrame) -> pd.DataFrame:
     card_df["has_mtgjson_data"] = True
     card_df["top8_appearances_30d"] = 0.0
     card_df["deck_pct"] = 0.0
+    for col in BOOL_COLS:
+        if col in card_df.columns:
+            card_df[col] = card_df[col].astype(float)
     return card_df
 
 

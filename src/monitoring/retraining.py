@@ -69,9 +69,7 @@ def should_retrain(conn: duckdb.DuckDBPyConnection) -> tuple[bool, str]:
     return False, "no_trigger"
 
 
-def retrain(
-    conn: duckdb.DuckDBPyConnection, snapshot_date: str
-) -> str:  # pragma: no cover
+def retrain(conn: duckdb.DuckDBPyConnection, snapshot_date: str) -> str:
     """Run the full retraining pipeline and return the new model's MLflow run_id.
 
     Steps:
