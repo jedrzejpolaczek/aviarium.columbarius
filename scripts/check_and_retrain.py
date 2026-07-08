@@ -22,7 +22,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import duckdb
+import duckdb as duckdb  # explicit re-export: tests patch check_and_retrain.duckdb.connect,
+# which requires this module to explicitly re-export the name under mypy --strict
+# (no_implicit_reexport) — a plain `import duckdb` makes the attribute invisible
+# to importers even though it works fine at runtime.
 
 from scripts._common import gold_db_exists
 from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date

@@ -66,7 +66,9 @@ def test_main_passes_model_name_override(monkeypatch):
     )
 
 
-class _EchoModel(mlflow.pyfunc.PythonModel):
+class _EchoModel(mlflow.pyfunc.PythonModel):  # type: ignore[name-defined]
+    # mlflow.pyfunc doesn't explicitly re-export PythonModel in its stubs,
+    # so mypy can't resolve the name even though it exists at runtime.
     def predict(self, context, model_input):
         return model_input
 

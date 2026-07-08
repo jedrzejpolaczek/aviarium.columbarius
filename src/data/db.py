@@ -38,6 +38,4 @@ def open_connection(db_path: str, read_only: bool) -> duckdb.DuckDBPyConnection:
         logger.info("Connected to DuckDB (read_only=%s) at %s", read_only, db_path)
         return con
     except duckdb.Error as e:
-        raise StorageConnectionError(
-            f"Cannot open DuckDB at {db_path!r}: {e}"
-        ) from e
+        raise StorageConnectionError(f"Cannot open DuckDB at {db_path!r}: {e}") from e

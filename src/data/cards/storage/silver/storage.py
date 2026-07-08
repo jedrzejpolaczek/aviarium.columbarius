@@ -113,7 +113,9 @@ class SilverStorage(TransformStorage):
         """
         missing = [t for t in required if t not in available]
         if missing:
-            logger.warning("Missing Bronze tables %s — skipping %s", missing, skip_target)
+            logger.warning(
+                "Missing Bronze tables %s — skipping %s", missing, skip_target
+            )
             return True
         return False
 

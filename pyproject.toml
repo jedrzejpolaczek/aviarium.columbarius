@@ -95,6 +95,13 @@ disallow_untyped_defs = false
 disallow_untyped_calls = false
 disallow_any_generics = false
 disallow_untyped_decorators = false
+# mlflow.pyfunc.PythonModel resolves to Any (incomplete upstream stubs), and
+# tests/scripts/test_rollback_model.py subclasses it to build a minimal real
+# model artifact for a real-MLflow-registry test. Paired with the
+# `# type: ignore[name-defined]` at that subclass site — both are needed,
+# since mypy reports two separate errors (name-defined, then misc) for the
+# same unresolved name.
+disallow_subclassing_any = false
 
 
 [project.urls]
