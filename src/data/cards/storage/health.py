@@ -1,3 +1,18 @@
+"""Cross-tier data-quality checks run after each pipeline execution.
+
+Checks are grouped by layer (bronze/silver/gold) and reported as a flat list
+of CheckResult(name, layer, status, detail). Structure checks (tables exist,
+have rows) run unconditionally per layer; deeper quality checks (freshness,
+null columns, duplicate keys) only run if that layer's structure checks all
+passed — querying a column or table that doesn't exist would raise instead
+of producing a meaningful FAIL, so the structure gate exists to keep a
+missing/malformed table from crashing the rest of the health check instead
+of reporting it as one clean FAIL among many.
+
+FAIL on any check causes run_health_checks to raise SystemExit(1) (used by
+scripts/check_health.py as a pipeline gate); WARN is logged but does not fail.
+"""
+
 import datetime
 from dataclasses import dataclass
 from typing import Literal
@@ -289,6 +304,11 @@ def run_health_checks(
         ]
         results.extend(gold_structure)
 
+        # Deeper Silver checks (freshness, null columns, duplicate keys) query
+        # silver_cards and other tables by name/column — if a structure check
+        # above already found a missing table, running these would raise
+        # instead of reporting a clean FAIL, so they're gated on full structure
+        # PASS rather than run unconditionally.
         if all(r.status == "PASS" for r in silver_structure):
             for t in _SILVER_FRESHNESS_TABLES:
                 results.append(_check_snapshot_date_today(silver_con, t, today))
@@ -300,6 +320,8 @@ def run_health_checks(
             results.append(_check_oracle_id_conflicts(silver_con))
             results.append(_check_silver_prices_no_negative_eur(silver_con, today))
 
+        # Same rationale as the Silver gate above — gold_ml_dataset's target
+        # column check assumes the table exists.
         if all(r.status == "PASS" for r in gold_structure):
             results.append(_check_gold_ml_dataset_has_target(gold_con))
 
