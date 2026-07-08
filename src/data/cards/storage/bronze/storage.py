@@ -424,7 +424,9 @@ class BronzeStorage(BaseStorage):
         Sources and their write strategy are declared in STORAGE_CONFIG via
         _process_sources. If one source fails the others are still processed.
         Price snapshots use dedicated methods (_snapshot_scryfall_prices and
-        _snapshot_mtgjson_prices) called after _process_sources.
+        _snapshot_mtgjson_prices) called after _process_sources. A snapshot
+        failure is logged and skipped rather than aborting the run, matching
+        populate()'s behavior for the same two calls.
 
         Args:
             results: Output of ingesting_pipeline — maps source type to
@@ -434,7 +436,21 @@ class BronzeStorage(BaseStorage):
         self._process_sources(results, update=True)
 
         scryfall_records, _ = results.get("scryfall", ([], []))
-        self._snapshot_scryfall_prices(scryfall_records)
+        try:
+            self._snapshot_scryfall_prices(scryfall_records)
+        except StorageWriteError as e:
+            logger.error(
+                "Scryfall price snapshot failed during daily_update: %s — skipping",
+                e,
+                exc_info=True,
+            )
 
         mtgjson_records, _ = results.get("mtgjson_prices", ([], []))
-        self._snapshot_mtgjson_prices(mtgjson_records)
+        try:
+            self._snapshot_mtgjson_prices(mtgjson_records)
+        except StorageWriteError as e:
+            logger.error(
+                "MTGJson price snapshot failed during daily_update: %s — skipping",
+                e,
+                exc_info=True,
+            )

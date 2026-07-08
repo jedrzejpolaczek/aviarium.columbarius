@@ -868,6 +868,37 @@ class TestDailyUpdate:
             mock_scryfall_prices.assert_called_once()
             mock_mtgjson_prices.assert_called_once()
 
+    def test_scryfall_snapshot_error_does_not_abort_daily_update(self):
+        with _bronze() as b:
+            with (
+                patch.object(b, "_incremental_load"),
+                patch.object(b, "_snapshot"),
+                patch.object(
+                    b,
+                    "_snapshot_scryfall_prices",
+                    side_effect=StorageWriteError("scryfall price snapshot failed"),
+                ),
+                patch.object(b, "_snapshot_mtgjson_prices") as mock_mtgjson_prices,
+            ):
+                b.daily_update({"scryfall": ([MagicMock()], [])})  # must not raise
+
+            # mtgjson snapshot must still run after the scryfall snapshot fails
+            mock_mtgjson_prices.assert_called_once()
+
+    def test_mtgjson_snapshot_error_does_not_raise(self):
+        with _bronze() as b:
+            with (
+                patch.object(b, "_incremental_load"),
+                patch.object(b, "_snapshot"),
+                patch.object(b, "_snapshot_scryfall_prices"),
+                patch.object(
+                    b,
+                    "_snapshot_mtgjson_prices",
+                    side_effect=StorageWriteError("mtgjson price snapshot failed"),
+                ),
+            ):
+                b.daily_update({"mtgjson_prices": ([MagicMock()], [])})  # must not raise
+
     def test_error_in_one_source_does_not_block_others(self):
         call_log: list[str] = []
 
