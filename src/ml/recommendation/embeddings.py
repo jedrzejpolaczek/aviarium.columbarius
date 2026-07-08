@@ -6,20 +6,22 @@ Static attributes (rarity, CMC) don't differentiate cards with similar abilities
 TF-IDF distinguishes "Draw a card" from "Draw two cards" and "Counter target spell".
 MTG vocabulary is small and repetitive — TF-IDF works very well here.
 
-APPROACH 1 — TF-IDF (start here):
-- sklearn TfidfVectorizer on oracle_text
-- max_features=500 is sufficient for the MTG vocabulary
-- Fast, deterministic, scales to 300k cards
+APPROACH: TF-IDF.
+sklearn TfidfVectorizer on oracle_text, max_features=500 (sufficient for the
+MTG vocabulary). Fast, deterministic, scales to 300k cards.
 
-APPROACH 2 — sentence-transformers (optional, later):
-- from sentence_transformers import SentenceTransformer
-- model = SentenceTransformer('all-MiniLM-L6-v2')
-- Understands semantics: "remove from the game" ≈ "exile"
-- Slower, benefits from GPU for large corpora
+NOT IMPLEMENTED: sentence-transformers embeddings were considered (would
+understand semantics like "remove from the game" ≈ "exile") but rejected for
+now — slower, needs GPU for large corpora, and TF-IDF already distinguishes
+MTG's small repetitive vocabulary well. Revisit only if TF-IDF similarity
+quality proves insufficient in practice.
 
-COMBINING WITH CARD ATTRIBUTES (optional):
-combined = np.hstack([card_features_normalized, text_embeddings])
-This combined matrix can be passed to CardSimilarityIndex instead of attributes alone.
+COMBINING WITH CARD ATTRIBUTES: combine_with_card_features() concatenates
+these embeddings with static card features (see its own docstring). Per
+ADR-023's "Negative consequences", this combination exists here but is not
+yet wired into the production CardSimilarityIndex (src/ml/recommendation/
+similarity.py) — combining attributes and text is tracked as a future
+improvement there.
 """
 
 import numpy as np
