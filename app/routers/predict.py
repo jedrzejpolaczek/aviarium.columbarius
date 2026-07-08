@@ -68,7 +68,7 @@ def _predict_from_index(
 
     log_return = float(model.predict(X_all_t.iloc[[idx]])[0])  # type: ignore[attr-defined]
     predicted_price = (
-        float(np.expm1(np.log1p(current_eur) + log_return))
+        float(inverse_log_return(np.array([current_eur]), np.array([log_return]))[0])
         if current_eur is not None
         else None
     )
