@@ -30,6 +30,13 @@ from src.ml.models.tiered import assign_tier
 TIER1_FLAG_THRESHOLD = 1.3  # predicted/actual > 1.3 = potentially underpriced
 TIER2_FLAG_THRESHOLD = 1.3  # same threshold but gated by the Bayesian guardrail
 
+PRICE_FLOOR_EUR = 0.01
+"""Minimum EUR price used as a division-by-zero guard when computing the
+confidence ratio and backtest appreciation. Unrelated to
+src.ml.evaluation.metrics.MAPE_CLIP_MIN, which clips log_return values
+(~-1..1 scale) for model evaluation -- the shared 0.01 literal is
+coincidental, not a shared concept. Do not import MAPE_CLIP_MIN here."""
+
 
 def flag_underpriced(
     df: pd.DataFrame,
@@ -52,7 +59,7 @@ def flag_underpriced(
     """
     df = df.copy()
     df["tier"] = df[actual_col].apply(assign_tier)
-    df["confidence"] = df[predicted_col] / df[actual_col].clip(lower=0.01)
+    df["confidence"] = df[predicted_col] / df[actual_col].clip(lower=PRICE_FLOOR_EUR)
 
     tier1_flag = (df["tier"] == 1) & (df["confidence"] > TIER1_FLAG_THRESHOLD)
     # Bayesian guardrail (BA-02 HDI) will be integrated when BA-02 results are available
@@ -125,7 +132,7 @@ def backtest_underpriced(
 
     merged["change"] = (merged["eur_check"] - merged["eur_flag"]) / merged[
         "eur_flag"
-    ].clip(lower=0.01)
+    ].clip(lower=PRICE_FLOOR_EUR)
 
     total = len(merged)
     appreciated = int((merged["change"] > appreciation_threshold).sum())
