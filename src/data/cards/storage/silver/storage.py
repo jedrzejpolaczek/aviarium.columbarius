@@ -48,7 +48,10 @@ class SilverStorage(TransformStorage):
     Adding a new source requires only a new entry there — no code changes needed.
 
     Composition:
-        _card_join  (SilverCardJoin)    — MTGJson × Scryfall merge logic
+        _build_silver_cards_sql()       — MTGJson × Scryfall merge logic, done
+                                           entirely in silver_cards.sql (no
+                                           SilverCardJoin class — the join
+                                           lives in SQL, not Python)
         _prices     (SilverPriceBuilder)— price extraction, join, and forward-fill
         _writer     (DuckDBWriter)      — DuckDB append / full-load / upsert helpers
 
