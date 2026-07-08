@@ -32,6 +32,21 @@ logger = get_logger(__name__)
 T = TypeVar("T")
 
 
+def _cleanup_html_files(paths: list[str]) -> None:
+    """Delete temporary HTML files downloaded during a scrape, ignoring failures.
+
+    missing_ok=True handles the file already being gone; the PermissionError
+    guard handles Windows still holding the file open in a concurrent
+    process — both ingestion paths need this, so it lives here once instead
+    of being copied per scraper.
+    """
+    for p in paths:
+        try:
+            Path(p).unlink(missing_ok=True)
+        except PermissionError:
+            pass  # Windows: file still held by a concurrent process; ignore
+
+
 async def _fetch_and_parse(
     client: httpx.AsyncClient,
     sem: asyncio.Semaphore,
@@ -162,8 +177,7 @@ async def _ingest_format_staples_async(
     all_raw = [rec for fmt_recs in results for rec in fmt_recs]
 
     _save_to_json(all_raw, json_path)
-    for p in html_paths:
-        Path(p).unlink(missing_ok=True)
+    _cleanup_html_files(html_paths)
 
     return {"format_staples": load_from_json(json_path, model)}
 
@@ -316,11 +330,7 @@ async def _ingest_tournament_results_async(
     new_raw = [rec for deck_recs in level3 for rec in deck_recs]
 
     _save_to_json(new_raw, t_json_path)
-    for p in t_html_paths:
-        try:
-            Path(p).unlink(missing_ok=True)
-        except PermissionError:
-            pass  # Windows: file still held by a concurrent process; ignore
+    _cleanup_html_files(t_html_paths)
 
     result = load_from_json(t_json_path, t_model)
     logger.info(

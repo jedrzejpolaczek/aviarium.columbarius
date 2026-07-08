@@ -17,6 +17,7 @@ from src.data.cards.sources import (
     ingesting_pipeline,
     load_from_json,
 )
+from src.data.cards.sources.scrapers import _cleanup_html_files
 
 
 class _Simple(BaseModel):
@@ -701,3 +702,34 @@ class TestIngestTournamentResultsAsyncRealParsing:
             assert r.card_name == "Lightning Bolt"
             assert r.copies == 4
             assert r.is_sideboard is False
+
+
+# ---------------------------------------------------------------------------
+# _cleanup_html_files
+# ---------------------------------------------------------------------------
+
+
+class TestCleanupHtmlFiles:
+    def test_cleanup_html_files_removes_existing_files(self, tmp_path):
+        f1 = tmp_path / "a.html"
+        f2 = tmp_path / "b.html"
+        f1.write_text("x")
+        f2.write_text("y")
+
+        _cleanup_html_files([str(f1), str(f2)])
+
+        assert not f1.exists()
+        assert not f2.exists()
+
+    def test_cleanup_html_files_ignores_missing_files(self, tmp_path):
+        missing = tmp_path / "does_not_exist.html"
+        # Must not raise.
+        _cleanup_html_files([str(missing)])
+
+    def test_cleanup_html_files_ignores_permission_error(self, tmp_path):
+        f1 = tmp_path / "locked.html"
+        f1.write_text("x")
+
+        with patch.object(Path, "unlink", side_effect=PermissionError):
+            # Must not raise — this is the Windows "file still held" case.
+            _cleanup_html_files([str(f1)])
