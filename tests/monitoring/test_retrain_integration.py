@@ -36,7 +36,7 @@ def test_retrain_logs_to_real_mlflow_and_promotes(tiny_gold_conn):
 
 
 def test_retrain_second_call_reregisters_and_repromotes(tiny_gold_conn):
-    first_run_id = retrain(tiny_gold_conn, "2026-06-01")
+    retrain(tiny_gold_conn, "2026-06-01")
 
     second_run_id = retrain(tiny_gold_conn, "2026-06-01")
 
