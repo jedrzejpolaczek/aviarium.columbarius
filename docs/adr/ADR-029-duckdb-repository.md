@@ -7,15 +7,18 @@
 
 `BaseStorage._open_connection` (storage tier, `src/data/cards/storage/base/storage.py`)
 already centralized `duckdb.connect(...)` with error wrapping (`StorageConnectionError`)
-and logging for storage-tier subclasses. But five call sites outside that tier each
-independently called `duckdb.connect(...)` directly, with no shared error handling:
+and logging for storage-tier subclasses. But four locations outside that tier
+independently called `duckdb.connect(...)` directly — six individual calls in total,
+since `health.py` alone made three — with no shared error handling:
 
-- `app/main.py` — opens the Gold DB connection stored in `app.state` at FastAPI startup.
+- `app/main.py` — opens the Gold DB connection stored in `app.state` at FastAPI startup
+  (one connection).
 - `src/data/cards/storage/health.py` — three separate connections (Bronze, Silver, Gold)
   for the standalone health-check pipeline.
-- `scripts/check_and_retrain.py` — opens Bronze/Silver/Gold connections to decide whether
-  retraining is needed.
-- `scripts/train_model.py` — opens the Gold DB connection to run manual training.
+- `scripts/check_and_retrain.py` — opens the Gold DB connection to decide whether
+  retraining is needed (one connection).
+- `scripts/train_model.py` — opens the Gold DB connection to run manual training
+  (one connection).
 
 None of these are `BaseStorage` subclasses (they don't own a storage lifecycle — they're
 one-shot scripts or app-level entry points), so none could reach `_open_connection`
@@ -31,7 +34,8 @@ connection itself gets created* outside the storage tier. The raw
 
 ## Decision
 
-Two new pieces, plus five migrated call sites:
+Two new pieces, plus four migrated locations (six individual `duckdb.connect(...)`
+calls):
 
 1. **`src/data/db.py::open_connection(db_path, read_only)`** — extracted from
    `BaseStorage._open_connection`; `BaseStorage` now delegates to it. One implementation
@@ -58,11 +62,11 @@ Two new pieces, plus five migrated call sites:
      `BaseStorage` in the storage tier, so callers can write
      `with open_repository(...) as repo:` instead of an explicit `try`/`finally`.
 
-3. **Migration of the five sites**, across this task sequence:
+3. **Migration of the four locations**, across this task sequence:
    - `app/main.py` + `app/dependencies.py` — `app.state.repo` (a `DuckDBRepository`)
      replaces `app.state.db` (a raw connection); `get_db()` returns the repository.
    - `src/data/cards/storage/health.py` — all three connections (Bronze, Silver, Gold).
-   - `scripts/check_and_retrain.py` — all three connections.
+   - `scripts/check_and_retrain.py` — the single Gold connection.
    - `scripts/train_model.py` (this task) — the single Gold connection:
      `repo = open_repository(args.db_path, read_only=True)`, `conn = repo.connection`
      passed to `get_latest_gold_snapshot_date` and `retrain` exactly as the raw
@@ -80,8 +84,8 @@ before. Two reasons:
   signature in `DuckDBRepository` would be a type change with no behavioral upside,
   since none of them need `.get_tables()`/`.query_df()` or connection lifecycle
   management — they receive an already-open connection and never own its lifecycle.
-- The actual defect being fixed here is at the five *connection-creation* sites, not
-  at every function that later borrows the connection. Threading a new type through
+- The actual defect being fixed here is at the four *connection-creation* locations,
+  not at every function that later borrows the connection. Threading a new type through
   every SQL-running function signature in the codebase would be disproportionate
   churn relative to that defect.
 
@@ -100,14 +104,14 @@ functional gain to this ADR's scope.
 
 ### Positive
 
-- One factory (`open_connection`) instead of five independently-implemented
-  `duckdb.connect(...)` calls, each of which previously had to remember read-only
-  handling and had no shared error path.
+- One factory (`open_connection`) instead of six independently-implemented
+  `duckdb.connect(...)` calls across four locations, each of which previously had to
+  remember read-only handling and had no shared error path.
 - `StorageConnectionError` wrapping and structured logging (`open_connection`'s
   `logger.info("Connected to DuckDB (read_only=%s) at %s", ...)`) now apply uniformly
-  at all five sites. Before this sequence, only the storage tier (via `BaseStorage`)
-  got this — the five outside call sites raised whatever `duckdb.Error` DuckDB happened
-  to throw, uncaught and unlogged.
+  at all four locations. Before this sequence, only the storage tier (via `BaseStorage`)
+  got this — the four outside-tier locations raised whatever `duckdb.Error` DuckDB
+  happened to throw, uncaught and unlogged.
 - `DuckDBRepository` gives call sites outside the storage tier a named, injectable type
   (useful for `app.state.repo` and FastAPI's `Depends()` machinery in
   `app/dependencies.py::get_db`) instead of importing `duckdb.DuckDBPyConnection`
@@ -119,8 +123,8 @@ functional gain to this ADR's scope.
   `app.state.db` used to be a raw connection directly. Callers that only ever wanted
   the connection now go through one more attribute access.
 - `get_tables()`/`query_df()` exist on `DuckDBRepository` as convenience methods without
-  corresponding to an observed duplication problem at any of the five migrated call
-  sites — all of them use only `.connection` and (where applicable) `.close()`/the
+  corresponding to an observed duplication problem at any of the four migrated
+  locations — all of them use only `.connection` and (where applicable) `.close()`/the
   context-manager protocol. This is called out explicitly rather than oversold, per the
   corrected class docstring (commit `0e73d7e`).
 
@@ -128,9 +132,9 @@ functional gain to this ADR's scope.
 
 | Approach | Reason rejected |
 |---|---|
-| Full `Protocol`/repository type threaded through every SQL-running function (`build_inference_features`, `walk_forward_cv`, `src.monitoring.*`) | Disproportionate churn relative to the actual defect (uncontrolled connection creation at five sites). Those functions run genuinely custom per-function SQL per ADR-024 and never own connection lifecycle — there is nothing for a repository type to centralize there. |
+| Full `Protocol`/repository type threaded through every SQL-running function (`build_inference_features`, `walk_forward_cv`, `src.monitoring.*`) | Disproportionate churn relative to the actual defect (uncontrolled connection creation at four locations). Those functions run genuinely custom per-function SQL per ADR-024 and never own connection lifecycle — there is nothing for a repository type to centralize there. |
 | `PriceModel`/`lightgbm` type alias for model-adjacent code | Rejected — reverses the intent of a very recent, deliberate correctness fix (commit `97b575d`) that corrected `require_model`'s return type from a wrapper class to `lgb.Booster` to match what MLflow actually returns at runtime. Introducing a new alias now would make the annotated type diverge from the runtime type again, for no gain within this ADR's scope. |
-| Leave the five duplicated `duckdb.connect(...)` sites as-is | Rejected — each site had independently omitted the error-wrapping and logging the storage tier already had via `BaseStorage._open_connection`, meaning connection failures outside the storage tier failed differently (and less informatively) depending on which of the five sites hit them. |
+| Leave the four duplicated `duckdb.connect(...)` locations as-is | Rejected — each location had independently omitted the error-wrapping and logging the storage tier already had via `BaseStorage._open_connection`, meaning connection failures outside the storage tier failed differently (and less informatively) depending on which of the four locations hit them. |
 
 ## Affected ADRs
 
