@@ -44,7 +44,7 @@ from sklearn.pipeline import Pipeline
 
 from app.routers import cards, health, predict, similar, underpriced
 from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
-from src.data.repository import DuckDBRepository, open_repository
+from src.data.repository import GOLD_DB_PATH, DuckDBRepository, open_repository
 from src.ml.features.pipeline import (
     build_feature_pipeline,
     build_inference_features,
@@ -55,7 +55,6 @@ from src.logger import get_logger, setup_logging
 from src.ml.training.tracking import load_model_from_mlflow
 
 
-GOLD_DB_PATH = os.getenv("GOLD_DB_PATH", "data/gold/cards.duckdb")
 MODEL_RUN_ID = os.getenv("MODEL_RUN_ID", "")
 
 logger = get_logger(__name__)

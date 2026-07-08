@@ -17,7 +17,6 @@ Usage:
 """
 
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,11 +28,10 @@ import duckdb as duckdb  # explicit re-export: tests patch check_and_retrain.duc
 
 from scripts._common import gold_db_exists
 from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
-from src.data.repository import open_repository
+from src.data.repository import GOLD_DB_PATH, open_repository
 from src.logger import get_logger, setup_logging
 from src.monitoring.retraining import retrain, should_retrain
 
-GOLD_DB_PATH = os.getenv("GOLD_DB_PATH", "data/gold/cards.duckdb")
 STATUS_PATH = Path("logs/last_check_status.json")
 
 logger = get_logger(__name__)

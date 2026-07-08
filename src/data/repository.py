@@ -20,6 +20,7 @@ connection-creation boundary rather than threaded through every SQL-running
 function signature in the codebase.
 """
 
+import os
 from typing import Self
 
 import duckdb
@@ -27,6 +28,11 @@ import pandas as pd
 
 from src.data.cards.storage.base.storage import get_tables
 from src.data.db import open_connection
+
+GOLD_DB_PATH = os.getenv("GOLD_DB_PATH", "data/gold/cards.duckdb")
+"""Default path to the Gold DuckDB file, shared by app/main.py,
+scripts/train_model.py, and scripts/check_and_retrain.py — previously each
+defined this identically via its own os.getenv(...) call."""
 
 
 class DuckDBRepository:

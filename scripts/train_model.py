@@ -5,10 +5,9 @@ import sys
 
 from scripts._common import gold_db_exists
 from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
-from src.data.repository import open_repository
+from src.data.repository import GOLD_DB_PATH, open_repository
 from src.ml.training.tracking import setup_experiment
 
-GOLD_DB_PATH = os.getenv("GOLD_DB_PATH", "data/gold/cards.duckdb")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
