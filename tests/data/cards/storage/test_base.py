@@ -6,7 +6,7 @@ import duckdb
 import pandas as pd
 import pytest
 
-from src.data.cards.storage.base.storage import get_tables
+from src.data.cards.storage.base.storage import get_tables, warn_if_missing
 from src.data.cards.storage.base.writers import DuckDBWriter
 from src.data.cards.storage.base.transformer import TransformStorage
 from src.data.cards.storage.base.storage import BaseStorage
@@ -177,6 +177,59 @@ class TestGetTables:
         tables = get_tables(memory_con)
         assert "table1" in tables
         assert "table2" in tables
+
+
+# ---------------------------------------------------------------------------
+# warn_if_missing
+# ---------------------------------------------------------------------------
+
+
+class TestWarnIfMissing:
+    def test_returns_false_when_all_required_tables_present(self):
+        from src.logger import get_logger
+
+        logger = get_logger("test.warn_if_missing")
+        result = warn_if_missing(
+            logger,
+            ("table_a", "table_b"),
+            {"table_a", "table_b", "table_c"},
+            "some_target",
+            tier_label="Silver",
+        )
+        assert result is False
+
+    def test_returns_true_and_warns_when_a_required_table_is_missing(self, caplog):
+        import logging
+
+        from src.logger import get_logger
+
+        logger = get_logger("test.warn_if_missing")
+        with caplog.at_level(logging.WARNING):
+            result = warn_if_missing(
+                logger,
+                ("table_a", "table_b"),
+                {"table_a"},
+                "some_target",
+                tier_label="Silver",
+            )
+        assert result is True
+        assert "Missing Silver tables" in caplog.text
+        assert "table_b" in caplog.text
+        assert "some_target" in caplog.text
+
+    def test_lists_every_missing_table_not_just_the_first(self, caplog):
+        import logging
+
+        from src.logger import get_logger
+
+        logger = get_logger("test.warn_if_missing")
+        with caplog.at_level(logging.WARNING):
+            warn_if_missing(
+                logger, ("a", "b", "c"), set(), "some_target", tier_label="Bronze"
+            )
+        assert "'a'" in caplog.text
+        assert "'b'" in caplog.text
+        assert "'c'" in caplog.text
 
 
 # ---------------------------------------------------------------------------

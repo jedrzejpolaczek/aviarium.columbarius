@@ -2,9 +2,11 @@
 
 import duckdb
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from typing import Self
 
 from src.data.db import open_connection
+from src.logger import ProgressLogger
 
 
 def get_tables(conn: duckdb.DuckDBPyConnection) -> set[str]:
@@ -17,6 +19,29 @@ def get_tables(conn: duckdb.DuckDBPyConnection) -> set[str]:
         Set of table name strings from SHOW TABLES.
     """
     return {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
+
+
+def warn_if_missing(
+    logger: ProgressLogger,
+    required: Sequence[str],
+    available: set[str],
+    skip_target: str,
+    *,
+    tier_label: str,
+) -> bool:
+    """Return True (and log a warning) if any of `required` is absent from `available`.
+
+    Shared by bronze/silver/gold storage classes so the "skip this build if
+    an upstream table is missing" guard clause is written once, not
+    reinvented per tier — see ADR-030.
+    """
+    missing = [t for t in required if t not in available]
+    if missing:
+        logger.warning(
+            "Missing %s tables %s — skipping %s", tier_label, missing, skip_target
+        )
+        return True
+    return False
 
 
 class BaseStorage(ABC):

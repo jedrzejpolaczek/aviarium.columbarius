@@ -30,7 +30,7 @@ from collections.abc import Callable
 import duckdb
 import pandas as pd
 
-from src.data.cards.storage.base.storage import get_tables
+from src.data.cards.storage.base.storage import get_tables, warn_if_missing
 from src.data.cards.storage.base.transformer import TransformStorage
 from src.data.cards.storage.gold.features import GoldFeatureBuilders
 from src.data.cards.storage.gold.signals import GoldSignalBuilders
@@ -142,11 +142,9 @@ class GoldStorage(TransformStorage):
         Otherwise logs which of `required` is missing and skips the build —
         the shared shape behind the guard clauses in _pipeline.
         """
-        missing = [t for t in required if t not in silver_tables]
-        if missing:
-            logger.warning(
-                "Missing Silver tables %s — skipping %s", missing, gold_table
-            )
+        if warn_if_missing(
+            logger, required, silver_tables, gold_table, tier_label="Silver"
+        ):
             return
         logger.progress("Building %s", gold_table)
         self._writer.full_load(build_fn(), gold_table)
@@ -194,17 +192,19 @@ class GoldStorage(TransformStorage):
         # gold_demand_signals and gold_events share a single Silver dependency
         # (silver_meta_history) — kept as a pair with one combined warning so
         # a missing-table log line doesn't repeat itself twice for one cause.
-        if "silver_meta_history" in silver_tables:
+        if not warn_if_missing(
+            logger,
+            ("silver_meta_history",),
+            silver_tables,
+            "gold_demand_signals, gold_events",
+            tier_label="Silver",
+        ):
             logger.progress("Building gold_demand_signals")
             self._writer.full_load(
                 self._signals.build_demand_signals(), "gold_demand_signals"
             )
             logger.progress("Building gold_events")
             self._writer.full_load(self._signals.build_events(), "gold_events")
-        else:
-            logger.warning(
-                "silver_meta_history not found — skipping gold_demand_signals, gold_events"
-            )
 
         self._build_if_present(
             ("silver_format_staples_history",),
