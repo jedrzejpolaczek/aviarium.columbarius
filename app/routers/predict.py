@@ -28,19 +28,9 @@ from app.dependencies import (
     require_match,
     require_model,
 )
+from app.pricing import inverse_log_return
 from app.schemas.responses import PredictionResponse
 from src.ml.models.tiered import assign_tier
-
-
-def inverse_log_return(eur: np.ndarray, log_returns: np.ndarray) -> np.ndarray:
-    """Convert predicted log_return_7d values to absolute EUR prices.
-
-    Applies the inverse of log1p: expm1(log1p(eur) + log_return).
-    Returns NaN for elements where eur is NaN.
-    """
-    not_null = pd.notna(eur)
-    log_eur = np.where(not_null, np.log1p(np.where(not_null, eur, 0.0)), np.nan)
-    return np.where(not_null, np.expm1(log_eur + log_returns), np.nan)
 
 
 def _predict_from_index(

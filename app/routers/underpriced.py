@@ -26,7 +26,7 @@ import pandas as pd
 from fastapi import APIRouter, Depends, Query
 
 from app.dependencies import RequestFeatures, get_request_features, require_model
-from app.routers.predict import inverse_log_return
+from app.pricing import inverse_log_return
 from app.schemas.responses import UnderpricedCard, UnderpricedResponse
 from src.ml.recommendation.underpriced import flag_underpriced
 
