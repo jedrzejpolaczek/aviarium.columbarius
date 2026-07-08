@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import type { CardEntry } from '../types'
+import { formatEur } from '../format'
 
 interface Props {
   cards: CardEntry[]
@@ -8,8 +9,7 @@ interface Props {
 }
 
 function cardLabel(card: CardEntry): string {
-  const price = card.eur !== null ? `€${card.eur.toFixed(2)}` : 'no price'
-  return `${card.name} [${card.set_code} · ${card.rarity} · ${price}]`
+  return `${card.name} [${card.set_code} · ${card.rarity} · ${formatEur(card.eur, 'no price')}]`
 }
 
 export function CardSearch({ cards, onPredict, isLoading }: Props) {
@@ -106,7 +106,7 @@ export function CardSearch({ cards, onPredict, isLoading }: Props) {
               <span className="font-medium">{card.name}</span>
               <span className="ml-2 text-xs text-gray-400">
                 {card.set_code} · {card.rarity}
-                {card.eur !== null ? ` · €${card.eur.toFixed(2)}` : ''}
+                {card.eur !== null ? ` · ${formatEur(card.eur)}` : ''}
               </span>
             </li>
           ))}

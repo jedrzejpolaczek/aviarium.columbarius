@@ -1,12 +1,8 @@
 import type { PredictionResponse } from '../types'
+import { formatEur } from '../format'
 
 interface Props {
   result: PredictionResponse
-}
-
-function fmtEur(value: number | null): string {
-  if (value === null) return '—'
-  return `€${value.toFixed(2)}`
 }
 
 function fmtReturn(value: number | null): string {
@@ -29,7 +25,7 @@ export function PredictionResult({ result }: Props) {
       ) : (
         <div className="mt-4 text-center">
           <p className="text-5xl font-bold text-indigo-600">
-            {fmtEur(result.predicted_price)}
+            {formatEur(result.predicted_price)}
           </p>
           <p className="mt-1 text-sm text-gray-400">predicted price (7d)</p>
         </div>
@@ -38,7 +34,7 @@ export function PredictionResult({ result }: Props) {
       <div className="mt-6 grid grid-cols-3 gap-4 border-t border-gray-100 pt-4">
         <div className="text-center">
           <p className="text-xs text-gray-400">Current price</p>
-          <p className="mt-1 font-medium text-gray-700">{fmtEur(result.current_price)}</p>
+          <p className="mt-1 font-medium text-gray-700">{formatEur(result.current_price)}</p>
         </div>
         <div className="text-center">
           <p className="text-xs text-gray-400">Tier</p>
