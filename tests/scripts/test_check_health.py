@@ -20,6 +20,11 @@ def test_main_calls_run_health_checks_with_config_paths(monkeypatch):
     monkeypatch.setattr(check_health, "load_config", lambda path: fake_config)
     mock_run_health_checks = MagicMock(return_value=[])
     monkeypatch.setattr(check_health, "run_health_checks", mock_run_health_checks)
+    # setup_logging is also bound directly into scripts.check_health's
+    # namespace via `from src.logger import setup_logging` at module level.
+    # Mock it to avoid writing real timestamped log files into logs/ and
+    # mutating the global logging root logger as a side effect of main().
+    monkeypatch.setattr(check_health, "setup_logging", MagicMock())
 
     check_health.main()
 
