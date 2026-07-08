@@ -1,18 +1,18 @@
 import argparse
-import logging
-import os
 import sys
+from pathlib import Path
 
 from scripts._common import gold_db_exists
 from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
 from src.data.repository import GOLD_DB_PATH, open_repository
+from src.logger import get_logger, setup_logging
 from src.ml.training.tracking import setup_experiment
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def main() -> None:
+    setup_logging(log_dir=Path("logs"))
     parser = argparse.ArgumentParser(
         description="Train the MTG price prediction model."
     )
