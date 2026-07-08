@@ -40,7 +40,7 @@ C4Component
 | **LightGBMPriceModel** | Encapsulates LightGBM booster training and inference; maintains separate models per price tier; handles model serialization and loading | `src/ml/models/lightgbm_*.py` | ADR-017 (LightGBM model choice), ADR-018 (tier-based selection) |
 | **Trainer** | Orchestrates the full training pipeline: feature generation, Optuna hyperparameter search, time-series cross-validation, metric evaluation, and MLflow logging | `src/ml/trainer.py` | ADR-017, ADR-018, ADR-019 (startup precomputation) |
 | **EvaluationMetrics** | Computes MAPE (Mean Absolute Percentage Error) per price tier to measure model performance across different card value ranges | `src/ml/metrics/` | ADR-018 (tier-specific metrics) |
-| **ShapAnalyzer** | Generates SHAP values for model features to provide explainability on which factors drive price predictions | `src/ml/explainability/` | ADR-020 (monitoring and retraining) |
+| **ShapAnalyzer** | Generates SHAP values for model features to provide explainability on which factors drive price predictions | `src/ml/explainability/` | ADR-020 (monitoring and retraining), ADR-028 (TreeSHAP choice) |
 | **CardSimilarityIndex** | Builds and maintains a KNeighborsIndex (cosine similarity) over Gold layer card features for recommendation and content-based filtering | `src/ml/indices/similarity.py` | ADR-019 (FastAPI startup precomputation) |
 | **UnderpricedScanner** | Scans Gold layer predictions and current market prices to identify cards with significant upside potential (model prediction > current price) | `src/ml/indices/underpriced.py` | ADR-019, ADR-020 |
 
