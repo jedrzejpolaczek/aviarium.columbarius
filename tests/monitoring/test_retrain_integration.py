@@ -66,14 +66,20 @@ def test_retrain_logs_to_real_mlflow_and_promotes(tiny_conn):
     assert prod_version.run_id == run_id
 
 
-def test_retrain_second_call_only_promotes_if_better(tiny_conn):
+def test_retrain_second_call_reregisters_and_repromotes(tiny_conn):
     first_run_id = retrain(tiny_conn, "2026-06-01")
 
     second_run_id = retrain(tiny_conn, "2026-06-01")
 
     client = mlflow.tracking.MlflowClient()
     prod_version = client.get_model_version_by_alias("mtg_price_model", "production")
-    # Both runs train on identical data — either could legitimately win the
-    # tie (new_mape <= prod_mape promotes). Assert only that production
-    # points at ONE of the two real runs, not a stale/missing alias.
-    assert prod_version.run_id in {first_run_id, second_run_id}
+    # tiny_conn's dataset is too small for walk-forward CV, so both calls hit
+    # retrain()'s InsufficientDataError fallback and cv_results is empty both
+    # times, making new_mape == float("inf") on every call. That means
+    # `new_mape <= prod_mape` is `inf <= inf`, which is deterministically
+    # True — the second call promotes every time, it is not a coin-flip tie.
+    # This test therefore does NOT exercise the MAPE-comparison branch (that
+    # is unit-tested with mocks in tests/monitoring/test_retraining.py); it
+    # verifies that a repeat retrain() call re-registers a new model version
+    # and correctly re-points the "production" alias at it.
+    assert prod_version.run_id == second_run_id
