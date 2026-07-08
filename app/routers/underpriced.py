@@ -23,9 +23,9 @@ from datetime import date
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query
 
-from app.dependencies import require_model
+from app.dependencies import RequestFeatures, get_request_features, require_model
 from app.routers.predict import inverse_log_return
 from app.schemas.responses import UnderpricedCard, UnderpricedResponse
 from src.ml.recommendation.underpriced import flag_underpriced
@@ -79,13 +79,13 @@ def _to_underpriced_cards(flagged: pd.DataFrame) -> list[UnderpricedCard]:
 
 @router.get("/", response_model=UnderpricedResponse)
 def get_underpriced_cards(
-    request: Request,
     tier: int | None = Query(
         default=None, ge=1, le=3, description="Filter by tier (1, 2, or 3)"
     ),
     min_confidence: float = Query(
         default=1.3, ge=1.0, description="Minimum predicted/actual ratio"
     ),
+    features: RequestFeatures = Depends(get_request_features),
     model: lgb.Booster = Depends(require_model),
 ) -> UnderpricedResponse:
     """Return all cards the model considers underpriced at the latest snapshot.
@@ -98,12 +98,13 @@ def get_underpriced_cards(
     the most underpriced cards appear first.
 
     Args:
-        request:        FastAPI request object for accessing ``app.state``.
         tier:           Optional tier filter (1, 2, or 3). Returns all tiers
                         when not specified.
         min_confidence: Minimum predicted/actual ratio to include in results.
                         Default 1.3 matches the ``TIER1_FLAG_THRESHOLD``
                         constant in ``flag_underpriced``.
+        features:       Pre-computed feature matrices and model_run_id,
+                        injected via ``get_request_features`` dependency.
         model:          LightGBM booster injected via ``require_model`` dependency.
 
     Returns:
@@ -113,9 +114,9 @@ def get_underpriced_cards(
     Raises:
         HTTPException 503: Model not loaded (MODEL_RUN_ID not set or load failed).
     """
-    X_all: pd.DataFrame = request.app.state.X_all
-    X_all_t: pd.DataFrame = request.app.state.X_all_t
-    model_run_id: str = getattr(request.app.state, "model_run_id", "")
+    X_all = features.X_all
+    X_all_t = features.X_all_t
+    model_run_id = features.model_run_id
 
     flagged = _run_underpriced_inference(X_all, X_all_t, model, tier, min_confidence)
     cards = _to_underpriced_cards(flagged)

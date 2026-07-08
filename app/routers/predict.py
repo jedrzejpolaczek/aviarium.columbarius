@@ -20,9 +20,14 @@ URL encoding:
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 
-from app.dependencies import require_match, require_model
+from app.dependencies import (
+    RequestFeatures,
+    get_request_features,
+    require_match,
+    require_model,
+)
 from app.schemas.responses import PredictionResponse
 from src.ml.models.tiered import assign_tier
 
@@ -83,7 +88,7 @@ router = APIRouter(prefix="/predict", tags=["prediction"])
 @router.get("/uuid/{uuid}", response_model=PredictionResponse)
 def predict_price_by_uuid(
     uuid: str,
-    request: Request,
+    features: RequestFeatures = Depends(get_request_features),
     model: lgb.Booster = Depends(require_model),
 ) -> PredictionResponse:
     """Predict the EUR price of a card identified by its MTGJson UUID.
@@ -93,7 +98,8 @@ def predict_price_by_uuid(
 
     Args:
         uuid: MTGJson UUID of the specific card printing.
-        request: FastAPI request object for accessing ``app.state``.
+        features: Pre-computed feature matrices and model_run_id, injected
+            via ``get_request_features`` dependency.
         model: LightGBM booster injected via ``require_model`` dependency.
 
     Returns:
@@ -103,9 +109,9 @@ def predict_price_by_uuid(
         HTTPException 404: UUID not found in the feature matrix.
         HTTPException 503: Model not loaded.
     """
-    X_all: pd.DataFrame = request.app.state.X_all
-    X_all_t: pd.DataFrame = request.app.state.X_all_t
-    model_run_id: str = getattr(request.app.state, "model_run_id", "")
+    X_all = features.X_all
+    X_all_t = features.X_all_t
+    model_run_id = features.model_run_id
 
     matches = require_match(X_all, "uuid", uuid, "UUID")
 
@@ -117,7 +123,7 @@ def predict_price_by_uuid(
 @router.get("/{card_name}", response_model=PredictionResponse)
 def predict_price(
     card_name: str,
-    request: Request,
+    features: RequestFeatures = Depends(get_request_features),
     model: lgb.Booster = Depends(require_model),
 ) -> PredictionResponse:
     """Predict the EUR price of a single card seven days from now.
@@ -131,7 +137,8 @@ def predict_price(
 
     Args:
         card_name: Exact card name, URL-decoded by FastAPI (e.g. "Force of Will").
-        request:   FastAPI request object for accessing ``app.state``.
+        features:  Pre-computed feature matrices and model_run_id, injected
+                   via ``get_request_features`` dependency.
         model:     LightGBM booster injected via ``require_model`` dependency.
                    Sourced from ``app.state.model``.
 
@@ -145,9 +152,9 @@ def predict_price(
         HTTPException 404: Card not found in the feature matrix.
         HTTPException 503: Model not loaded (MODEL_RUN_ID not set or load failed).
     """
-    X_all: pd.DataFrame = request.app.state.X_all
-    X_all_t: pd.DataFrame = request.app.state.X_all_t
-    model_run_id: str = getattr(request.app.state, "model_run_id", "")
+    X_all = features.X_all
+    X_all_t = features.X_all_t
+    model_run_id = features.model_run_id
 
     matches = require_match(X_all, "name", card_name, "Card")
 

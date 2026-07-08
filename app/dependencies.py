@@ -6,11 +6,13 @@ appropriate resource from ``request.app.state``.
     get_db                — open DuckDB connection
     get_similarity_index  — built CardSimilarityIndex (or None before first build)
     require_model         — loaded lgb.Booster, or raises 503
+    get_request_features  — RequestFeatures bundling X_all/X_all_t/model_run_id
 
 ``require_match`` is also defined here but is not a ``Depends()`` target — see
 its own docstring for why.
 """
 
+from dataclasses import dataclass
 from typing import cast
 
 import duckdb
@@ -70,6 +72,28 @@ def require_model(request: Request) -> lgb.Booster:
             503, detail="Model not loaded. Set MODEL_RUN_ID env variable."
         )
     return cast(lgb.Booster, model)
+
+
+@dataclass
+class RequestFeatures:
+    """Bundles the three pieces of app.state every predict/underpriced/cards
+    handler reads — replaces the 3-line
+    `X_all = request.app.state.X_all; X_all_t = ...; model_run_id = ...`
+    block repeated across cards.py, predict.py (x2), and underpriced.py.
+    """
+
+    X_all: pd.DataFrame
+    X_all_t: pd.DataFrame
+    model_run_id: str
+
+
+def get_request_features(request: Request) -> RequestFeatures:
+    """Return the pre-computed feature matrices and active model_run_id."""
+    return RequestFeatures(
+        X_all=request.app.state.X_all,
+        X_all_t=request.app.state.X_all_t,
+        model_run_id=getattr(request.app.state, "model_run_id", ""),
+    )
 
 
 def require_match(

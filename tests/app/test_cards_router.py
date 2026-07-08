@@ -9,6 +9,11 @@ def _client(rows: list[dict]) -> TestClient:
     app = FastAPI()
     app.include_router(router)
     app.state.X_all = pd.DataFrame(rows)
+    # list_cards is injected via get_request_features (app/dependencies.py),
+    # which reads X_all_t/model_run_id too even though this router only
+    # uses X_all — set them so the shared dependency resolves.
+    app.state.X_all_t = pd.DataFrame()
+    app.state.model_run_id = "test-run-123"
     return TestClient(app)
 
 
