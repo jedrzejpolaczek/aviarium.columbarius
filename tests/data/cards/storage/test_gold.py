@@ -308,6 +308,37 @@ class TestBuildPriceFeatures:
         assert result.loc[1, "price_rank_global"] == 2
         assert result.loc[2, "price_rank_global"] == 3
 
+    def test_partitioned_by_uuid_so_two_cards_do_not_mix_windows(self, tmp_path):
+        # Mirrors TestBuildFormatStaples::test_partitioned_by_id_so_two_cards_do_not_mix_windows
+        # — two cards sharing one snapshot_date. If price_7d_avg's rolling
+        # window were ever partitioned by the wrong column (e.g. snapshot_date
+        # instead of uuid), these two single-row windows would blend into one
+        # averaged value instead of staying separate.
+        df = _make_full_prices(
+            [
+                {
+                    "uuid": "u1",
+                    "scryfall_id": "s1",
+                    "snapshot_date": "2026-05-01",
+                    "eur": 50.0,
+                },
+                {
+                    "uuid": "u2",
+                    "scryfall_id": "s2",
+                    "snapshot_date": "2026-05-01",
+                    "eur": 10.0,
+                },
+            ]
+        )
+        with _make_gold_storage(tmp_path, {"silver_prices_history": df}) as g:
+            result = g._features.build_price_features()
+
+        u1_row = result[result["uuid"] == "u1"].iloc[0]
+        u2_row = result[result["uuid"] == "u2"].iloc[0]
+        # Each card's single-row window must equal its own eur, not a mix
+        assert u1_row["price_7d_avg"] == pytest.approx(50.0)
+        assert u2_row["price_7d_avg"] == pytest.approx(10.0)
+
     def test_rank_resets_per_snapshot_date(self, tmp_path):
         df = _make_full_prices(
             [
