@@ -1,4 +1,15 @@
 CREATE OR REPLACE TABLE silver_cards AS
+-- CTE chain (9 stages, each already commented individually below):
+--   excluded_scryfall_ids  -> funny/memorabilia scryfall_ids to exclude from both sources
+--   mtgjson_filtered       -> raw bronze_mtgjson_cards, online/funny/oversized/excluded rows dropped
+--   mtgjson                -> mtgjson_filtered, all columns cleaned/typed/normalized
+--   scryfall_filtered      -> raw bronze_scryfall_cards, digital/oversized/token/excluded rows dropped
+--   scryfall                -> scryfall_filtered, all columns cleaned/typed/normalized
+--   joined                 -> mtgjson FULL OUTER JOIN scryfall on scryfall_id (mtgjson values preferred)
+--   canonical_map / with_canonical -> resolves canonical_uuid for Scryfall-only language variants
+--   deduped                -> keeps one row per scryfall_id (front face preferred for multi-face cards)
+--   final                  -> extracts scalar is_*_legal / format_count columns from the legalities JSON
+-- Read top to bottom — each stage only depends on stages above it.
 WITH
 
 -- ── Scryfall ids belonging to funny/memorabilia sets (joke/playtest/promo cards that
