@@ -1,5 +1,8 @@
 # ADR-030: Shared Idiom Conventions
 
+**Date:** 2026-07-08
+**Status:** Accepted
+
 ## Context
 
 Three successive maintainability audits (2026-07-07 rounds 1 and 2, 2026-07-08
@@ -29,9 +32,9 @@ grep of the whole codebase every time.
 | Fast-training LightGBM params for tests | `FAST_LIGHTGBM_PARAMS` in `tests/ml/conftest.py` | Redefine an identical `LightGBMParams(...)` fixture in a new `tests/ml/**` test file |
 | Euro-price null-safe formatting (frontend) | `formatEur()` in `frontend/src/format.ts` | Write a new `value !== null ? \`€${value.toFixed(2)}\` : ...` inline in a component |
 
-Two apparent duplications were investigated and deliberately **not** merged —
-adding them to this table as "do not fix" so a future audit doesn't re-flag
-them as missed work:
+Five apparent duplications/inconsistencies were investigated and deliberately
+left as-is — adding them to this table as "do not fix" so a future audit
+doesn't re-flag them as missed work:
 
 - `src/ml/features/sql/lag_features.sql`'s `rolling_mean_7d`/`momentum_7d`
   vs. `src/data/cards/storage/gold/sql/price_features.sql`'s
@@ -42,10 +45,32 @@ them as missed work:
   `src/ml/features/sql/lag_features.sql` (`momentum_7d`) and
   `src/data/cards/storage/gold/sql/price_features.sql`
   (`price_change_1d_pct`/`7d_pct`/`30d_pct`, `is_price_spike`), and the
-  separate `COALESCE(x::BOOLEAN, false)` pattern in `silver_cards.sql`
+  separate `COALESCE(x::BOOLEAN, false)` pattern in
+  `src/data/cards/storage/silver/sql/silver_cards.sql`
   (26 occurrences) — round 2 explicitly left both out of scope: each
   occurrence is a single self-contained line with negligible bug risk, and a
   DuckDB macro would add indirection for no safety gain.
+- `src/data/cards/sources/http.py`'s `download_json_from_url`/
+  `download_html_page` — both catch an exception and re-raise as
+  `SourceDownloadError`, which looks like the same "catch I/O error,
+  re-raise as domain exception" shape that `load_json_file()` (see table
+  above) now centralizes for its 3 call sites. Left out of that
+  consolidation because it wraps `httpx.HTTPStatusError` from a network
+  call, not `FileNotFoundError`/`json.JSONDecodeError` from a local file
+  read — a genuinely different failure shape, not an oversight.
+- `scripts/run_pipeline.py` and `scripts/check_health.py` call
+  `setup_logging(log_dir=Path("logs"))` but do not also call
+  `get_logger(__name__)` at module level, unlike `check_and_retrain.py`/
+  `rollback_model.py`/`train_model.py`. Intentional: neither script logs
+  anything itself — all logging happens inside the functions they call —
+  so there is no module logger to acquire. Not an inconsistency to fix.
+- `tests/ml/training/test_tracking.py`'s `fast_model` fixture builds
+  `LightGBMParams(n_estimators=5, num_leaves=4, min_child_samples=5,
+  learning_rate=0.3, subsample=1.0, colsample_bytree=1.0, random_state=0)`,
+  structurally similar to `FAST_LIGHTGBM_PARAMS` in `tests/ml/conftest.py`
+  but with `n_estimators=5` instead of `10` — a genuinely different value,
+  not a duplicate, so it was deliberately left out of the
+  `tests/ml/conftest.py` consolidation.
 
 ## Consequences
 
@@ -54,7 +79,7 @@ them as missed work:
   feature file has one table to check before writing a new guard
   clause/try-except/bootstrap from scratch.
 - Future audits can check this table first and skip re-investigating
-  already-adjudicated "duplication" (the two items explicitly marked
+  already-adjudicated "duplication" (the five items explicitly marked
   "do not fix" above).
 
 ### Negative
