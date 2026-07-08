@@ -20,9 +20,11 @@ ROWS frame — they scan the entire partition including future rows.
 remainder='drop' in ColumnTransformer silently excludes them.
 
 ENRICHMENT HELPERS:
-_enrich_card_df() and _enrich_lag_df() are private helpers that apply the same
-transformations in both build_inference_features() and walk_forward_cv(), keeping
-the serving and training feature matrices identical (no training/serving skew).
+enrich_card_df() and enrich_lag_df() are public, shared between
+build_inference_features() (this module) and walk_forward_cv()
+(src/ml/training/trainer.py), keeping the serving and training feature
+matrices identical (no training/serving skew). Public because both are
+legitimate cross-module consumers, not internal-only helpers.
 """
 
 import duckdb
@@ -47,7 +49,7 @@ IMPUTE_ZERO_COLS = ["top8_appearances_30d", "deck_pct"]
 
 # Numeric columns passed through without transformation.
 # LightGBM handles NaN natively, so lag features with short history are safe.
-# lag_1d_return is intentionally excluded — computed by _enrich_lag_df for exploratory use,
+# lag_1d_return is intentionally excluded — computed by enrich_lag_df for exploratory use,
 # not selected as a model feature.
 NUMERIC_PASS_COLS = [
     "rarity_ord",
@@ -165,7 +167,7 @@ def _normalise_nullable_dtypes(df: pd.DataFrame) -> pd.DataFrame:
 _RARITY_MAP = {"common": 0, "uncommon": 1, "rare": 2, "mythic": 3}
 
 
-def _enrich_card_df(card_df: pd.DataFrame) -> pd.DataFrame:
+def enrich_card_df(card_df: pd.DataFrame) -> pd.DataFrame:
     """Add derived columns to a gold_card_features DataFrame.
 
     Applies the same enrichments in both training (walk_forward_cv) and serving
@@ -212,7 +214,7 @@ def _enrich_card_df(card_df: pd.DataFrame) -> pd.DataFrame:
     return card_df
 
 
-def _enrich_lag_df(lag_df: pd.DataFrame) -> pd.DataFrame:
+def enrich_lag_df(lag_df: pd.DataFrame) -> pd.DataFrame:
     """Add derived columns to a lag-features DataFrame.
 
     Applies the same log transforms and return calculation in both training
@@ -266,7 +268,7 @@ def build_inference_features(
     static card attributes, with log transforms applied and stub columns for
     tournament/EDHREC data not yet integrated into the Gold layer.
 
-    Enrichment is delegated to _enrich_lag_df() and _enrich_card_df(), which are
+    Enrichment is delegated to enrich_lag_df() and enrich_card_df(), which are
     also called by walk_forward_cv() in trainer.py, guaranteeing that training
     and serving see identical features (no training/serving skew).
 
@@ -283,8 +285,8 @@ def build_inference_features(
         Pandas nullable extension types (BooleanDtype, Int64Dtype) are
         normalised to numpy-native types.
     """
-    lag_df = _enrich_lag_df(build_lag_features(conn, snapshot_date))
-    card_df = _enrich_card_df(conn.execute("SELECT * FROM gold_card_features").df())
+    lag_df = enrich_lag_df(build_lag_features(conn, snapshot_date))
+    card_df = enrich_card_df(conn.execute("SELECT * FROM gold_card_features").df())
 
     X = lag_df.merge(card_df, on="uuid", how="inner").reset_index(drop=True)
     return _normalise_nullable_dtypes(X)

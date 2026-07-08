@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.ml.features.pipeline import _enrich_card_df, _enrich_lag_df
+from src.ml.features.pipeline import enrich_card_df, enrich_lag_df
 from src.ml.training.trainer import (
     CVFold,
     InsufficientDataError,
@@ -357,21 +357,21 @@ def test_walk_forward_cv_skips_fold_when_no_val_snapshot(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Alignment: walk_forward_cv uses _enrich_card_df / _enrich_lag_df helpers
+# Alignment: walk_forward_cv uses enrich_card_df / enrich_lag_df helpers
 # ---------------------------------------------------------------------------
 
 
 def test_walk_forward_cv_calls_enrich_card_df(wfcv_conn, simple_folds, monkeypatch):
-    """walk_forward_cv must pass card_df through _enrich_card_df before fold loop."""
+    """walk_forward_cv must pass card_df through enrich_card_df before fold loop."""
     import src.ml.training.trainer as t
 
     enriched_calls: list[str] = []
 
     def _spy_enrich_card(df):
         enriched_calls.append("card")
-        return _enrich_card_df(df)
+        return enrich_card_df(df)
 
-    monkeypatch.setattr(t, "_enrich_card_df", _spy_enrich_card)
+    monkeypatch.setattr(t, "enrich_card_df", _spy_enrich_card)
     monkeypatch.setattr(t, "build_lag_features", lambda conn, snap: pd.DataFrame())
     monkeypatch.setattr(t, "build_target", lambda conn, snap: pd.DataFrame())
     monkeypatch.setattr(t, "prepare_training_data", _mock_prepare)
@@ -386,16 +386,16 @@ def test_walk_forward_cv_calls_enrich_card_df(wfcv_conn, simple_folds, monkeypat
 def test_walk_forward_cv_calls_enrich_lag_df_per_fold(
     wfcv_conn, simple_folds, monkeypatch
 ):
-    """walk_forward_cv must call _enrich_lag_df for each lag_train and lag_val."""
+    """walk_forward_cv must call enrich_lag_df for each lag_train and lag_val."""
     import src.ml.training.trainer as t
 
     enriched_calls: list[str] = []
 
     def _spy_enrich_lag(df):
         enriched_calls.append("lag")
-        return _enrich_lag_df(df)
+        return enrich_lag_df(df)
 
-    monkeypatch.setattr(t, "_enrich_lag_df", _spy_enrich_lag)
+    monkeypatch.setattr(t, "enrich_lag_df", _spy_enrich_lag)
     monkeypatch.setattr(t, "build_lag_features", lambda conn, snap: pd.DataFrame())
     monkeypatch.setattr(t, "build_target", lambda conn, snap: pd.DataFrame())
     monkeypatch.setattr(t, "prepare_training_data", _mock_prepare)

@@ -26,7 +26,7 @@ Fixture schema notes:
     collision.
 
     SIMILARITY_FEATURES (src/ml/recommendation/similarity.py) requires
-    rarity_ord (derived by _enrich_card_df from "rarity"), mana_value,
+    rarity_ord (derived by enrich_card_df from "rarity"), mana_value,
     color_count, color_identity_count, format_count, is_legendary,
     is_commander_legal, is_modern_legal — all included below.
 
