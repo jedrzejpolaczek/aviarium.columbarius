@@ -22,7 +22,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import duckdb as duckdb
+import duckdb
 
 from scripts._common import gold_db_exists
 from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date

@@ -53,10 +53,11 @@ calls):
      in `src/data/cards/storage/base/storage.py`. **These do not correspond to an
      observed duplication problem.** An earlier draft of this ADR (and the class's
      original docstring) claimed callers "already reimplement ad hoc" this logic; a
-     code-review pass on the introducing commit found that claim false — all four
-     call sites migrated at that point (and the fifth, `train_model.py`, migrated by
-     this task) only ever use `.connection` and `.close()`. The docstring was corrected
-     accordingly (commit `0e73d7e`), and this ADR keeps that honesty: the two methods
+     code-review pass on the introducing commit found that claim false — all three
+     locations already migrated at that point (`app/main.py`, `health.py`,
+     `check_and_retrain.py`), plus `train_model.py` (migrated by this task), only
+     ever use `.connection` and `.close()`. The docstring was corrected accordingly
+     (commit `0e73d7e`), and this ADR keeps that honesty: the two methods
      are a low-cost convenience addition, not a fix.
    - `.close()`, `__enter__`/`__exit__` — context-manager support, added for parity with
      `BaseStorage` in the storage tier, so callers can write

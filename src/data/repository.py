@@ -68,9 +68,10 @@ class DuckDBRepository:
 def open_repository(db_path: str, *, read_only: bool) -> DuckDBRepository:
     """Open a DuckDB connection and wrap it in a DuckDBRepository.
 
-    Centralizes what were previously 5 separate duckdb.connect(...) call
-    sites (app/main.py, health.py x3, scripts/check_and_retrain.py,
-    scripts/train_model.py), each independently handling read_only/path
-    resolution with no shared error-wrapping or logging.
+    Centralizes what were previously 4 locations making 6 separate
+    duckdb.connect(...) calls (app/main.py, health.py x3,
+    scripts/check_and_retrain.py, scripts/train_model.py), each
+    independently handling read_only/path resolution with no shared
+    error-wrapping or logging.
     """
     return DuckDBRepository(open_connection(db_path, read_only=read_only))
