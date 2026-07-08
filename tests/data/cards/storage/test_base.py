@@ -74,7 +74,7 @@ class TestOpenConnection:
     def test_raises_storage_connection_error_on_bad_path(self, tmp_path):
         bad_path = str(tmp_path / "does_not_exist" / "test.duckdb")
         # Monkeypatch mkdir to prevent creation so duckdb.connect fails
-        with patch("src.data.cards.storage.base.storage.Path") as MockPath:
+        with patch("src.data.db.Path") as MockPath:
             mock_instance = MagicMock()
             mock_instance.parent.mkdir.side_effect = PermissionError("denied")
             MockPath.return_value = mock_instance
@@ -82,9 +82,7 @@ class TestOpenConnection:
                 BaseStorage._open_connection(bad_path, read_only=False)
 
     def test_raises_storage_connection_error_when_duckdb_fails(self):
-        with patch(
-            "src.data.cards.storage.base.storage.duckdb.connect"
-        ) as mock_connect:
+        with patch("src.data.db.duckdb.connect") as mock_connect:
             mock_connect.side_effect = duckdb.Error("connection failed")
             with pytest.raises(StorageConnectionError, match="Cannot open DuckDB"):
                 BaseStorage._open_connection(":memory:", read_only=False)

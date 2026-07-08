@@ -2,10 +2,9 @@
 
 import duckdb
 from abc import ABC, abstractmethod
-from pathlib import Path
 from typing import Self
 
-from src.data.cards.storage.errors import StorageConnectionError
+from src.data.db import open_connection
 from src.logger import get_logger
 
 
@@ -33,29 +32,13 @@ class BaseStorage(ABC):
 
     @staticmethod
     def _open_connection(db_path: str, read_only: bool) -> duckdb.DuckDBPyConnection:
-        """Open (or create) a DuckDB connection.
+        """Open (or create) a DuckDB connection. Delegates to src.data.db.open_connection.
 
-        Args:
-            db_path: File path for the database, or ":memory:" for an
-                in-memory database that is lost when the connection closes.
-            read_only: Whether to open the database in read-only mode.
-
-        Returns:
-            An open DuckDB connection.
-
-        Raises:
-            StorageConnectionError: If the connection cannot be established.
+        Kept as a method so BronzeStorage/SilverStorage/GoldStorage/
+        TransformStorage don't need to change their self._open_connection(...)
+        call sites.
         """
-        if db_path != ":memory:":
-            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        try:
-            con = duckdb.connect(db_path, read_only=read_only)
-            logger.info("Connected to DuckDB (read_only=%s) at %s", read_only, db_path)
-            return con
-        except duckdb.Error as e:
-            raise StorageConnectionError(
-                f"Cannot open DuckDB at {db_path!r}: {e}"
-            ) from e
+        return open_connection(db_path, read_only=read_only)
 
     @abstractmethod
     def close(self) -> None:
