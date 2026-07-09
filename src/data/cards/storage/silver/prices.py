@@ -109,29 +109,7 @@ class SilverPriceBuilder:
         df = self._build_scryfall_base(today)
         df = self._join_mtgjson_prices(df, bronze_tables, today)
         return self._fill_price_history(
-            df[
-                [
-                    "uuid",
-                    "scryfall_id",
-                    "snapshot_date",
-                    "eur",
-                    "eur_foil",
-                    "usd",
-                    "usd_foil",
-                    "cardmarket_eur",
-                    "cardmarket_eur_foil",
-                    "cardmarket_buylist_eur",
-                    "tcgplayer_usd",
-                    "tcgplayer_usd_foil",
-                    "tcgplayer_buylist_usd",
-                    "cardkingdom_usd",
-                    "cardkingdom_usd_foil",
-                    "cardkingdom_buylist_usd",
-                    "cardkingdom_buylist_usd_foil",
-                    "manapool_usd",
-                    "manapool_usd_foil",
-                ]
-            ],
+            df[["uuid", "scryfall_id", "snapshot_date"] + self._PRICE_COLS],
             today,
         )
 
