@@ -37,6 +37,7 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.34.0",
     "psutil>=7.2.2",
+    "plyer>=2.1.0",
 ]
 
 [tool.pytest.ini_options]
@@ -86,7 +87,16 @@ plugins = ["pydantic.mypy"]
 exclude = ["^_ADDONS/"]
 
 [[tool.mypy.overrides]]
-module = ["shap", "shap.*", "evidently", "evidently.*", "sklearn", "sklearn.*"]
+module = [
+    "shap",
+    "shap.*",
+    "evidently",
+    "evidently.*",
+    "sklearn",
+    "sklearn.*",
+    "plyer",
+    "plyer.*",
+]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
