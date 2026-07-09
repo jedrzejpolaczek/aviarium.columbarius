@@ -14,6 +14,7 @@ from src.ml.features.pipeline import (
     build_inference_features,
     enrich_card_df,
     enrich_lag_df,
+    fit_transform_features,
     get_feature_names,
     prepare_training_data,
 )
@@ -167,6 +168,34 @@ def test_get_feature_names_does_not_contain_leakage_columns(fitted_pipeline):
     names = get_feature_names(fitted_pipeline)
     for col in LEAKAGE_COLS:
         assert col not in names
+
+
+# ---------------------------------------------------------------------------
+# fit_transform_features()
+# ---------------------------------------------------------------------------
+
+
+def test_fit_transform_features_returns_dataframe_pipeline_and_names(sample_X):
+    X_transformed, pipeline, feature_names = fit_transform_features(sample_X)
+    assert isinstance(X_transformed, pd.DataFrame)
+    assert isinstance(pipeline, Pipeline)
+    assert list(X_transformed.columns) == feature_names
+
+
+def test_fit_transform_features_row_count_matches_input(sample_X):
+    X_transformed, _, _ = fit_transform_features(sample_X)
+    assert len(X_transformed) == len(sample_X)
+
+
+def test_fit_transform_features_matches_manual_fit_transform(sample_X):
+    X_transformed, pipeline, feature_names = fit_transform_features(sample_X)
+
+    manual_pipeline = build_feature_pipeline()
+    manual_X_t = manual_pipeline.fit_transform(sample_X)
+    manual_names = get_feature_names(manual_pipeline)
+
+    assert feature_names == manual_names
+    np.testing.assert_array_equal(X_transformed.to_numpy(), manual_X_t)
 
 
 # ---------------------------------------------------------------------------

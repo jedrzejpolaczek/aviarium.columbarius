@@ -119,6 +119,27 @@ def get_feature_names(pipeline: Pipeline) -> list[str]:
     return [name.split("__", 1)[-1] for name in ct.get_feature_names_out()]
 
 
+def fit_transform_features(X: pd.DataFrame) -> tuple[pd.DataFrame, Pipeline, list[str]]:
+    """Fit a fresh feature pipeline on X and return the transformed DataFrame.
+
+    Shared by app/main.py's inference-matrix build and retraining.py's
+    training-matrix build -- the only difference between the two call sites
+    is what X already went through upstream (raw inference features vs.
+    target-merged, leakage-dropped, NaN-filtered training features).
+
+    Returns:
+        (X_transformed, fitted_pipeline, feature_names) -- X_transformed has
+        one column per feature_names entry, in the same order.
+    """
+    pipeline = build_feature_pipeline()
+    X_t = pipeline.fit_transform(X)
+    feature_names = get_feature_names(pipeline)
+    X_transformed = pd.DataFrame(
+        np.array(X_t, dtype=np.float64), columns=feature_names
+    )
+    return X_transformed, pipeline, feature_names
+
+
 def prepare_training_data(
     lag_df: pd.DataFrame,
     card_df: pd.DataFrame,

@@ -97,9 +97,8 @@ def retrain(conn: duckdb.DuckDBPyConnection, snapshot_date: str) -> str:
     # modules run continuously — keeps `import src.monitoring.retraining` cheap.
     from src.ml.features.lag import build_target
     from src.ml.features.pipeline import (
-        build_feature_pipeline,
         build_inference_features,
-        get_feature_names,
+        fit_transform_features,
         LEAKAGE_COLS,
     )
     from src.ml.models.lightgbm_model import LightGBMPriceModel
@@ -159,10 +158,7 @@ def retrain(conn: duckdb.DuckDBPyConnection, snapshot_date: str) -> str:
             "Ensure a t+7 counterpart exists in gold_price_features."
         )
 
-    pipeline = build_feature_pipeline()
-    X_t = pipeline.fit_transform(X_full)
-    feature_names = get_feature_names(pipeline)
-    X_df = pd.DataFrame(X_t, columns=feature_names)
+    X_df, pipeline, feature_names = fit_transform_features(X_full)
 
     # Train final model — X_val=None triggers internal 80/20 temporal split
     final_model = LightGBMPriceModel()

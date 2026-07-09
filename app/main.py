@@ -36,7 +36,6 @@ from typing import NamedTuple
 
 import duckdb
 import lightgbm as lgb
-import numpy as np
 import pandas as pd
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,11 +44,7 @@ from sklearn.pipeline import Pipeline
 from app.routers import cards, health, predict, similar, underpriced
 from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
 from src.data.repository import GOLD_DB_PATH, DuckDBRepository, open_repository
-from src.ml.features.pipeline import (
-    build_feature_pipeline,
-    build_inference_features,
-    get_feature_names,
-)
+from src.ml.features.pipeline import build_inference_features, fit_transform_features
 from src.ml.recommendation.similarity import SIMILARITY_FEATURES, CardSimilarityIndex
 from src.logger import get_logger, setup_logging
 from src.ml.training.tracking import load_model_from_mlflow
@@ -84,10 +79,7 @@ def _build_feature_matrices(
     pipeline, and the resulting feature names.
     """
     X_all = build_inference_features(db, snapshot_date)
-    pipeline = build_feature_pipeline()
-    X_t = pipeline.fit_transform(X_all)
-    feature_names = get_feature_names(pipeline)
-    X_all_t = pd.DataFrame(np.array(X_t, dtype=np.float64), columns=feature_names)
+    X_all_t, pipeline, feature_names = fit_transform_features(X_all)
     return FeatureMatrices(X_all, X_all_t, pipeline, feature_names)
 
 
