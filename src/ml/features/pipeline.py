@@ -134,9 +134,7 @@ def fit_transform_features(X: pd.DataFrame) -> tuple[pd.DataFrame, Pipeline, lis
     pipeline = build_feature_pipeline()
     X_t = pipeline.fit_transform(X)
     feature_names = get_feature_names(pipeline)
-    X_transformed = pd.DataFrame(
-        np.array(X_t, dtype=np.float64), columns=feature_names
-    )
+    X_transformed = pd.DataFrame(np.array(X_t, dtype=np.float64), columns=feature_names)
     return X_transformed, pipeline, feature_names
 
 
