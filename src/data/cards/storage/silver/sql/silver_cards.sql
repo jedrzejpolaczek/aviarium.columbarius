@@ -333,12 +333,12 @@ final AS (
         LOWER(json_extract_string(legalities,'$.modern'))        = 'legal' AS is_modern_legal,
         LOWER(json_extract_string(legalities,'$.legacy'))        = 'legal' AS is_legacy_legal,
         (
-          COALESCE((LOWER(json_extract_string(legalities,'$.standard'))    ='legal')::INT, 0) +
+          COALESCE(is_standard_legal::INT, 0) +
           COALESCE((LOWER(json_extract_string(legalities,'$.pioneer'))     ='legal')::INT, 0) +
-          COALESCE((LOWER(json_extract_string(legalities,'$.modern'))      ='legal')::INT, 0) +
-          COALESCE((LOWER(json_extract_string(legalities,'$.legacy'))      ='legal')::INT, 0) +
+          COALESCE(is_modern_legal::INT, 0) +
+          COALESCE(is_legacy_legal::INT, 0) +
           COALESCE((LOWER(json_extract_string(legalities,'$.vintage'))     ='legal')::INT, 0) +
-          COALESCE((LOWER(json_extract_string(legalities,'$.commander'))   ='legal')::INT, 0) +
+          COALESCE(is_commander_legal::INT, 0) +
           COALESCE((LOWER(json_extract_string(legalities,'$.oathbreaker')) ='legal')::INT, 0) +
           COALESCE((LOWER(json_extract_string(legalities,'$.brawl'))       ='legal')::INT, 0) +
           COALESCE((LOWER(json_extract_string(legalities,'$.historicbrawl'))='legal')::INT, 0) +
