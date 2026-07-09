@@ -1,23 +1,67 @@
 """Unit tests for scripts/run_pipeline.py."""
 
+import json
 from unittest.mock import MagicMock
 
 from scripts import run_pipeline
 
 
-def test_main_calls_daily_pipeline_with_config_path(monkeypatch):
-    # daily_pipeline is bound directly into scripts.run_pipeline's namespace
-    # via `from src.data.cards.pipelines import daily_pipeline` at module
-    # level, so it must be patched there rather than at the source module.
+def test_main_calls_daily_pipeline_with_config_path(tmp_path, monkeypatch):
     mock_daily_pipeline = MagicMock()
     monkeypatch.setattr(run_pipeline, "daily_pipeline", mock_daily_pipeline)
-    # setup_logging is also bound directly into scripts.run_pipeline's
-    # namespace via `from src.logger import setup_logging` at module level.
-    # Mock it to avoid writing real timestamped log files into logs/ and
-    # mutating the global logging root logger as a side effect of main().
     monkeypatch.setattr(run_pipeline, "setup_logging", MagicMock())
+    monkeypatch.setattr(run_pipeline, "STATUS_PATH", tmp_path / "status.json")
 
-    run_pipeline.main()
+    exit_code = run_pipeline.main()
 
     mock_daily_pipeline.assert_called_once()
     assert mock_daily_pipeline.call_args.args[0] == "configs/data_sources.yaml"
+    assert exit_code == 0
+
+
+def test_main_writes_success_status(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_pipeline, "daily_pipeline", MagicMock())
+    monkeypatch.setattr(run_pipeline, "setup_logging", MagicMock())
+    status_path = tmp_path / "status.json"
+    monkeypatch.setattr(run_pipeline, "STATUS_PATH", status_path)
+
+    run_pipeline.main()
+
+    status = json.loads(status_path.read_text())
+    assert status["result"] == "success"
+    assert "checked_at" in status
+
+
+def test_main_returns_1_and_writes_error_status_when_pipeline_raises(
+    tmp_path, monkeypatch
+):
+    def _raise(config_path):
+        raise RuntimeError("mtgjson download failed")
+
+    monkeypatch.setattr(run_pipeline, "daily_pipeline", _raise)
+    monkeypatch.setattr(run_pipeline, "setup_logging", MagicMock())
+    status_path = tmp_path / "status.json"
+    monkeypatch.setattr(run_pipeline, "STATUS_PATH", status_path)
+    mock_send_alert = MagicMock()
+    monkeypatch.setattr(run_pipeline, "send_alert", mock_send_alert)
+
+    exit_code = run_pipeline.main()
+
+    assert exit_code == 1
+    status = json.loads(status_path.read_text())
+    assert status["result"] == "error"
+    assert "mtgjson download failed" in status["error"]
+    mock_send_alert.assert_called_once()
+    assert "mtgjson download failed" in mock_send_alert.call_args.args[1]
+
+
+def test_main_does_not_alert_on_success(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_pipeline, "daily_pipeline", MagicMock())
+    monkeypatch.setattr(run_pipeline, "setup_logging", MagicMock())
+    monkeypatch.setattr(run_pipeline, "STATUS_PATH", tmp_path / "status.json")
+    mock_send_alert = MagicMock()
+    monkeypatch.setattr(run_pipeline, "send_alert", mock_send_alert)
+
+    run_pipeline.main()
+
+    mock_send_alert.assert_not_called()
