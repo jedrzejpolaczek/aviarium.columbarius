@@ -12,7 +12,7 @@ Typical usage:
         storage.daily_update(results)  # incremental daily run
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import date
 from typing import Any
 
@@ -360,6 +360,21 @@ class BronzeStorage(BaseStorage):
                     exc_info=True,
                 )
 
+    def _snapshot_or_log(
+        self, snapshot_fn: Callable[[], None], label: str, action: str
+    ) -> None:
+        """Run a price-snapshot call; log and skip on StorageWriteError.
+
+        Shared by populate() and daily_update() -- a snapshot failure must
+        not abort the rest of either method's run.
+        """
+        try:
+            snapshot_fn()
+        except StorageWriteError as e:
+            logger.error(
+                "%s failed during %s: %s — skipping", label, action, e, exc_info=True
+            )
+
     def populate(
         self, results: dict[str, tuple[list[BaseModel], list[dict[str, object]]]]
     ) -> None:
@@ -381,24 +396,18 @@ class BronzeStorage(BaseStorage):
         self._process_sources(results, update=False)
 
         scryfall_records, _ = results.get("scryfall", ([], []))
-        try:
-            self._snapshot_scryfall_prices(scryfall_records)
-        except StorageWriteError as e:
-            logger.error(
-                "Scryfall price snapshot failed during populate: %s — skipping",
-                e,
-                exc_info=True,
-            )
+        self._snapshot_or_log(
+            lambda: self._snapshot_scryfall_prices(scryfall_records),
+            "Scryfall price snapshot",
+            "populate",
+        )
 
         prices_records, _ = results.get("mtgjson_prices", ([], []))
-        try:
-            self.seed_historical_prices(prices_records)
-        except StorageWriteError as e:
-            logger.error(
-                "Historical price seed failed during populate: %s — skipping",
-                e,
-                exc_info=True,
-            )
+        self._snapshot_or_log(
+            lambda: self.seed_historical_prices(prices_records),
+            "Historical price seed",
+            "populate",
+        )
 
     def daily_update(
         self, results: dict[str, tuple[list[BaseModel], list[dict[str, object]]]]
@@ -424,21 +433,15 @@ class BronzeStorage(BaseStorage):
         self._process_sources(results, update=True)
 
         scryfall_records, _ = results.get("scryfall", ([], []))
-        try:
-            self._snapshot_scryfall_prices(scryfall_records)
-        except StorageWriteError as e:
-            logger.error(
-                "Scryfall price snapshot failed during daily_update: %s — skipping",
-                e,
-                exc_info=True,
-            )
+        self._snapshot_or_log(
+            lambda: self._snapshot_scryfall_prices(scryfall_records),
+            "Scryfall price snapshot",
+            "daily_update",
+        )
 
         mtgjson_records, _ = results.get("mtgjson_prices", ([], []))
-        try:
-            self._snapshot_mtgjson_prices(mtgjson_records)
-        except StorageWriteError as e:
-            logger.error(
-                "MTGJson price snapshot failed during daily_update: %s — skipping",
-                e,
-                exc_info=True,
-            )
+        self._snapshot_or_log(
+            lambda: self._snapshot_mtgjson_prices(mtgjson_records),
+            "MTGJson price snapshot",
+            "daily_update",
+        )
