@@ -100,54 +100,65 @@ The pipeline follows a **Medallion architecture** (Bronze → Silver → Gold).
 
 ```
 aviarium.columbarius/
+├── app/                              # FastAPI price-prediction service
+│   ├── main.py                       #   app factory, startup precomputation
+│   ├── pricing.py                    #   tiered pricing strategy (ADR-018)
+│   ├── dependencies.py
+│   └── routers/                      #   cards, health, predict, similar, underpriced
+├── frontend/                         # Vite/React web UI
+│   └── src/                          #   CardSearch, PredictionResult, api.ts
 ├── scripts/
-│   ├── run_pipeline.py              # ETL pipeline entry point
-│   └── train_model.py               # model training entry point
+│   ├── run_pipeline.py               # ETL pipeline entry point
+│   ├── train_model.py                # model training entry point
+│   └── check_and_retrain.py          # scheduled drift/MAPE check
 ├── pyproject.toml
 ├── configs/
-│   ├── data_sources.yaml            # source URLs, local paths, download flags
-│   ├── bronze_config.json           # Bronze table definitions
-│   └── silver_config.json           # Silver transform config
+│   ├── data_sources.yaml             # source URLs, local paths, download flags
+│   ├── bronze_config.json            # Bronze table definitions
+│   └── silver_config.json            # Silver transform config
 ├── data/
-│   ├── raw/                         # downloaded JSON files (gitignored)
-│   ├── bronze/                      # Bronze DuckDB file (gitignored)
-│   ├── silver/                      # Silver DuckDB file (gitignored)
-│   └── gold/                        # Gold DuckDB file (gitignored)
+│   ├── raw/                          # downloaded JSON files (gitignored)
+│   ├── bronze/                       # Bronze DuckDB file (gitignored)
+│   ├── silver/                       # Silver DuckDB file (gitignored)
+│   └── gold/                         # Gold DuckDB file (gitignored)
 ├── docs/
-│   ├── adr/                         # Architecture Decision Records
-│   └── architecture/                # C4 architecture docs + data catalog
-├── notebooks/                       # Jupyter notebooks for exploration
+│   ├── adr/                          # Architecture Decision Records
+│   └── architecture/                 # C4 architecture docs + data catalog
+├── notebooks/                        # Jupyter notebooks for exploration
 ├── src/
-│   └── data/
-│       ├── cards/
-│       │   ├── pipelines.py         # initial_pipeline / daily_pipeline
-│       │   ├── sources.py           # download, extract, validate
-│       │   └── storage/
-│       │       ├── base.py          # BaseStorage / TransformStorage ABCs
-│       │       ├── bronze/          # BronzeStorage — raw DuckDB persistence
-│       │       │   ├── config.py    #   STORAGE_CONFIG declarations
-│       │       │   ├── writers.py   #   BronzeWritersMixin (write primitives)
-│       │       │   └── storage.py   #   BronzeStorage orchestration class
-│       │       ├── silver.py        # SilverStorage — cleaning and joining
-│       │       ├── gold.py          # GoldStorage — aggregation (stub)
-│       │       └── errors.py        # StorageError hierarchy
-│       ├── dataclasses/
-│       │   ├── mtgjson.py           # Pydantic models for MTGJson
-│       │   └── scryfall.py          # Pydantic models for Scryfall
-│       └── markets/
-│           ├── allegro.py           # Allegro market integration (stub)
-│           └── cardmarket.py        # Cardmarket integration (stub)
-└── tests/
+│   ├── data/
+│   │   └── cards/
+│   │       ├── pipelines.py          # initial_pipeline / daily_pipeline
+│   │       ├── sources/              # download, extract, validate
+│   │       │   ├── pipeline.py       #   ingestion orchestration
+│   │       │   ├── registry.py       #   source-type registry (ADR-004)
+│   │       │   ├── extractors.py     #   HTML → record parsing
+│   │       │   ├── scrapers.py       #   per-source async fetch functions
+│   │       │   ├── http.py           #   download helpers, retry (ADR-014)
+│   │       │   └── errors.py
+│   │       └── storage/
+│   │           ├── base/             # BaseStorage / TransformStorage ABCs
+│   │           ├── bronze/           # BronzeStorage — raw DuckDB persistence
+│   │           │   ├── config.py     #   STORAGE_CONFIG declarations
+│   │           │   └── storage.py    #   BronzeStorage orchestration class
+│   │           ├── silver/           # SilverStorage — cleaning and joining
+│   │           ├── gold/             # GoldStorage — Gold layer aggregation
+│   │           └── errors.py         # StorageError hierarchy
+│   ├── ml/                           # feature engineering, models, evaluation
+│   └── monitoring/                   # drift detection, retraining triggers
+└── tests/                            # mirrors src/ and app/ layout
     └── data/
-        ├── cards/
-        │   ├── test_sources.py
-        │   ├── test_pipelines.py
-        │   └── storage/
-        │       ├── test_base.py
-        │       └── test_silver.py
-        └── dataclasses/
-            ├── test_mtgjson.py
-            └── test_scryfall.py
+        └── cards/
+            ├── sources/
+            │   ├── test_extractors.py
+            │   ├── test_http.py
+            │   ├── test_pipeline.py
+            │   └── test_registry.py
+            └── storage/
+                ├── test_base.py
+                ├── test_bronze.py
+                ├── test_silver.py
+                └── test_gold.py
 ```
 
 ---
