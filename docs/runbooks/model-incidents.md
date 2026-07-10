@@ -21,6 +21,29 @@ at WARNING, not fatal).
    a known-good run (see Section 2, step 1 for how to list available runs/versions)
    and restart the container: `docker compose -f docker/docker-compose.yml up -d --build api`.
 
+## 1b. `/health` returns 503 with `"features_loaded": false`
+
+**Symptom:** `GET /health` returns `{"status": "degraded", "features_loaded": false, ...}`.
+Unlike Section 1 (model load failed but features are fine), here `/cards`,
+`/predict`, `/similar`, and `/underpriced` **all** return 503 — there is no
+feature matrix to serve from.
+
+**Cause:** Building `X_all`/`X_all_t` or the `CardSimilarityIndex` raised at
+startup (see `app/main.py` lifespan — the exception is caught and logged at
+ERROR, not fatal, and triggers a desktop alert via `src.monitoring.alerts`).
+Common causes: a Gold schema change that the feature pipeline doesn't
+expect yet, or corrupt/partial Gold tables from an interrupted ETL run.
+
+**Fix:**
+1. Check the API container logs for `Feature matrix / similarity index
+   build failed — starting in degraded mode: <exc>`.
+2. Check `logs/alerts.jsonl` for the same message with a timestamp.
+3. Re-run `make pipeline` to rebuild Gold from a clean state, then restart
+   the API container: `docker compose -f docker/docker-compose.yml up -d --build api`.
+4. If the error persists after a clean ETL run, it is a real code/schema
+   bug in the feature pipeline (`src/ml/features/pipeline.py`) — not fixed
+   by re-running the pipeline.
+
 ## 2. `logs/last_check_status.json` shows `"result": "retrained"` and predictions look wrong afterwards
 
 **Symptom:** `scripts/check_and_retrain.py` (scheduled daily — see README
@@ -66,11 +89,32 @@ regressions that only show up on live traffic.
   diagnose the underlying failure — this is not fixed by re-running the
   pipeline.
 
-## Known limitation
+## 4. `logs/last_pipeline_status.json` shows `"result": "error"`
 
-There is no automated alerting (Slack/email/PagerDuty) wired to any of
-the above — `logs/last_check_status.json` and the container logs must be
-checked manually or by whatever external tooling is set up to watch them.
-Adding real paging requires credentials (webhook URL, SMTP, etc.) this
-project does not currently have configured; treat manual log/status
-checking as the interim process until that changes.
+**Symptom:** The daily `scripts/run_pipeline.py` run failed; a desktop
+alert (see `src.monitoring.alerts`) and a JSON status file were written.
+
+**Fix:**
+1. Read the `"error"` field in `logs/last_pipeline_status.json` and the
+   full traceback in the day's `logs/pipeline_*.log`.
+2. Common causes: a source API (Scryfall/MTGJson) returned a persistent
+   error after exhausting the 5 retry attempts (ADR-014), or a schema
+   change broke a Pydantic validator.
+3. Fix the underlying issue, then re-run `make pipeline` manually to
+   confirm before waiting for the next scheduled run.
+
+## Alerting
+
+`scripts/run_pipeline.py`, `scripts/check_and_retrain.py`, and the API's
+`lifespan` degraded-mode path all call `src.monitoring.alerts.send_alert`
+on failure, which (1) appends a durable record to `logs/alerts.jsonl` and
+(2) best-effort shows a desktop notification via `plyer` — no external
+account or credentials required. The desktop notification only appears if
+the machine is logged in and unlocked when the scheduled task runs; the
+JSONL log is the reliable source of truth and does not depend on that.
+
+There is still no remote paging (Slack/email/PagerDuty) — `logs/alerts.jsonl`,
+`logs/last_check_status.json`, `logs/last_pipeline_status.json`, and the
+container logs are the full observability surface today. Adding real
+remote paging requires credentials (webhook URL, SMTP, etc.) this project
+does not currently have configured.
