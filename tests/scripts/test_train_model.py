@@ -42,7 +42,7 @@ def test_main_exits_1_when_no_snapshot(tmp_path, monkeypatch):
     assert exc_info.value.code == 1
 
 
-def test_main_calls_retrain_with_latest_snapshot(tmp_path, monkeypatch):
+def test_main_calls_retrain_with_latest_trainable_snapshot(tmp_path, monkeypatch):
     db_path = tmp_path / "gold.duckdb"
     con = duckdb.connect(str(db_path))
     con.execute("""
@@ -66,4 +66,6 @@ def test_main_calls_retrain_with_latest_snapshot(tmp_path, monkeypatch):
 
     mock_retrain.assert_called_once()
     call_args = mock_retrain.call_args
-    assert call_args.args[1] == "2026-06-08"
+    # 2026-06-01 is the trainable snapshot (its t+7 counterpart 2026-06-08
+    # exists); 2026-06-08 is the latest raw snapshot but has no t+7 pair yet.
+    assert call_args.args[1] == "2026-06-01"
