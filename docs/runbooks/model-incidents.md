@@ -156,8 +156,12 @@ scheduled task silently not running at all — `check_and_retrain.py` pings
 it on every run, success or failure, so a missing ping (not just a
 `result: error` status) is itself the alert.
 
-There is still no remote paging (Slack/email/PagerDuty) — `logs/alerts.jsonl`,
-`logs/last_check_status.json`, `logs/last_pipeline_status.json`, and the
-container logs are the full observability surface today. Adding real
-remote paging requires credentials (webhook URL, SMTP, etc.) this project
-does not currently have configured.
+Set `ALERT_WEBHOOK_URL` to a Slack/Discord/Mattermost-compatible incoming
+webhook URL to also get every `send_alert` call posted there — this is the
+third, optional channel alongside the JSONL log and desktop notification
+(see `src.monitoring.alerts`). Skipped entirely if unset; a failed webhook
+request is caught and logged, never raised, so a broken webhook can never
+take down the caller's actual job. This is remote paging without SMTP/
+PagerDuty credentials — `logs/alerts.jsonl`, `logs/last_check_status.json`,
+`logs/last_pipeline_status.json`, and the container logs remain the full
+observability surface for anyone not watching the webhook's destination.
