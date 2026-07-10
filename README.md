@@ -394,6 +394,8 @@ To switch models after retraining, edit `docker/.env` and restart the container 
 | `http://localhost:8000/predict/{card_name}` | Price prediction for a single card |
 | `POST http://localhost:8000/admin/reload-model` | Hot-reload the model by run_id (requires `X-Admin-Token`) |
 
+The `api` container is capped at 2 GB memory / 2 CPUs and `frontend` at 256 MB / 0.5 CPU (`docker/docker-compose.yml`) — a runaway process is killed and restarted (`restart: unless-stopped`) by Docker rather than exhausting the host.
+
 The API starts in degraded mode if `MODEL_RUN_ID` is not set — `/health` and `/cards` still work, but `/predict` returns 503.
 
 ---

@@ -34,6 +34,8 @@ services:
       # SQLite tracking DB mounted at /app/mlflow.db
       - MLFLOW_TRACKING_URI=sqlite:////app/mlflow.db
     restart: unless-stopped
+    mem_limit: 2g
+    cpus: 2.0
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -50,3 +52,5 @@ services:
       - "3000:80"
     depends_on:
       - api
+    mem_limit: 256m
+    cpus: 0.5
