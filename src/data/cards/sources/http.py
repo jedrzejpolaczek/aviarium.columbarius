@@ -2,8 +2,9 @@
 
 Provides download_json_from_url and download_html_page — the two async download
 primitives used by ingesting_pipeline. Both retry automatically on transient
-HTTP errors (429, 500, 502, 503, 504) using exponential backoff; permanent
-errors (401, 403, 404) are raised immediately without retrying.
+HTTP errors (429, 500, 502, 503, 504) and on transport-level failures
+(timeouts, dropped/reset connections) using exponential backoff; permanent
+HTTP errors (401, 403, 404) are raised immediately without retrying.
 
 Retry policy:
     Up to 5 attempts, wait 1 → 2 → 4 → 8 → 16 s (capped at 30 s).
@@ -38,10 +39,11 @@ _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 def _is_retryable_http_error(exc: BaseException) -> bool:
-    return (
-        isinstance(exc, httpx.HTTPStatusError)
-        and exc.response.status_code in _RETRYABLE_STATUS_CODES
-    )
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in _RETRYABLE_STATUS_CODES
+    # Transient network-level failures (timeouts, dropped connections, reset
+    # peers) — not HTTP responses at all, but just as worth retrying as a 503.
+    return isinstance(exc, httpx.TransportError)
 
 
 def _make_retry() -> AsyncRetrying:
@@ -92,7 +94,8 @@ async def download_json_from_url(
     """Download a JSON file from *url* and save it to *output_path*.
 
     Retries up to 5 times with exponential backoff (1s → 2s → 4s → 8s → 16s)
-    on transient HTTP errors (429, 500, 502, 503, 504). Permanent errors
+    on transient HTTP errors (429, 500, 502, 503, 504) and on transport-level
+    failures (timeouts, dropped/reset connections). Permanent HTTP errors
     (404, 401, 403) are raised immediately without retrying.
 
     Args:
@@ -103,7 +106,7 @@ async def download_json_from_url(
     logger.progress("Downloading %s → %s", url, output_path)
     try:
         data = await _fetch_with_retry(client, url, lambda r: r.json())
-    except httpx.HTTPStatusError as e:
+    except (httpx.HTTPStatusError, httpx.TransportError) as e:
         raise SourceDownloadError(f"HTTP error downloading {url}: {e}") from e
     with open(Path(output_path), "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -116,7 +119,8 @@ async def download_html_page(
     """Download an HTML page from *url* and save it to *output_path*.
 
     Retries up to 5 times with exponential backoff (1s → 2s → 4s → 8s → 16s)
-    on transient HTTP errors (429, 500, 502, 503, 504). Permanent errors
+    on transient HTTP errors (429, 500, 502, 503, 504) and on transport-level
+    failures (timeouts, dropped/reset connections). Permanent HTTP errors
     (404, 401, 403) are raised immediately without retrying.
 
     Args:
@@ -129,6 +133,6 @@ async def download_html_page(
         html = await _fetch_with_retry(
             client, url, lambda r: r.text, headers={"User-Agent": "Mozilla/5.0"}
         )
-    except httpx.HTTPStatusError as e:
+    except (httpx.HTTPStatusError, httpx.TransportError) as e:
         raise SourceDownloadError(f"HTTP error downloading {url}: {e}") from e
     Path(output_path).write_text(html, encoding="utf-8")

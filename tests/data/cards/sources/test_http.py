@@ -40,6 +40,20 @@ class TestIsRetryableHttpError:
     def test_non_http_error_is_not_retryable(self):
         assert _is_retryable_http_error(ValueError("oops")) is False
 
+    def test_read_timeout_is_retryable(self):
+        exc = httpx.ReadTimeout("timed out", request=MagicMock(spec=httpx.Request))
+        assert _is_retryable_http_error(exc) is True
+
+    def test_connect_error_is_retryable(self):
+        exc = httpx.ConnectError("refused", request=MagicMock(spec=httpx.Request))
+        assert _is_retryable_http_error(exc) is True
+
+    def test_remote_protocol_error_is_retryable(self):
+        exc = httpx.RemoteProtocolError(
+            "peer closed connection", request=MagicMock(spec=httpx.Request)
+        )
+        assert _is_retryable_http_error(exc) is True
+
 
 class TestDownloadJsonFromUrl:
     @pytest.mark.asyncio
@@ -129,3 +143,29 @@ class TestDownloadRetry:
         with pytest.raises(SourceDownloadError):
             await download_html_page(client, "http://example.com/page.html", str(out))
         assert client.get.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_retries_on_read_timeout_then_succeeds(self, tmp_path):
+        out = tmp_path / "out.json"
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.side_effect = [
+            httpx.ReadTimeout("timed out", request=MagicMock(spec=httpx.Request)),
+            self._ok_json({"k": 1}),
+        ]
+
+        await download_json_from_url(client, "http://example.com/data.json", str(out))
+
+        assert json.loads(out.read_text()) == {"k": 1}
+
+    @pytest.mark.asyncio
+    async def test_html_retries_on_read_timeout_then_succeeds(self, tmp_path):
+        out = tmp_path / "out.html"
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.side_effect = [
+            httpx.ReadTimeout("timed out", request=MagicMock(spec=httpx.Request)),
+            self._ok_html("<html>ok</html>"),
+        ]
+
+        await download_html_page(client, "http://example.com/page.html", str(out))
+
+        assert out.read_text() == "<html>ok</html>"
