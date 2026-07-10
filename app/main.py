@@ -41,8 +41,9 @@ from typing import NamedTuple
 import duckdb
 import lightgbm as lgb
 import pandas as pd
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sklearn.pipeline import Pipeline
 
 from app.routers import cards, health, predict, similar, underpriced
@@ -116,6 +117,37 @@ def _build_similarity_index(X_all: pd.DataFrame) -> CardSimilarityIndex:
     sim_index = CardSimilarityIndex(n_neighbors=50)
     sim_index.fit(sim_df)
     return sim_index
+
+
+def register_exception_handlers(app: FastAPI) -> None:
+    """Register a catch-all handler for exceptions FastAPI's default
+    `HTTPException` handling doesn't cover.
+
+    Without this, an unhandled exception inside a route (e.g. a bug hit by
+    unexpected input) propagates as a bare 500 with no consistent JSON body
+    and no alert — every other error path in this API (503 via
+    require_model/get_request_features, 404 via require_match) already
+    returns a structured ``{"detail": ...}`` body; this makes truly
+    unexpected errors consistent with that, and durably records them via
+    ``send_alert`` the same way a degraded startup already does.
+    """
+
+    @app.exception_handler(Exception)
+    async def _handle_unexpected_exception(
+        request: Request, exc: Exception
+    ) -> JSONResponse:
+        logger.error(
+            "Unhandled exception on %s %s: %s",
+            request.method,
+            request.url.path,
+            exc,
+            exc_info=True,
+        )
+        send_alert(
+            "Unhandled API exception",
+            f"{request.method} {request.url.path}: {exc}",
+        )
+        return JSONResponse(status_code=500, content={"detail": "Internal server error."})
 
 
 @asynccontextmanager
@@ -201,6 +233,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+register_exception_handlers(app)
 
 _cors_origins = [
     o.strip()
