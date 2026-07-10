@@ -491,6 +491,13 @@ Design decisions are documented in `docs/adr/`:
 | [ADR-024](docs/adr/ADR-024-duckdb-compute-layer.md) | DuckDB as the compute layer for large Silver history queries |
 | [ADR-025](docs/adr/ADR-025-scalar-bronze-prices.md) | Scalar Bronze price tables with EAV for MTGJson |
 | [ADR-026](docs/adr/ADR-026-isolate-mlflow-tracking-tests.md) | Isolate MLflow tracking tests into a separate pytest process |
+| [ADR-027](docs/adr/ADR-027-tfidf-card-embeddings.md) | TF-IDF card embeddings |
+| [ADR-028](docs/adr/ADR-028-shap-interpretability.md) | SHAP interpretability |
+| [ADR-029](docs/adr/ADR-029-duckdb-repository.md) | `DuckDBRepository` for connection creation outside the storage tier |
+| [ADR-030](docs/adr/ADR-030-shared-idiom-conventions.md) | Shared idiom conventions (indexes intentional cross-module repetition) |
+| [ADR-031](docs/adr/ADR-031-remote-alerting-channels.md) | Remote alerting channels — webhook + heartbeat |
+| [ADR-032](docs/adr/ADR-032-hot-model-reload-endpoint.md) | Hot model-reload endpoint |
+| [ADR-033](docs/adr/ADR-033-global-exception-handler.md) | Global API exception handler |
 
 ---
 

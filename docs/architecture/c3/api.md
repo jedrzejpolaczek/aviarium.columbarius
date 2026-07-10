@@ -7,33 +7,41 @@ C4Component
   Container_Boundary(fastapi, "FastAPI Server") {
     Component(appstate, "AppState", "Python Class", "Pre-computed state: db connection, model, X_all_t feature matrix, similarity index")
     Component(lifespanmgr, "LifespanManager", "FastAPI Lifespan", "Executes startup pre-computation and shutdown teardown")
+    Component(exceptionhandler, "ExceptionHandler", "Catch-all Handler", "Logs, alerts, and returns a structured 500 for any unhandled exception")
     Component(predictrouter, "PredictRouter", "API Route", "Handles GET /predict/{card_name}")
     Component(similarrouter, "SimilarRouter", "API Route", "Handles GET /similar/{card_name}")
     Component(underpricedrouter, "UnderpricedRouter", "API Route", "Handles GET /underpriced")
     Component(cardsrouter, "CardsRouter", "API Route", "Handles GET /cards")
     Component(healthrouter, "HealthRouter", "API Route", "Handles GET /health")
+    Component(adminrouter, "AdminRouter", "API Route", "Handles POST /admin/reload-model (token-protected)")
     Component(schemas, "ResponseSchemas", "Pydantic Models", "Type definitions for all API responses")
   }
 
   Container_Ext(golddb, "gold_db", "DuckDB", "Gold DB")
   System_Ext(mlflow, "mlflow", "MLflow Server", "Model registry")
   Person_Ext(enduser, "end_user", "End User", "API consumer")
+  Person_Ext(operator, "operator", "Operator", "Holds ADMIN_TOKEN")
 
   Rel(enduser, predictrouter, "GET /predict/{card_name}")
   Rel(enduser, similarrouter, "GET /similar/{card_name}")
   Rel(enduser, underpricedrouter, "GET /underpriced")
   Rel(enduser, cardsrouter, "GET /cards")
   Rel(enduser, healthrouter, "GET /health")
-  
+  Rel(operator, adminrouter, "POST /admin/reload-model (X-Admin-Token)")
+
   Rel(lifespanmgr, golddb, "Reads features at startup (DuckDB read-only)")
   Rel(lifespanmgr, mlflow, "Loads model by alias at startup")
   Rel(lifespanmgr, appstate, "Populates state: db, model, X_all_t, similarity_index")
-  
+  Rel(adminrouter, mlflow, "Loads model by run_id, in-place, post-startup")
+  Rel(adminrouter, appstate, "Swaps model and model_run_id only")
+
   Rel(predictrouter, appstate, "Reads X_all_t and model")
   Rel(similarrouter, appstate, "Reads similarity_index")
   Rel(underpricedrouter, appstate, "Reads model and X_all_t")
   Rel(cardsrouter, appstate, "Reads db connection")
-  
+
+  Rel(exceptionhandler, appstate, "Never touches state — logs and alerts only")
+
   Rel(predictrouter, schemas, "Returns typed response")
   Rel(similarrouter, schemas, "Returns typed response")
   Rel(underpricedrouter, schemas, "Returns typed response")
@@ -43,13 +51,15 @@ C4Component
 
 | Component | Responsibility | Reference |
 |---|---|---|
-| **AppState** | Singleton class holding pre-computed data: database connection, loaded LightGBM model, X_all_t feature matrix, and CardSimilarityIndex. Shared across all request handlers. | ADR-019 |
+| **AppState** | Singleton class holding pre-computed data: database connection, loaded LightGBM model, X_all_t feature matrix, and CardSimilarityIndex. Shared across all request handlers. `model`/`model_run_id` are the only fields mutable after startup, via AdminRouter. | ADR-019, ADR-032 |
 | **LifespanManager** | FastAPI lifespan context manager that runs startup pre-computation (load features, model, build indexes) and graceful shutdown (close db, cleanup). | ADR-019 |
+| **ExceptionHandler** | Registered via `register_exception_handlers(app)`, called right after app construction. Catches any exception not already resolved by FastAPI's own `HTTPException` handling; logs, sends an alert, and returns a fixed `{"detail": "Internal server error."}` (500) — never the raw exception, to avoid leaking internals to the client. | ADR-033 |
 | **PredictRouter** | Handles `GET /predict/{card_name}` endpoint. Slices the card's features from X_all_t and calls the model to return price prediction. | |
 | **SimilarRouter** | Handles `GET /similar/{card_name}` endpoint. Queries the CardSimilarityIndex to find semantically similar cards. | |
 | **UnderpricedRouter** | Handles `GET /underpriced` endpoint. Scans market listings against the model to identify underpriced cards. Uses AppState model and feature matrix. | |
 | **CardsRouter** | Handles `GET /cards` endpoint. Performs card name lookups against the gold_db. Uses AppState database connection. | |
 | **HealthRouter** | Handles `GET /health` endpoint. Returns server status and model load confirmation. | |
+| **AdminRouter** | Handles `POST /admin/reload-model`. Token-protected (`X-Admin-Token` checked against `ADMIN_TOKEN`, constant-time comparison); loads a model by run_id from MLflow and swaps `AppState.model`/`model_run_id` in place, without a container restart. 503 if `ADMIN_TOKEN` unconfigured, 403 on a wrong token, 502 on an MLflow load failure (state left unchanged). | ADR-032 |
 | **ResponseSchemas** | Pydantic models defining response types for all API endpoints (prediction objects, similarity results, underpriced card lists, etc.). | |
 
 ## Startup Pre-computation

@@ -1,6 +1,6 @@
 # C4 — API State & Startup Code
 
-The API state container holds all runtime dependencies initialized during FastAPI startup: database connections, feature matrices, the fitted ML pipeline, the trained model, and a pre-built similarity index for card recommendations. This state is immutable after startup and accessed by all request handlers via dependency injection.
+The API state container holds all runtime dependencies initialized during FastAPI startup: database connections, feature matrices, the fitted ML pipeline, the trained model, and a pre-built similarity index for card recommendations. All fields are immutable after startup **except** `model` and `model_run_id`, which `POST /admin/reload-model` (ADR-032) can swap in place at runtime, without a container restart. Every other field — `repo`, `snapshot_date`, `X_all`, `X_all_t`, `pipeline`, `feature_names`, `similarity_index` — remains startup-only, exactly as ADR-019 originally described.
 
 ```mermaid
 classDiagram
@@ -63,3 +63,7 @@ If the `MODEL_RUN_ID` environment variable is not set, step 5 skips model loadin
 - `/similar` endpoint continues to function normally using the pre-built `CardSimilarityIndex`.
 
 This allows the API to remain partially operational for similarity-based features while blocking inference-dependent operations.
+
+## Post-Startup Model Reload
+
+`POST /admin/reload-model` (see `app/routers/admin.py`, ADR-032) is the one path that mutates `AppState` outside of `lifespan`. Given a `model_run_id` and a valid `X-Admin-Token`, it calls `load_model_from_mlflow` again — the same function `lifespan` uses at startup — and, only on success, overwrites `app.state.model` and `app.state.model_run_id`. No other field is touched: `X_all`/`X_all_t`/`pipeline`/`similarity_index` are derived from the Gold snapshot, not the model, so they don't need rebuilding. On an MLflow load failure the endpoint returns 502 and `app.state` is left exactly as it was.
