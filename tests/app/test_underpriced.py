@@ -31,6 +31,13 @@ def test_underpriced_no_model_returns_503(test_client_no_model: TestClient) -> N
     assert response.status_code == 503
 
 
+def test_underpriced_no_features_returns_503(
+    test_client_no_features: TestClient,
+) -> None:
+    response = test_client_no_features.get("/underpriced/")
+    assert response.status_code == 503
+
+
 # ---------------------------------------------------------------------------
 # Response body structure
 # ---------------------------------------------------------------------------

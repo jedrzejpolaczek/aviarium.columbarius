@@ -95,3 +95,18 @@ def test_empty_dataset_returns_empty_list():
     response = client.get("/cards")
     assert response.status_code == 200
     assert response.json() == {"cards": []}
+
+
+def test_returns_503_when_features_unavailable():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient as _TestClient
+
+    app = FastAPI()
+    app.include_router(router)
+    app.state.X_all = None
+    app.state.X_all_t = None
+    app.state.model_run_id = ""
+
+    response = _TestClient(app).get("/cards")
+
+    assert response.status_code == 503

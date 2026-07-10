@@ -34,11 +34,13 @@ def health_check(request: Request) -> JSONResponse:
     """
     model = getattr(request.app.state, "model", None)
     repo = getattr(request.app.state, "repo", None)
+    features_loaded = getattr(request.app.state, "X_all", None) is not None
     status = "ok" if (model is not None and repo is not None) else "degraded"
     body = {
         "status": status,
         "model_loaded": model is not None,
         "db_connected": repo is not None,
+        "features_loaded": features_loaded,
     }
     http_status = 200 if status == "ok" else 503
     return JSONResponse(content=body, status_code=http_status)

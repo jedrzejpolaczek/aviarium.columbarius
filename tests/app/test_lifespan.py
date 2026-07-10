@@ -147,6 +147,37 @@ def test_lifespan_degrades_when_model_load_fails(tiny_gold_db, monkeypatch):
         assert state.model_run_id == ""
 
 
+def test_lifespan_degrades_when_feature_build_fails(tmp_path, monkeypatch):
+    """A broken Gold schema during feature-matrix build must not crash the
+    app — unlike gold_price_features being empty (a setup error, still a
+    hard RuntimeError), a failure while building X_all/X_all_t/similarity
+    index should degrade the same way a model-load failure does: /health
+    stays reachable and reports degraded."""
+    db_path = tmp_path / "broken_gold.duckdb"
+    _build_gold_db(db_path, break_column="_broken")
+    monkeypatch.setattr("app.main.GOLD_DB_PATH", str(db_path))
+    monkeypatch.setattr("app.main.MODEL_RUN_ID", "")
+
+    app = FastAPI(lifespan=lifespan)
+    from app.routers import health as health_router_module
+
+    app.include_router(health_router_module.router)
+    with TestClient(app) as client:
+        state = app.state
+        assert state.X_all is None
+        assert state.X_all_t is None
+        assert state.pipeline is None
+        assert state.similarity_index is None
+        assert state.model is None
+        assert state.model_run_id == ""
+
+        response = client.get("/health")
+        assert response.status_code == 503
+        body = response.json()
+        assert body["status"] == "degraded"
+        assert body["features_loaded"] is False
+
+
 def test_lifespan_closes_db_connection_on_shutdown(tiny_gold_db, monkeypatch):
     monkeypatch.setattr("app.main.GOLD_DB_PATH", str(tiny_gold_db))
     monkeypatch.setattr("app.main.MODEL_RUN_ID", "")

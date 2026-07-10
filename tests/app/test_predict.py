@@ -31,6 +31,11 @@ def test_predict_no_model_returns_503(test_client_no_model: TestClient) -> None:
     assert response.status_code == 503
 
 
+def test_predict_no_features_returns_503(test_client_no_features: TestClient) -> None:
+    response = test_client_no_features.get("/predict/Lightning%20Bolt")
+    assert response.status_code == 503
+
+
 # ---------------------------------------------------------------------------
 # Response body structure
 # ---------------------------------------------------------------------------

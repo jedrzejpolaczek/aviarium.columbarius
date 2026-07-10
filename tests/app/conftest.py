@@ -43,8 +43,8 @@ class _StateOverrides(TypedDict, total=False):
 
     model: MagicMock | None
     repo: MagicMock
-    X_all: pd.DataFrame
-    X_all_t: pd.DataFrame
+    X_all: pd.DataFrame | None
+    X_all_t: pd.DataFrame | None
     model_run_id: str
     snapshot_date: str
     similarity_index: MagicMock | None
@@ -158,6 +158,15 @@ def test_client_no_model() -> Generator[TestClient, None, None]:
 def test_client_no_similarity() -> Generator[TestClient, None, None]:
     """TestClient where similarity_index=None to test 503 response from /similar."""
     with TestClient(_build_test_app({"similarity_index": None})) as client:
+        yield client
+
+
+@pytest.fixture(scope="module")
+def test_client_no_features() -> Generator[TestClient, None, None]:
+    """TestClient where X_all/X_all_t=None to test 503 from cards/predict/underpriced."""
+    with TestClient(
+        _build_test_app({"X_all": None, "X_all_t": None, "model_run_id": ""})
+    ) as client:
         yield client
 
 

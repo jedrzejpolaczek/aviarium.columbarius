@@ -48,6 +48,7 @@ from src.ml.features.pipeline import build_inference_features, fit_transform_fea
 from src.ml.recommendation.similarity import SIMILARITY_FEATURES, CardSimilarityIndex
 from src.logger import get_logger, setup_logging
 from src.ml.training.tracking import load_model_from_mlflow
+from src.monitoring.alerts import send_alert
 
 
 MODEL_RUN_ID = os.getenv("MODEL_RUN_ID", "")
@@ -146,18 +147,39 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         raise RuntimeError("gold_price_features is empty — run the ETL pipeline first.")
     app.state.snapshot_date = snapshot_date
 
-    # 3-4. Build full feature matrix and fit sklearn pipeline once
-    features = _build_feature_matrices(app.state.repo.connection, snapshot_date)
-    app.state.X_all = features.X_all
-    app.state.X_all_t = features.X_all_t
-    app.state.pipeline = features.pipeline
-    app.state.feature_names = features.feature_names
-
-    # 5. Load LightGBM booster from MLflow (optional — degraded mode on failure)
-    app.state.model, app.state.model_run_id = _load_model_or_degrade(MODEL_RUN_ID)
-
-    # 6. Build CardSimilarityIndex with n_neighbors=50 (max returned by /similar)
-    app.state.similarity_index = _build_similarity_index(features.X_all)
+    # 3-4. Build full feature matrix and fit sklearn pipeline once.
+    # 5. Load LightGBM booster from MLflow (optional — degraded mode on failure).
+    # 6. Build CardSimilarityIndex with n_neighbors=50 (max returned by /similar).
+    # All four grouped in one try/except: none of them can succeed
+    # meaningfully without the others, and a failure anywhere here should
+    # degrade the whole API the same way a model-load failure already does
+    # (rather than crashing startup and taking /health down with it).
+    try:
+        features = _build_feature_matrices(app.state.repo.connection, snapshot_date)
+        app.state.X_all = features.X_all
+        app.state.X_all_t = features.X_all_t
+        app.state.pipeline = features.pipeline
+        app.state.feature_names = features.feature_names
+        app.state.similarity_index = _build_similarity_index(features.X_all)
+        app.state.model, app.state.model_run_id = _load_model_or_degrade(MODEL_RUN_ID)
+    except Exception as exc:
+        logger.error(
+            "Feature matrix / similarity index build failed — "
+            "starting in degraded mode: %s",
+            exc,
+            exc_info=True,
+        )
+        send_alert(
+            "API startup degraded",
+            f"Feature matrix build failed at startup: {exc}",
+        )
+        app.state.X_all = None
+        app.state.X_all_t = None
+        app.state.pipeline = None
+        app.state.feature_names = []
+        app.state.similarity_index = None
+        app.state.model = None
+        app.state.model_run_id = ""
 
     yield
 
