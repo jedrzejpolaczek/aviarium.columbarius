@@ -147,7 +147,9 @@ def register_exception_handlers(app: FastAPI) -> None:
             "Unhandled API exception",
             f"{request.method} {request.url.path}: {exc}",
         )
-        return JSONResponse(status_code=500, content={"detail": "Internal server error."})
+        return JSONResponse(
+            status_code=500, content={"detail": "Internal server error."}
+        )
 
 
 @asynccontextmanager
