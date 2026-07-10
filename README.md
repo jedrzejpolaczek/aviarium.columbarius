@@ -349,14 +349,16 @@ make monitor
 **Linux/macOS (cron)** — run daily at 07:00, after the pipeline:
 
 ```cron
-0 7 * * * cd /path/to/aviarium.columbarius && make pipeline && make monitor >> logs/cron.log 2>&1
+0 7 * * * cd /path/to/aviarium.columbarius && make pipeline && make monitor && make backup >> logs/cron.log 2>&1
 ```
 
 **Windows (Task Scheduler)** — create a daily trigger running:
 
 ```powershell
-uv run python -m scripts.run_pipeline; if ($?) { uv run python -m scripts.check_and_retrain }
+uv run python -m scripts.run_pipeline; if ($?) { uv run python -m scripts.check_and_retrain }; uv run python -m scripts.backup_data
 ```
+
+`make backup` (or `python -m scripts.backup_data`) copies the Gold/Silver/Bronze DuckDB files, `mlflow.db`, and `mlruns/` into timestamped, auto-pruned snapshots under `backups/` — point `--backup-dir` at an external drive or cloud-synced folder for off-host protection.
 
 (Set the task's "Start in (optional)" field to the project root — relative paths like `logs/` and `data/gold/cards.duckdb` won't resolve otherwise.)
 
