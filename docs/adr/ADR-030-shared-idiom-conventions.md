@@ -101,5 +101,4 @@ doesn't re-flag them as missed work:
 
 ### Neutral
 - This ADR does not introduce any new abstraction itself; it only indexes
-  abstractions introduced by the round-3 remediation plan
-  (`docs/superpowers/plans/2026-07-08-maintainability-round3.md`).
+  abstractions introduced by the round-3 remediation plan.

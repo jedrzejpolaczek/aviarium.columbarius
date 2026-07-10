@@ -29,7 +29,6 @@ share/python-wheels/
 *.zip
 *.7z
 *.pt
-*.pth
 *.pth*
 MANIFEST
 *.dist
@@ -120,9 +119,7 @@ ENV/
 env.bak/
 venv.bak/
 *_venv
-*_venv/
 venv_*
-venv_*/
 
 
 # Spyder project settings
@@ -151,9 +148,6 @@ config.*.json
 # Visual Studio Code
 .vscode
 
-# tests
-tests/data/reports/srgan/*
-
 # Data
 data/*
 data/raw/*
@@ -161,7 +155,7 @@ data/bronze/*
 data/silver/*
 data/gold/*
 
-# Specyfics
+# Specifics
 mlruns/*
 **/mlruns/
 mlflow.db
@@ -169,15 +163,12 @@ backups/
 .ruff_cache
 .ruff_cache/*
 _ADDONS/*
-docs/superpowers/*
-docs/superpowers
-docs/prompts/*
-docs/prompts
+docs/dev-log/
 logs/*
 
 # Node
 node_modules/
 **/node_modules/
 
-# Claude Code tool config
+# Local tool config
 .claude/

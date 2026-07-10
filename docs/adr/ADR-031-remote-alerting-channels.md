@@ -5,7 +5,7 @@
 
 ## Context
 
-`src/monitoring/alerts.py` (introduced 2026-07-09, see `docs/superpowers/plans/2026-07-09-production-readiness-blockers.md`) gave every scheduled script and the API a shared, account-free way to raise an alert: a durable JSONL log plus a best-effort desktop notification via `plyer`. Its own module docstring and `docs/runbooks/model-incidents.md` both explicitly stated the project had "no Slack/email/PagerDuty credentials configured."
+`src/monitoring/alerts.py` (introduced 2026-07-09) gave every scheduled script and the API a shared, account-free way to raise an alert: a durable JSONL log plus a best-effort desktop notification via `plyer`. Its own module docstring and `docs/runbooks/model-incidents.md` both explicitly stated the project had "no Slack/email/PagerDuty credentials configured."
 
 The 2026-07-10 production-readiness audit flagged this as the single biggest remaining gap in that design, for two distinct reasons:
 
