@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 from scripts._common import gold_db_exists
-from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
+from src.data.cards.storage.gold.storage import get_latest_trainable_snapshot_date
 from src.data.repository import GOLD_DB_PATH, open_repository
 from src.logger import get_logger, setup_logging
 
@@ -27,10 +27,14 @@ def main() -> None:
 
     repo = open_repository(args.db_path, read_only=True)
     conn = repo.connection
-    snapshot_date = get_latest_gold_snapshot_date(conn)
+    snapshot_date = get_latest_trainable_snapshot_date(conn)
 
     if snapshot_date is None:
-        logger.error("gold_price_features is empty — run the ETL pipeline first.")
+        logger.error(
+            "No snapshot with a t+7 counterpart is available yet in "
+            "gold_price_features — run the ETL pipeline for a few more days "
+            "before training."
+        )
         sys.exit(1)
 
     logger.info("Training on snapshot: %s", snapshot_date)
