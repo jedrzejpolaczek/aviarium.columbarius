@@ -7,6 +7,7 @@ reload is opt-in per deployment rather than silently accepting any token
 when nobody configured one.
 """
 
+import hmac
 import os
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -26,13 +27,18 @@ class ReloadModelRequest(BaseModel):
 
 
 def _require_admin_token(x_admin_token: str | None) -> None:
-    """Raise 503 if ADMIN_TOKEN isn't configured, 403 if it doesn't match."""
+    """Raise 503 if ADMIN_TOKEN isn't configured, 403 if it doesn't match.
+
+    Uses ``hmac.compare_digest`` (constant-time) rather than ``!=`` since
+    this compares a caller-supplied secret against the real token.
+    """
     expected = os.getenv("ADMIN_TOKEN", "")
     if not expected:
         raise HTTPException(
             503, detail="ADMIN_TOKEN not configured — hot reload is disabled."
         )
-    if x_admin_token != expected:
+    if not hmac.compare_digest(x_admin_token or "", expected):
+        logger.warning("Rejected admin request: invalid X-Admin-Token.")
         raise HTTPException(403, detail="Invalid admin token.")
 
 

@@ -83,3 +83,18 @@ def test_reload_model_returns_502_when_mlflow_load_fails(
 
     assert response.status_code == 502
     assert app_with_admin_router.state.model is None  # unchanged on failure
+
+
+def test_reload_model_returns_422_when_model_run_id_missing(
+    app_with_admin_router, monkeypatch
+):
+    monkeypatch.setenv("ADMIN_TOKEN", "correct-token")
+    client = TestClient(app_with_admin_router)
+
+    response = client.post(
+        "/admin/reload-model",
+        json={},
+        headers={"X-Admin-Token": "correct-token"},
+    )
+
+    assert response.status_code == 422

@@ -383,7 +383,7 @@ echo "MODEL_RUN_ID=<run_id_from_mlflow>" > docker/.env
 docker compose -f docker/docker-compose.yml up --build
 ```
 
-To switch models after retraining, edit `docker/.env` and restart the container — a shell `export` has no effect since it isn't wired into `environment:`.
+To switch models after retraining, edit `docker/.env` and restart the container — a shell `export` has no effect since it isn't wired into `environment:`. Alternatively, if `ADMIN_TOKEN` is set in `docker/.env`, call `POST /admin/reload-model` with `{"model_run_id": "<run_id>"}` and header `X-Admin-Token: <ADMIN_TOKEN>` to hot-swap the model in the running container without a restart — see [docs/runbooks/model-incidents.md](docs/runbooks/model-incidents.md) for the full rollback flow. The endpoint returns 503 if `ADMIN_TOKEN` isn't configured.
 
 | URL | Description |
 |---|---|
@@ -392,6 +392,7 @@ To switch models after retraining, edit `docker/.env` and restart the container 
 | `http://localhost:8000/health` | Health check endpoint |
 | `http://localhost:8000/cards` | List of all cards available for prediction |
 | `http://localhost:8000/predict/{card_name}` | Price prediction for a single card |
+| `POST http://localhost:8000/admin/reload-model` | Hot-reload the model by run_id (requires `X-Admin-Token`) |
 
 The API starts in degraded mode if `MODEL_RUN_ID` is not set — `/health` and `/cards` still work, but `/predict` returns 503.
 
