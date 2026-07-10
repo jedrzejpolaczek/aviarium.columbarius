@@ -170,6 +170,36 @@ def test_run_backup_verification_passes_against_a_real_duckdb_file(tmp_path):
     assert snapshot_dir.exists()  # verification passed — real tables found
 
 
+def test_run_backup_raises_verification_error_for_a_valid_but_tableless_db(
+    tmp_path,
+):
+    """A DuckDB file that opens fine but has zero tables (e.g. created but
+    never populated) must still fail verification — the check is "has at
+    least one table", not just "is a valid DuckDB file"."""
+    import duckdb
+
+    (tmp_path / "data" / "bronze").mkdir(parents=True)
+    (tmp_path / "data" / "silver").mkdir(parents=True)
+    (tmp_path / "data" / "gold").mkdir(parents=True)
+    for tier in ("bronze", "silver", "gold"):
+        db_path = tmp_path / "data" / tier / "cards.duckdb"
+        conn = duckdb.connect(str(db_path))  # valid DuckDB file, no tables created
+        conn.close()
+
+    config_path = tmp_path / "data_sources.yaml"
+    config_path.write_text(
+        "storage:\n"
+        f'  bronze_duckdb_path: "{(tmp_path / "data/bronze/cards.duckdb").as_posix()}"\n'
+        f'  silver_duckdb_path: "{(tmp_path / "data/silver/cards.duckdb").as_posix()}"\n'
+        f'  gold_duckdb_path: "{(tmp_path / "data/gold/cards.duckdb").as_posix()}"\n'
+    )
+
+    with pytest.raises(backup_data.BackupVerificationError):
+        backup_data.run_backup(
+            backup_dir=tmp_path / "backups", keep_last=7, config_path=str(config_path)
+        )
+
+
 def test_prune_old_snapshots_keeps_only_the_last_n(tmp_path):
     backup_dir = tmp_path / "backups"
     backup_dir.mkdir()
