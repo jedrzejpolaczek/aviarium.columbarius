@@ -51,13 +51,42 @@ _MIN_ML_HORIZON_DAYS = 7
 def get_latest_gold_snapshot_date(con: duckdb.DuckDBPyConnection) -> str | None:
     """Return the latest snapshot_date in gold_price_features, or None if empty/absent.
 
-    Shared by app/main.py, scripts/train_model.py, and scripts/check_and_retrain.py,
-    each of which need the latest available price snapshot from a raw DuckDB
-    connection (not a GoldStorage instance) and previously ran this query inline.
+    Shared by app/main.py (inference always wants the freshest snapshot) and
+    previously ran inline in scripts/train_model.py and scripts/check_and_retrain.py.
+    Those two now use :func:`get_latest_trainable_snapshot_date` instead — training
+    needs a snapshot whose t+7 target is already available, which the plain latest
+    snapshot generally isn't (see that function's docstring).
     """
     if "gold_price_features" not in get_tables(con):
         return None
     row = con.execute("SELECT MAX(snapshot_date) FROM gold_price_features").fetchone()
+    if row is None or row[0] is None:
+        return None
+    return str(row[0])
+
+
+def get_latest_trainable_snapshot_date(con: duckdb.DuckDBPyConnection) -> str | None:
+    """Return the latest snapshot_date that has a t+7 counterpart, or None.
+
+    ``src.monitoring.retraining.retrain`` builds its target as
+    ``log_return_7d = log1p(eur_t+7) - log1p(eur_t)``, requiring an exact
+    snapshot at ``snapshot_date + 7 days``. The plain latest snapshot (see
+    :func:`get_latest_gold_snapshot_date`) is today's collection run and by
+    definition has no data 7 days in its future yet, so passing it to
+    ``retrain()`` always raises ``RuntimeError: ... produced an empty
+    training dataset``. This picks the newest date that actually has its
+    t+7 pair already collected, tolerating gaps in the snapshot history.
+    """
+    if "gold_price_features" not in get_tables(con):
+        return None
+    row = con.execute(
+        """
+        SELECT MAX(t0.snapshot_date)
+        FROM (SELECT DISTINCT snapshot_date FROM gold_price_features) t0
+        JOIN (SELECT DISTINCT snapshot_date FROM gold_price_features) t7
+            ON t7.snapshot_date = CAST(t0.snapshot_date AS DATE) + INTERVAL 7 DAY
+        """
+    ).fetchone()
     if row is None or row[0] is None:
         return None
     return str(row[0])
