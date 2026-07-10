@@ -12,9 +12,13 @@ Pre-computation strategy:
     DuckDB queries and sklearn transformations across all requests.
 
 Degraded mode:
-    The server starts and responds to /health and /similar even if MODEL_RUN_ID
-    is unset or the model fails to load. Only /predict and /underpriced return
-    503 in that case.
+    The server always starts and /health always responds — 200 when fully
+    operational, 503 (with per-component flags) otherwise. Degraded mode is
+    entered if the model fails to load, OR if building the feature matrix /
+    similarity index fails at startup (see ``lifespan``). In that state
+    /predict, /underpriced, and /cards return 503 via their
+    ``get_request_features``/``require_model`` dependencies, and /similar
+    returns 503 via its own ``similarity_index is None`` check.
 
 Environment variables:
     GOLD_DB_PATH  -- Path to the DuckDB database file.
@@ -126,9 +130,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         4. Fit the sklearn pipeline once; store the pre-transformed matrix
            ``X_all_t`` for O(1) per-request inference.
         5. Load the LightGBM booster from MLflow if ``MODEL_RUN_ID`` is set.
-           On failure the server starts in degraded mode (model=None).
         6. Build a ``CardSimilarityIndex`` with n_neighbors=50, enabling the
            /similar endpoint to return up to 50 results without re-fitting.
+
+        Steps 3-6 run in one try/except: a failure anywhere in that block
+        (feature-matrix build, pipeline fit, model load, or similarity-index
+        build) puts the server in degraded mode — X_all, X_all_t, pipeline,
+        similarity_index, and model all become None — rather than crashing
+        startup.
 
     Shutdown (after ``yield``):
         Closes the DuckDB connection.
@@ -171,7 +180,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         send_alert(
             "API startup degraded",
-            f"Feature matrix build failed at startup: {exc}",
+            f"Feature matrix / similarity index / model setup failed at startup: {exc}",
         )
         app.state.X_all = None
         app.state.X_all_t = None
