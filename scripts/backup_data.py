@@ -18,10 +18,15 @@ Usage:
 """
 
 import argparse
-import shutil
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+import shutil as shutil  # explicit re-export: tests patch backup_data.shutil.copy2,
+# which requires this module to explicitly re-export the name under mypy --strict
+# (no_implicit_reexport) — a plain `import shutil` makes the attribute invisible
+# to importers even though it works fine at runtime.
 
 from src.data.cards.pipelines import load_config
 from src.logger import get_logger, setup_logging
@@ -94,12 +99,17 @@ def run_backup(
     snapshot_dir = backup_dir / timestamp
 
     copied_any = False
-    for tier, src in _tiered_duckdb_sources(config_path):
-        if _copy_duckdb(tier, src, snapshot_dir):
-            copied_any = True
-    for src in (MLFLOW_DB_PATH, MLRUNS_DIR):
-        if _copy_if_exists(src, snapshot_dir):
-            copied_any = True
+    try:
+        for tier, src in _tiered_duckdb_sources(config_path):
+            if _copy_duckdb(tier, src, snapshot_dir):
+                copied_any = True
+        for src in (MLFLOW_DB_PATH, MLRUNS_DIR):
+            if _copy_if_exists(src, snapshot_dir):
+                copied_any = True
+    except OSError:
+        if snapshot_dir.exists():
+            shutil.rmtree(snapshot_dir)
+        raise
 
     if not copied_any:
         if snapshot_dir.exists():
@@ -113,15 +123,26 @@ def run_backup(
     return snapshot_dir
 
 
+_SNAPSHOT_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$")
+
+
 def _prune_old_snapshots(backup_dir: Path, keep_last: int) -> None:
     """Delete all but the *keep_last* most recent timestamped snapshot dirs.
 
     Snapshot directory names are ``YYYY-MM-DD_HH-MM-SS`` (see run_backup),
     which sorts lexicographically in the same order as chronologically.
+    Only directories matching that exact pattern are considered prunable —
+    a misconfigured ``--backup-dir`` (pointed at an unrelated existing
+    directory) or a manually-added folder under ``backups/`` must never be
+    deleted by this function.
     """
     if not backup_dir.exists() or keep_last <= 0:
         return
-    snapshots = sorted(p for p in backup_dir.iterdir() if p.is_dir())
+    snapshots = sorted(
+        p
+        for p in backup_dir.iterdir()
+        if p.is_dir() and _SNAPSHOT_NAME_RE.match(p.name)
+    )
     for old in snapshots[:-keep_last]:
         shutil.rmtree(old)
         logger.info("Pruned old backup: %s", old)

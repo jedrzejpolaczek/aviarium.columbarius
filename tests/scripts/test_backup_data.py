@@ -65,7 +65,9 @@ def test_run_backup_copies_bronze_silver_gold_mlflow_and_mlruns(fake_project):
     assert (snapshot_dir / "mlruns" / "0" / "meta.yaml").exists()
 
 
-def test_run_backup_raises_when_nothing_to_back_up(tmp_path):
+def test_run_backup_raises_when_nothing_to_back_up(tmp_path, monkeypatch):
+    monkeypatch.setattr(backup_data, "MLFLOW_DB_PATH", tmp_path / "no_mlflow.db")
+    monkeypatch.setattr(backup_data, "MLRUNS_DIR", tmp_path / "no_mlruns")
     config_path = tmp_path / "data_sources.yaml"
     config_path.write_text(
         "storage:\n"
@@ -82,6 +84,23 @@ def test_run_backup_raises_when_nothing_to_back_up(tmp_path):
         )
 
 
+def test_run_backup_cleans_up_partial_snapshot_on_copy_failure(
+    fake_project, monkeypatch
+):
+    tmp_path, config_path = fake_project
+    backup_dir = tmp_path / "backups"
+    monkeypatch.setattr(
+        backup_data.shutil, "copy2", MagicMock(side_effect=OSError("disk full"))
+    )
+
+    with pytest.raises(OSError):
+        backup_data.run_backup(
+            backup_dir=backup_dir, keep_last=7, config_path=str(config_path)
+        )
+
+    assert not backup_dir.exists() or not any(backup_dir.iterdir())
+
+
 def test_prune_old_snapshots_keeps_only_the_last_n(tmp_path):
     backup_dir = tmp_path / "backups"
     backup_dir.mkdir()
@@ -92,11 +111,15 @@ def test_prune_old_snapshots_keeps_only_the_last_n(tmp_path):
         "2026-01-04_00-00-00",
     ]:
         (backup_dir / name).mkdir()
+    (backup_dir / "not_a_snapshot").mkdir()
 
     backup_data._prune_old_snapshots(backup_dir, keep_last=2)
 
-    remaining = sorted(p.name for p in backup_dir.iterdir())
+    remaining = sorted(
+        p.name for p in backup_dir.iterdir() if p.name != "not_a_snapshot"
+    )
     assert remaining == ["2026-01-03_00-00-00", "2026-01-04_00-00-00"]
+    assert (backup_dir / "not_a_snapshot").exists()
 
 
 def test_main_returns_1_and_alerts_on_failure(tmp_path, monkeypatch):
