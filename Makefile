@@ -16,7 +16,7 @@ format-check:
 	uv run ruff format --check .
 
 type-check:
-	uv run mypy
+	uv run mypy .
 
 test:
 	uv run pytest --ignore=tests/ml/training/test_tracking.py; s1=$$?; \
