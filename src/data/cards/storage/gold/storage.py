@@ -53,7 +53,8 @@ def get_latest_gold_snapshot_date(con: duckdb.DuckDBPyConnection) -> str | None:
 
     Shared by app/main.py (inference always wants the freshest snapshot) and
     previously ran inline in scripts/train_model.py and scripts/check_and_retrain.py.
-    Those two now use :func:`get_latest_trainable_snapshot_date` instead — training
+    check_and_retrain.py now uses :func:`get_latest_trainable_snapshot_date`
+    instead (train_model.py should follow suit) — training
     needs a snapshot whose t+7 target is already available, which the plain latest
     snapshot generally isn't (see that function's docstring).
     """

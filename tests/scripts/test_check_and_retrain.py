@@ -83,6 +83,8 @@ def test_main_retrains_when_triggered(tmp_path, monkeypatch):
     monkeypatch.setattr(
         check_and_retrain, "retrain", lambda conn, snapshot_date: "abc123"
     )
+    mock_send_alert = MagicMock()
+    monkeypatch.setattr(check_and_retrain, "send_alert", mock_send_alert)
 
     exit_code = check_and_retrain.main()
 
@@ -91,6 +93,7 @@ def test_main_retrains_when_triggered(tmp_path, monkeypatch):
     assert status["result"] == "retrained"
     assert status["reason"] == "mape_threshold"
     assert status["run_id"] == "abc123"
+    mock_send_alert.assert_not_called()
 
 
 def test_main_writes_error_status_when_retrain_raises(tmp_path, monkeypatch):
