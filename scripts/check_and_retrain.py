@@ -28,7 +28,7 @@ import duckdb as duckdb  # explicit re-export: tests patch check_and_retrain.duc
 # to importers even though it works fine at runtime.
 
 import httpx as httpx  # explicit re-export: tests patch check_and_retrain.httpx.get,
-# same mypy --strict re-export requirement as the duckdb import below.
+# same mypy --strict re-export requirement as the duckdb import above.
 
 from scripts._common import gold_db_exists
 from src.data.cards.storage.gold.storage import get_latest_trainable_snapshot_date
