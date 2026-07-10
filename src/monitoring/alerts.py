@@ -11,7 +11,7 @@ Two channels, both always attempted:
        backend, no display) is caught and logged, never raised.
 
 This project has no Slack/email/PagerDuty credentials configured (see
-docs/runbooks/model-incidents.md, "Known limitation"). This module is the
+docs/runbooks/model-incidents.md, "Alerting"). This module is the
 minimal upgrade from "nobody is notified" to "an alert is durably recorded
 and, best-effort, shown on the operator's screen" — without requiring any
 external account.

@@ -1,6 +1,6 @@
 # Runbook: Model & Prediction-Service Incidents
 
-Operational reference for the three incidents this project can currently
+Operational reference for the incidents this project can currently
 detect or cause. Pairs with [ADR-020](../adr/ADR-020-monitoring-and-retraining-architecture.md)
 (monitoring architecture) and [ADR-018](../adr/ADR-018-tier-based-model-selection.md)
 (tiered pricing).
@@ -37,7 +37,8 @@ expect yet, or corrupt/partial Gold tables from an interrupted ETL run.
 **Fix:**
 1. Check the API container logs for `Feature matrix / similarity index
    build failed — starting in degraded mode: <exc>`.
-2. Check `logs/alerts.jsonl` for the same message with a timestamp.
+2. Check `logs/alerts.jsonl` for a corresponding `"API startup degraded"`
+   entry around the same timestamp.
 3. Re-run `make pipeline` to rebuild Gold from a clean state, then restart
    the API container: `docker compose -f docker/docker-compose.yml up -d --build api`.
 4. If the error persists after a clean ETL run, it is a real code/schema
