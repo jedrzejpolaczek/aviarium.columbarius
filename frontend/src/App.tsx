@@ -12,13 +12,14 @@ type AppState =
 
 export function App() {
   const [cards, setCards] = useState<CardEntry[]>([])
+  const [cardsError, setCardsError] = useState<string | null>(null)
   const [state, setState] = useState<AppState>({ status: 'idle' })
 
   useEffect(() => {
     fetchCards()
       .then(setCards)
-      .catch(() => {
-        // Cards load silently — autocomplete will be unavailable
+      .catch((err: unknown) => {
+        setCardsError(err instanceof Error ? err.message : 'Failed to load card list')
       })
   }, [])
 
@@ -42,6 +43,12 @@ export function App() {
         <p className="mb-8 text-sm text-gray-500">
           7-day price prediction for Magic: The Gathering cards
         </p>
+
+        {cardsError && (
+          <p className="mb-4 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-700">
+            Couldn't load the card list ({cardsError}) — autocomplete is unavailable.
+          </p>
+        )}
 
         <CardSearch
           cards={cards}

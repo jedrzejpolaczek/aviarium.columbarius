@@ -305,9 +305,11 @@ uv run uvicorn app.main:app --reload
 **Inspect runs in the MLflow UI:**
 
 ```bash
-uv run mlflow ui
+uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
 # open http://localhost:5000
 ```
+
+Always pass `--backend-store-uri` explicitly (run from the project root). Without it, `mlflow ui` ignores `mlflow.db` entirely and falls back to a plain local `./mlruns` folder in whatever directory you launched it from — a different, untracked store from the one the training scripts and the API actually use.
 
 **Optional — custom Gold DB path:**
 
@@ -372,11 +374,16 @@ The price prediction API and its web UI run as Docker containers.
 
 **Prerequisites:** Docker, a trained MLflow model run ID (from `mlflow ui`), and a populated Gold DuckDB (`data/gold/cards.duckdb`).
 
+`docker-compose.yml` reads `MODEL_RUN_ID` from `docker/.env` (via `env_file`) — not from the host shell's environment. Set it there, then start both containers:
+
 ```bash
-# Set the model run ID, then start both containers
-export MODEL_RUN_ID=<run_id_from_mlflow>
+# docker/.env
+echo "MODEL_RUN_ID=<run_id_from_mlflow>" > docker/.env
+
 docker compose -f docker/docker-compose.yml up --build
 ```
+
+To switch models after retraining, edit `docker/.env` and restart the container — a shell `export` has no effect since it isn't wired into `environment:`.
 
 | URL | Description |
 |---|---|
