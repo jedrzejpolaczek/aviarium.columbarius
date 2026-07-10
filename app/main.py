@@ -46,7 +46,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sklearn.pipeline import Pipeline
 
-from app.routers import cards, health, predict, similar, underpriced
+from app.routers import admin, cards, health, predict, similar, underpriced
 from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
 from src.data.repository import GOLD_DB_PATH, DuckDBRepository, open_repository
 from src.ml.features.pipeline import build_inference_features, fit_transform_features
@@ -251,6 +251,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(admin.router)
 app.include_router(health.router)
 app.include_router(cards.router)
 app.include_router(predict.router)

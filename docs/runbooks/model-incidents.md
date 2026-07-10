@@ -68,8 +68,16 @@ regressions that only show up on live traffic.
    ```
 2. Roll back to the previous known-good version:
    `uv run python -m scripts.rollback_model --version <previous_version>`
-3. Update `MODEL_RUN_ID` in `docker/.env` to that version's `run_id` and
-   restart the API container.
+3. After `scripts/rollback_model.py --version <previous_version>` swaps the
+   registry alias, call `POST /admin/reload-model` with
+   `{"model_run_id": "<run_id of that version>"}` and header
+   `X-Admin-Token: <ADMIN_TOKEN>` to make the running API pick it up
+   immediately — no container restart needed. `ADMIN_TOKEN` must be set in
+   `docker/.env` (or the host environment) for this endpoint to work at
+   all; it returns 503 if unset.
+4. If `ADMIN_TOKEN` isn't configured (or the hot-reload call itself fails),
+   fall back to updating `MODEL_RUN_ID` in `docker/.env` to that version's
+   `run_id` and restarting the API container.
 
 ## 3. `logs/last_check_status.json` shows `"result": "error"`
 
