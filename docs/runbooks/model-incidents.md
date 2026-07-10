@@ -143,6 +143,10 @@ pre-creates that directory owned by the non-root `app` user, so the
 API container's alerts land in the same `logs/alerts.jsonl` on the host
 as the scheduled scripts' — check there first, container logs second
 (the desktop notification itself never fires inside a headless container).
+Set `HEARTBEAT_URL` (a healthchecks.io-style ping URL) to detect the
+scheduled task silently not running at all — `check_and_retrain.py` pings
+it on every run, success or failure, so a missing ping (not just a
+`result: error` status) is itself the alert.
 
 There is still no remote paging (Slack/email/PagerDuty) — `logs/alerts.jsonl`,
 `logs/last_check_status.json`, `logs/last_pipeline_status.json`, and the

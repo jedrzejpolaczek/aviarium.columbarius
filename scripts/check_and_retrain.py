@@ -17,6 +17,7 @@ Usage:
 """
 
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,9 @@ import duckdb as duckdb  # explicit re-export: tests patch check_and_retrain.duc
 # which requires this module to explicitly re-export the name under mypy --strict
 # (no_implicit_reexport) — a plain `import duckdb` makes the attribute invisible
 # to importers even though it works fine at runtime.
+
+import httpx as httpx  # explicit re-export: tests patch check_and_retrain.httpx.get,
+# same mypy --strict re-export requirement as the duckdb import below.
 
 from scripts._common import gold_db_exists
 from src.data.cards.storage.gold.storage import get_latest_trainable_snapshot_date
@@ -41,6 +45,23 @@ logger = get_logger(__name__)
 def _write_status(status: dict[str, object]) -> None:
     STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATUS_PATH.write_text(json.dumps(status, indent=2))
+
+
+def _ping_heartbeat(ok: bool) -> None:
+    """Best-effort GET to HEARTBEAT_URL (success) or HEARTBEAT_URL/fail
+    (failure) — a dead-man's-switch: if this stops arriving at all
+    (machine off, task deleted), the external monitoring service pages
+    someone instead of the failure going unnoticed. Skipped entirely if
+    HEARTBEAT_URL is unset. Never raises.
+    """
+    heartbeat_url = os.getenv("HEARTBEAT_URL", "")
+    if not heartbeat_url:
+        return
+    url = heartbeat_url if ok else f"{heartbeat_url}/fail"
+    try:
+        httpx.get(url, timeout=5.0)
+    except httpx.HTTPError as exc:
+        logger.warning("Heartbeat ping failed (non-fatal): %s", exc)
 
 
 def _check_preconditions(
@@ -102,6 +123,7 @@ def main() -> int:
                 "reason": "gold_db_missing",
             }
         )
+        _ping_heartbeat(ok=False)
         return 1
 
     repo = open_repository(GOLD_DB_PATH, read_only=True)
@@ -118,6 +140,7 @@ def main() -> int:
                     "reason": reason,
                 }
             )
+            _ping_heartbeat(ok=True)
             return 0
 
         if snapshot_date is None:
@@ -137,10 +160,12 @@ def main() -> int:
                     "reason": "no_snapshot",
                 }
             )
+            _ping_heartbeat(ok=False)
             return 1
 
         ok, status = _do_retrain(conn, snapshot_date, reason)
         _write_status(status)
+        _ping_heartbeat(ok=ok)
         return 0 if ok else 1
     finally:
         repo.close()

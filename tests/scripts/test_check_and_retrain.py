@@ -222,3 +222,68 @@ def test_do_retrain_calls_real_retrain_and_writes_run_id(tiny_gold_conn):
     assert status["result"] == "retrained"
     assert status["reason"] == "mape_threshold"
     assert "run_id" in status and status["run_id"]
+
+
+def test_main_pings_heartbeat_success_url_when_configured(tmp_path, monkeypatch):
+    monkeypatch.setenv("HEARTBEAT_URL", "https://hc-ping.com/abc-123")
+    db_path = tmp_path / "cards.duckdb"
+    db_path.touch()
+    monkeypatch.setattr(check_and_retrain, "GOLD_DB_PATH", str(db_path))
+    monkeypatch.setattr(check_and_retrain, "STATUS_PATH", tmp_path / "status.json")
+    monkeypatch.setattr(
+        check_and_retrain.duckdb, "connect", lambda *a, **k: MagicMock()
+    )
+    monkeypatch.setattr(
+        check_and_retrain, "should_retrain", lambda conn: (False, "no_trigger")
+    )
+    mock_get = MagicMock()
+    monkeypatch.setattr(check_and_retrain.httpx, "get", mock_get)
+
+    check_and_retrain.main()
+
+    mock_get.assert_called_once_with("https://hc-ping.com/abc-123", timeout=5.0)
+
+
+def test_main_pings_heartbeat_fail_url_when_gold_db_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("HEARTBEAT_URL", "https://hc-ping.com/abc-123")
+    monkeypatch.setattr(
+        check_and_retrain, "GOLD_DB_PATH", str(tmp_path / "missing.duckdb")
+    )
+    monkeypatch.setattr(check_and_retrain, "STATUS_PATH", tmp_path / "status.json")
+    mock_get = MagicMock()
+    monkeypatch.setattr(check_and_retrain.httpx, "get", mock_get)
+
+    check_and_retrain.main()
+
+    mock_get.assert_called_once_with("https://hc-ping.com/abc-123/fail", timeout=5.0)
+
+
+def test_main_skips_heartbeat_when_url_not_configured(tmp_path, monkeypatch):
+    monkeypatch.delenv("HEARTBEAT_URL", raising=False)
+    monkeypatch.setattr(
+        check_and_retrain, "GOLD_DB_PATH", str(tmp_path / "missing.duckdb")
+    )
+    monkeypatch.setattr(check_and_retrain, "STATUS_PATH", tmp_path / "status.json")
+    mock_get = MagicMock()
+    monkeypatch.setattr(check_and_retrain.httpx, "get", mock_get)
+
+    check_and_retrain.main()
+
+    mock_get.assert_not_called()
+
+
+def test_main_does_not_raise_when_heartbeat_ping_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("HEARTBEAT_URL", "https://hc-ping.com/abc-123")
+    monkeypatch.setattr(
+        check_and_retrain, "GOLD_DB_PATH", str(tmp_path / "missing.duckdb")
+    )
+    monkeypatch.setattr(check_and_retrain, "STATUS_PATH", tmp_path / "status.json")
+    monkeypatch.setattr(
+        check_and_retrain.httpx,
+        "get",
+        MagicMock(side_effect=check_and_retrain.httpx.ConnectError("down")),
+    )
+
+    exit_code = check_and_retrain.main()  # must not raise
+
+    assert exit_code == 1  # gold_db_missing branch still ran to completion
