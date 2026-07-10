@@ -23,6 +23,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import duckdb
+
 import shutil as shutil  # explicit re-export: tests patch backup_data.shutil.copy2,
 # which requires this module to explicitly re-export the name under mypy --strict
 # (no_implicit_reexport) — a plain `import shutil` makes the attribute invisible
@@ -56,6 +58,39 @@ def _tiered_duckdb_sources(config_path: str) -> list[tuple[str, Path]]:
     ]
 
 
+class BackupVerificationError(Exception):
+    """Raised when a copied DuckDB backup file cannot be opened or is empty."""
+
+
+def _verify_duckdb_copy(tier: str, dest: Path) -> None:
+    """Open *dest* read-only and confirm it has at least one table.
+
+    Catches the case where the copy "succeeded" (no OSError) but produced a
+    corrupt or truncated file — discovering that at backup time, not at
+    restore time when it's too late to re-copy from a still-good source.
+
+    Raises:
+        BackupVerificationError: If the file cannot be opened as DuckDB, or
+            opens but has zero tables.
+    """
+    try:
+        conn = duckdb.connect(str(dest), read_only=True)
+        try:
+            tables = conn.execute("SHOW TABLES").fetchall()
+        finally:
+            conn.close()
+    except duckdb.Error as exc:
+        raise BackupVerificationError(
+            f"Backup verification failed for {tier} ({dest}): could not open as DuckDB: {exc}"
+        ) from exc
+
+    if not tables:
+        raise BackupVerificationError(
+            f"Backup verification failed for {tier} ({dest}): copy has zero tables."
+        )
+    logger.info("Verified backup %s: %d table(s).", dest, len(tables))
+
+
 def _copy_duckdb(tier: str, src: Path, dest_dir: Path) -> bool:
     if not src.exists():
         logger.warning("Backup source not found, skipping: %s", src)
@@ -64,6 +99,7 @@ def _copy_duckdb(tier: str, src: Path, dest_dir: Path) -> bool:
     dest = dest_dir / f"{tier}.duckdb"
     shutil.copy2(src, dest)
     logger.info("Backed up %s -> %s", src, dest)
+    _verify_duckdb_copy(tier, dest)
     return True
 
 
@@ -94,6 +130,8 @@ def run_backup(
     Raises:
         FileNotFoundError: If none of the backup sources (Bronze/Silver/Gold
             DuckDB, mlflow.db, mlruns/) exist — nothing was backed up.
+        BackupVerificationError: If a copied DuckDB file cannot be opened or
+            has zero tables — the partial snapshot is discarded.
     """
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
     snapshot_dir = backup_dir / timestamp
@@ -106,7 +144,7 @@ def run_backup(
         for src in (MLFLOW_DB_PATH, MLRUNS_DIR):
             if _copy_if_exists(src, snapshot_dir):
                 copied_any = True
-    except OSError:
+    except (OSError, BackupVerificationError):
         if snapshot_dir.exists():
             shutil.rmtree(snapshot_dir)
         raise

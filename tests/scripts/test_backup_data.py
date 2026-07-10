@@ -9,15 +9,22 @@ from scripts import backup_data
 
 @pytest.fixture
 def fake_project(tmp_path, monkeypatch):
-    """Build a fake project tree with Bronze/Silver/Gold DuckDB stubs,
-    mlflow.db, and mlruns/, plus a matching data_sources.yaml config.
+    """Build a fake project tree with real (minimal) Bronze/Silver/Gold
+    DuckDB files, mlflow.db, and mlruns/, plus a matching data_sources.yaml
+    config. Real DuckDB files (not text stubs) are required since
+    run_backup now verifies each copy by opening it and checking for
+    tables.
     """
+    import duckdb
+
     (tmp_path / "data" / "bronze").mkdir(parents=True)
     (tmp_path / "data" / "silver").mkdir(parents=True)
     (tmp_path / "data" / "gold").mkdir(parents=True)
-    (tmp_path / "data" / "bronze" / "cards.duckdb").write_text("bronze")
-    (tmp_path / "data" / "silver" / "cards.duckdb").write_text("silver")
-    (tmp_path / "data" / "gold" / "cards.duckdb").write_text("gold")
+    for tier in ("bronze", "silver", "gold"):
+        db_path = tmp_path / "data" / tier / "cards.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute(f"CREATE TABLE {tier}_marker (id INTEGER)")
+        conn.close()
     (tmp_path / "mlflow.db").write_text("mlflow")
     mlruns = tmp_path / "mlruns" / "0"
     mlruns.mkdir(parents=True)
@@ -59,8 +66,13 @@ def test_run_backup_copies_bronze_silver_gold_mlflow_and_mlruns(fake_project):
     # Three DuckDB files all happen to share the basename "cards.duckdb" in
     # this project's layout, so backup_data must namespace them by source
     # tier rather than flatten to basenames — verify no data was clobbered.
-    contents = {p.read_text() for p in snapshot_dir.rglob("*.duckdb")}
-    assert contents == {"bronze", "silver", "gold"}
+    import duckdb
+
+    for tier in ("bronze", "silver", "gold"):
+        conn = duckdb.connect(str(snapshot_dir / f"{tier}.duckdb"), read_only=True)
+        tables = [t[0] for t in conn.execute("SHOW TABLES").fetchall()]
+        conn.close()
+        assert tables == [f"{tier}_marker"]
     assert (snapshot_dir / "mlflow.db").read_text() == "mlflow"
     assert (snapshot_dir / "mlruns" / "0" / "meta.yaml").exists()
 
@@ -99,6 +111,63 @@ def test_run_backup_cleans_up_partial_snapshot_on_copy_failure(
         )
 
     assert not backup_dir.exists() or not any(backup_dir.iterdir())
+
+
+def test_run_backup_raises_verification_error_for_a_corrupt_copy(tmp_path, monkeypatch):
+    (tmp_path / "data" / "bronze").mkdir(parents=True)
+    (tmp_path / "data" / "bronze" / "cards.duckdb").write_text("not a real duckdb file")
+    (tmp_path / "data" / "silver").mkdir(parents=True)
+    (tmp_path / "data" / "silver" / "cards.duckdb").write_text("not a real duckdb file")
+    (tmp_path / "data" / "gold").mkdir(parents=True)
+    (tmp_path / "data" / "gold" / "cards.duckdb").write_text("not a real duckdb file")
+    monkeypatch.setattr(backup_data, "MLFLOW_DB_PATH", tmp_path / "no_mlflow.db")
+    monkeypatch.setattr(backup_data, "MLRUNS_DIR", tmp_path / "no_mlruns")
+
+    config_path = tmp_path / "data_sources.yaml"
+    config_path.write_text(
+        "storage:\n"
+        f'  bronze_duckdb_path: "{(tmp_path / "data/bronze/cards.duckdb").as_posix()}"\n'
+        f'  silver_duckdb_path: "{(tmp_path / "data/silver/cards.duckdb").as_posix()}"\n'
+        f'  gold_duckdb_path: "{(tmp_path / "data/gold/cards.duckdb").as_posix()}"\n'
+    )
+
+    backup_dir = tmp_path / "backups"
+    with pytest.raises(backup_data.BackupVerificationError):
+        backup_data.run_backup(
+            backup_dir=backup_dir, keep_last=7, config_path=str(config_path)
+        )
+    # The timestamped snapshot subdir is what actually holds the corrupt
+    # copy; the parent backup_dir itself may remain (created via mkdir
+    # parents=True before the failure) but must be left empty. This mirrors
+    # the assertion in test_run_backup_cleans_up_partial_snapshot_on_copy_failure.
+    assert not backup_dir.exists() or not any(backup_dir.iterdir())
+
+
+def test_run_backup_verification_passes_against_a_real_duckdb_file(tmp_path):
+    import duckdb
+
+    (tmp_path / "data" / "bronze").mkdir(parents=True)
+    (tmp_path / "data" / "silver").mkdir(parents=True)
+    (tmp_path / "data" / "gold").mkdir(parents=True)
+    for tier in ("bronze", "silver", "gold"):
+        db_path = tmp_path / "data" / tier / "cards.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("CREATE TABLE t (id INTEGER)")
+        conn.close()
+
+    config_path = tmp_path / "data_sources.yaml"
+    config_path.write_text(
+        "storage:\n"
+        f'  bronze_duckdb_path: "{(tmp_path / "data/bronze/cards.duckdb").as_posix()}"\n'
+        f'  silver_duckdb_path: "{(tmp_path / "data/silver/cards.duckdb").as_posix()}"\n'
+        f'  gold_duckdb_path: "{(tmp_path / "data/gold/cards.duckdb").as_posix()}"\n'
+    )
+
+    snapshot_dir = backup_data.run_backup(
+        backup_dir=tmp_path / "backups", keep_last=7, config_path=str(config_path)
+    )
+
+    assert snapshot_dir.exists()  # verification passed — real tables found
 
 
 def test_prune_old_snapshots_keeps_only_the_last_n(tmp_path):

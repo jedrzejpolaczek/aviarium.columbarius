@@ -360,7 +360,7 @@ make monitor
 uv run python -m scripts.run_pipeline; if ($?) { uv run python -m scripts.check_and_retrain }; uv run python -m scripts.backup_data
 ```
 
-`make backup` (or `python -m scripts.backup_data`) copies the Gold/Silver/Bronze DuckDB files, `mlflow.db`, and `mlruns/` into timestamped, auto-pruned snapshots under `backups/` — point `--backup-dir` at an external drive or cloud-synced folder for off-host protection.
+`make backup` (or `python -m scripts.backup_data`) copies the Gold/Silver/Bronze DuckDB files, `mlflow.db`, and `mlruns/` into timestamped, auto-pruned snapshots under `backups/` — point `--backup-dir` at an external drive or cloud-synced folder for off-host protection. Each copied DuckDB file is opened read-only and checked for at least one table immediately after copying — a corrupt or truncated copy raises `BackupVerificationError` and the whole snapshot is discarded rather than silently kept.
 
 (Set the task's "Start in (optional)" field to the project root — relative paths like `logs/` and `data/gold/cards.duckdb` won't resolve otherwise.)
 
