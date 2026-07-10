@@ -319,6 +319,25 @@ class TestSetupLogging:
         remaining = sorted(tmp_path.glob("pipeline_*.log"))
         # 12 pre-existing + 1 new file created by this call = 13; pruned to 10.
         assert len(remaining) == 10
+        # Survivors are the 10 most recent groups, not an arbitrary 10 —
+        # the two oldest (01, 02) must be the ones removed.
+        remaining_names = {p.name for p in remaining}
+        assert "pipeline_2026-01-01_00-00-00.log" not in remaining_names
+        assert "pipeline_2026-01-02_00-00-00.log" not in remaining_names
+        assert "pipeline_2026-01-12_00-00-00.log" in remaining_names
+
+    def test_prunes_exactly_one_group_when_one_over_the_limit(
+        self, isolated_root_logger: logging.Logger, tmp_path: pathlib.Path
+    ) -> None:
+        (tmp_path / "pipeline_2026-01-01_00-00-00.log").write_text("x")
+
+        setup_logging(
+            log_dir=tmp_path, keep_last_logs=1
+        )  # 1 old + 1 new = 2, over by 1
+
+        remaining = sorted(tmp_path.glob("pipeline_*.log"))
+        assert len(remaining) == 1
+        assert "pipeline_2026-01-01_00-00-00.log" not in {p.name for p in remaining}
 
     def test_keeps_all_log_files_when_under_the_limit(
         self, isolated_root_logger: logging.Logger, tmp_path: pathlib.Path
@@ -329,6 +348,40 @@ class TestSetupLogging:
 
         remaining = list(tmp_path.glob("pipeline_*.log"))
         assert len(remaining) == 2  # the pre-existing file + the new one
+        assert "pipeline_2026-01-01_00-00-00.log" in {p.name for p in remaining}
+
+    def test_keeps_all_log_files_when_exactly_at_the_limit(
+        self, isolated_root_logger: logging.Logger, tmp_path: pathlib.Path
+    ) -> None:
+        (tmp_path / "pipeline_2026-01-01_00-00-00.log").write_text("x")
+
+        setup_logging(
+            log_dir=tmp_path, keep_last_logs=2
+        )  # 1 old + 1 new == 2, at limit
+
+        remaining = list(tmp_path.glob("pipeline_*.log"))
+        assert len(remaining) == 2
+        assert "pipeline_2026-01-01_00-00-00.log" in {p.name for p in remaining}
+
+    def test_prunes_rotated_backup_siblings_together_with_their_base_file(
+        self, isolated_root_logger: logging.Logger, tmp_path: pathlib.Path
+    ) -> None:
+        """A run whose single invocation grows past maxBytes leaves
+        RotatingFileHandler-created `.log.1`/`.log.2` siblings behind. Once
+        that run's group ages out of keep_last_logs, its rotated siblings
+        must be pruned together with the base file — not orphaned forever
+        once the base file (their only link to a timestamp) is gone."""
+        old_base = tmp_path / "pipeline_2026-01-01_00-00-00.log"
+        old_base.write_text("x")
+        (tmp_path / "pipeline_2026-01-01_00-00-00.log.1").write_text("x")
+        (tmp_path / "pipeline_2026-01-01_00-00-00.log.2").write_text("x")
+
+        setup_logging(log_dir=tmp_path, keep_last_logs=1)  # forces the old group out
+
+        remaining_names = {p.name for p in tmp_path.glob("pipeline_*.log*")}
+        assert "pipeline_2026-01-01_00-00-00.log" not in remaining_names
+        assert "pipeline_2026-01-01_00-00-00.log.1" not in remaining_names
+        assert "pipeline_2026-01-01_00-00-00.log.2" not in remaining_names
 
     def test_root_level_set_to_debug(
         self, isolated_root_logger: logging.Logger

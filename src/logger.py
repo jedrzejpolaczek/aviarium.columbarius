@@ -162,32 +162,50 @@ def get_logger(name: str) -> ProgressLogger:
 # ── Public setup ──────────────────────────────────────────────────────────────
 
 
-_LOG_FILE_NAME_RE = re.compile(r"^pipeline_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.log$")
+_LOG_FILE_NAME_RE = re.compile(
+    r"^pipeline_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})\.log(\.\d+)?$"
+)
 
 
 def _prune_old_log_files(log_dir: Path, keep_last: int) -> None:
-    """Delete all but the *keep_last* most recent timestamped log files.
+    """Delete all but the *keep_last* most recent timestamped log file groups.
 
     Mirrors scripts/backup_data.py's `_prune_old_snapshots` pattern: only
-    files matching the exact `pipeline_<timestamp>.log` name are
+    files matching the `pipeline_<timestamp>.log` name (optionally followed
+    by RotatingFileHandler's own `.1`, `.2`, ... backup suffix) are
     considered prunable, so an unrelated file placed in `log_dir` is never
-    touched. Needed in addition to RotatingFileHandler's own maxBytes/
-    backupCount rotation, since setup_logging() creates a *new* timestamped
-    file on every call rather than appending to one rotating file.
+    touched. Files are grouped by their `<timestamp>` (captured by the first
+    regex group) rather than pruned individually, so a run whose single
+    invocation grows past `maxBytes` and produces `pipeline_<ts>.log.1`,
+    `.log.2`, etc. has all of those siblings pruned together with their
+    base file — otherwise the `.log.N` siblings would become orphaned
+    (their base file gone, but the suffixed files themselves untouched
+    forever) once the base file aged out of `keep_last`.
+
+    Grouping by timestamp is needed in addition to RotatingFileHandler's
+    own maxBytes/backupCount rotation, since setup_logging() creates a
+    *new* timestamped file (and thus a new group) on every call rather
+    than appending to one rotating file across calls.
     """
     if keep_last <= 0:
         return
-    log_files = sorted(
-        p for p in log_dir.iterdir() if p.is_file() and _LOG_FILE_NAME_RE.match(p.name)
-    )
-    for old in log_files[:-keep_last]:
-        old.unlink()
+    groups: dict[str, list[Path]] = {}
+    for p in log_dir.iterdir():
+        if not p.is_file():
+            continue
+        match = _LOG_FILE_NAME_RE.match(p.name)
+        if match:
+            groups.setdefault(match.group(1), []).append(p)
+
+    for timestamp in sorted(groups)[:-keep_last]:
+        for old in groups[timestamp]:
+            old.unlink(missing_ok=True)
 
 
 def setup_logging(
     level: int = PROGRESS,
     log_dir: Path | str | None = None,
-    keep_last_logs: int = 30,
+    keep_last_logs: int = 90,
 ) -> Path | None:
     """Configure root logging with colour console output and optional file output.
 
@@ -198,10 +216,16 @@ def setup_logging(
     When *log_dir* is given a timestamped log file is created there via a
     ``RotatingFileHandler`` (10 MB per file, 5 backups) at DEBUG level using
     plain-text formatting (no ANSI codes). Since each call creates a new
-    timestamped file, *keep_last_logs* additionally prunes older timestamped
-    files beyond that count so ``log_dir`` doesn't grow without bound across
-    repeated invocations (e.g. one per day via cron). The path to the new
-    log file is returned so callers can display it to the user.
+    timestamped file (and thus a new "group" — see ``_prune_old_log_files``),
+    *keep_last_logs* additionally prunes older timestamped groups beyond that
+    count, together with any ``.log.1``/``.log.2``/... rotation siblings that
+    group produced, so ``log_dir`` doesn't grow without bound across repeated
+    invocations. Every script in this project that calls ``setup_logging``
+    with the same ``log_dir`` shares one pruning pool — with `make pipeline`,
+    `make monitor`, and `make backup` all invoked daily per the documented
+    cron schedule, the default of 90 covers roughly a month of runs, not 90
+    days of a single script's runs. The path to the new log file is returned
+    so callers can display it to the user.
     """
     console_handler = ProgressStreamHandler()
     console_handler.setFormatter(ColorFormatter())
