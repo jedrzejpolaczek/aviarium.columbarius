@@ -76,3 +76,42 @@ def test_send_alert_does_not_raise_when_notification_backend_fails(
 
     lines = log_path.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 1  # the durable log still got written
+
+
+def test_send_alert_posts_to_webhook_when_url_configured(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALERT_WEBHOOK_URL", "https://hooks.example.com/abc")
+    mock_post = MagicMock()
+    monkeypatch.setattr(alerts.httpx, "post", mock_post)
+    log_path = tmp_path / "alerts.jsonl"
+
+    alerts.send_alert("Backup failed", "disk full", alerts_log_path=log_path)
+
+    mock_post.assert_called_once()
+    args, kwargs = mock_post.call_args
+    assert args[0] == "https://hooks.example.com/abc"
+    assert "Backup failed" in kwargs["json"]["text"]
+    assert "disk full" in kwargs["json"]["text"]
+
+
+def test_send_alert_skips_webhook_when_url_not_configured(tmp_path, monkeypatch):
+    monkeypatch.delenv("ALERT_WEBHOOK_URL", raising=False)
+    mock_post = MagicMock()
+    monkeypatch.setattr(alerts.httpx, "post", mock_post)
+    log_path = tmp_path / "alerts.jsonl"
+
+    alerts.send_alert("Test", "msg", alerts_log_path=log_path)
+
+    mock_post.assert_not_called()
+
+
+def test_send_alert_does_not_raise_when_webhook_request_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALERT_WEBHOOK_URL", "https://hooks.example.com/abc")
+    monkeypatch.setattr(
+        alerts.httpx, "post", MagicMock(side_effect=alerts.httpx.ConnectError("down"))
+    )
+    log_path = tmp_path / "alerts.jsonl"
+
+    alerts.send_alert("Test", "msg", alerts_log_path=log_path)  # must not raise
+
+    lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1  # the durable log still got written

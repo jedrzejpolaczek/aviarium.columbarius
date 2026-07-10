@@ -1,25 +1,35 @@
-"""Local, account-free alerting for scheduled jobs and API degraded-mode events.
+"""Local, account-free-by-default alerting for scheduled jobs and API
+degraded-mode events.
 
-Two channels, both always attempted:
+Three channels, all best-effort except the first:
     1. A durable JSON-lines log at ``alerts_log_path`` (default
        ``logs/alerts.jsonl``) — every alert is appended here regardless of
-       whether the desktop notification succeeds, so any future
-       dashboard/tool can replay history.
+       whether the other two channels succeed, so any future
+       dashboard/tool can replay history. This one always succeeds or logs
+       why it didn't; it never depends on external services.
     2. A best-effort desktop notification via ``plyer`` — visible
        immediately if the machine is logged in and unlocked, but never
        required: a failure to notify (headless environment, missing OS
        backend, no display) is caught and logged, never raised.
+    3. An optional HTTP POST to ``ALERT_WEBHOOK_URL`` (read from the
+       environment at call time) — a Slack/Discord/Mattermost-compatible
+       incoming webhook. Skipped entirely if the env var is unset; a
+       failed request is caught and logged, never raised.
 
-This project has no Slack/email/PagerDuty credentials configured (see
-docs/runbooks/model-incidents.md, "Alerting"). This module is the
-minimal upgrade from "nobody is notified" to "an alert is durably recorded
-and, best-effort, shown on the operator's screen" — without requiring any
-external account.
+This project has no Slack/email/PagerDuty credentials configured by
+default (see docs/runbooks/model-incidents.md, "Alerting") — set
+``ALERT_WEBHOOK_URL`` in the deployment environment to enable channel 3.
 """
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
+
+import httpx as httpx  # explicit re-export: tests patch alerts.httpx.post,
+# which requires this module to explicitly re-export the name under mypy
+# --strict (no_implicit_reexport) — see the same pattern in
+# scripts/check_and_retrain.py (duckdb) and scripts/backup_data.py (shutil).
 
 from src.logger import get_logger
 
@@ -36,10 +46,11 @@ def send_alert(
     severity: str = "error",
     alerts_log_path: Path = ALERTS_LOG_PATH,
 ) -> None:
-    """Record *subject*/*message* as an alert and best-effort notify the desktop.
+    """Record *subject*/*message* as an alert, best-effort notify the desktop,
+    and best-effort POST to a configured webhook.
 
-    Never raises: a failure in either channel is logged and swallowed so a
-    broken alert path can never crash the caller's actual job.
+    Never raises: a failure in any of the best-effort channels is logged and
+    swallowed so a broken alert path can never crash the caller's actual job.
 
     Args:
         subject:         Short alert title (e.g. "Backup failed").
@@ -51,6 +62,7 @@ def send_alert(
     """
     _append_to_log(subject, message, severity, alerts_log_path)
     _notify_desktop(subject, message)
+    _notify_webhook(subject, message)
 
 
 def _append_to_log(
@@ -77,3 +89,13 @@ def _notify_desktop(subject: str, message: str) -> None:
         notification.notify(title=subject, message=message, timeout=10)
     except Exception as exc:
         logger.warning("Desktop notification failed (non-fatal): %s", exc)
+
+
+def _notify_webhook(subject: str, message: str) -> None:
+    webhook_url = os.getenv("ALERT_WEBHOOK_URL", "")
+    if not webhook_url:
+        return
+    try:
+        httpx.post(webhook_url, json={"text": f"*{subject}*\n{message}"}, timeout=5.0)
+    except httpx.HTTPError as exc:
+        logger.warning("Webhook alert failed (non-fatal): %s", exc)
