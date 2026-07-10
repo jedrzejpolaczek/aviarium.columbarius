@@ -1,7 +1,7 @@
 {
   "status": "ACTIVE",
-  "test_start": "2026-06-14",
-  "test_end": "2026-07-05",
+  "test_start": "2026-06-18",
+  "test_end": "2026-07-09",
   "n_cv_folds": 0,
   "min_train_days": 30,
   "val_window": 7,

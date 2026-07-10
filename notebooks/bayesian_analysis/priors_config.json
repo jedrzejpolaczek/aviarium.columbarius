@@ -1,20 +1,20 @@
 {
   "domain_medians": {
     "common": {
-      "mu_prior": 0.11330000311136246,
-      "sigma_prior": 1.027999997138977
+      "mu_prior": 0.10440000146627426,
+      "sigma_prior": 1.006700038909912
     },
     "uncommon": {
-      "mu_prior": 0.1655000001192093,
-      "sigma_prior": 1.3736000061035156
+      "mu_prior": 0.15700000524520874,
+      "sigma_prior": 1.348099946975708
     },
     "rare": {
-      "mu_prior": 0.5008000135421753,
-      "sigma_prior": 2.2195000648498535
+      "mu_prior": 0.4885999858379364,
+      "sigma_prior": 2.1763999462127686
     },
     "mythic": {
       "mu_prior": 1.3761999607086182,
-      "sigma_prior": 2.1092000007629395
+      "sigma_prior": 2.109600067138672
     }
   },
   "mu_rarity": {

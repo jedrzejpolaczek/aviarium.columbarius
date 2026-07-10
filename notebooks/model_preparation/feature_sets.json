@@ -4,7 +4,9 @@
     "foil_premium",
     "format_count",
     "is_full_art",
+    "price_change_1d_pct",
     "price_rank_global",
+    "price_volatility_30d",
     "print_count",
     "variation_count"
   ],
@@ -12,7 +14,9 @@
     "foil_premium",
     "format_count",
     "is_full_art",
+    "price_change_1d_pct",
     "price_rank_global",
+    "price_volatility_30d",
     "print_count",
     "variation_count"
   ]
