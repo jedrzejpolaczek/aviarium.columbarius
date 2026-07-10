@@ -25,6 +25,10 @@ services:
       - ../mlflow.db:/app/mlflow.db:ro
       # MLflow artifact store: model weights, pipelines, etc.
       - ../notebooks/ml_models/mlruns:/app/mlruns:ro
+      # Writable: src.monitoring.alerts.send_alert writes logs/alerts.jsonl
+      # here on a degraded startup (see app/main.py lifespan). Without this
+      # mount the file is container-local and lost on every restart.
+      - ../logs:/app/logs
     environment:
       - GOLD_DB_PATH=/app/data/gold/cards.duckdb
       # SQLite tracking DB mounted at /app/mlflow.db

@@ -104,15 +104,45 @@ alert (see `src.monitoring.alerts`) and a JSON status file were written.
 3. Fix the underlying issue, then re-run `make pipeline` manually to
    confirm before waiting for the next scheduled run.
 
+## 5. Desktop alert / `logs/alerts.jsonl` entry titled "Backup failed"
+
+**Symptom:** `scripts/backup_data.py` (scheduled daily via `make backup`,
+after `make pipeline && make monitor` — see README "Monitoring & Scheduled
+Retraining") raised, and a "Backup failed" alert was recorded.
+
+**Cause:** either none of the backup sources exist yet (fresh checkout,
+ETL hasn't run — `run_backup` raises `FileNotFoundError`), or a copy failed
+partway through (disk full, permission error on `--backup-dir` — raises
+`OSError`; the partially-written snapshot directory is cleaned up
+automatically, so a failed run never leaves a corrupt backup behind).
+
+**Fix:**
+1. Read the alert message in `logs/alerts.jsonl` (or the container/console
+   logs) for the exact exception.
+2. If no sources exist: run `make pipeline` and `make train` first, then
+   retry `make backup`.
+3. If a copy failed: check free disk space and write permissions on
+   `--backup-dir` (default `backups/` at the project root), then retry.
+4. This is not model-serving-critical — a failed backup does not affect
+   `/predict` or retraining — but should be fixed before the next scheduled
+   run so backup coverage doesn't have a gap.
+
 ## Alerting
 
-`scripts/run_pipeline.py`, `scripts/check_and_retrain.py`, and the API's
-`lifespan` degraded-mode path all call `src.monitoring.alerts.send_alert`
-on failure, which (1) appends a durable record to `logs/alerts.jsonl` and
+`scripts/run_pipeline.py`, `scripts/check_and_retrain.py`,
+`scripts/backup_data.py`, and the API's `lifespan` degraded-mode path all
+call `src.monitoring.alerts.send_alert` on failure, which (1) appends a
+durable record to `logs/alerts.jsonl` and
 (2) best-effort shows a desktop notification via `plyer` — no external
 account or credentials required. The desktop notification only appears if
 the machine is logged in and unlocked when the scheduled task runs; the
 JSONL log is the reliable source of truth and does not depend on that.
+In the Docker deployment, `docker/docker-compose.yml` mounts `logs/` from
+the host into the container (`../logs:/app/logs`) and the Dockerfile
+pre-creates that directory owned by the non-root `app` user, so the
+API container's alerts land in the same `logs/alerts.jsonl` on the host
+as the scheduled scripts' — check there first, container logs second
+(the desktop notification itself never fires inside a headless container).
 
 There is still no remote paging (Slack/email/PagerDuty) — `logs/alerts.jsonl`,
 `logs/last_check_status.json`, `logs/last_pipeline_status.json`, and the
