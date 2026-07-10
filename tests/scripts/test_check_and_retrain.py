@@ -10,11 +10,11 @@ from scripts import check_and_retrain
 
 
 def _make_fake_conn_with_snapshot(snapshot_date: str) -> MagicMock:
-    """Build a fake DuckDB connection whose gold_price_features MAX(snapshot_date)
+    """Build a fake DuckDB connection whose "latest trainable snapshot" query
     resolves to `snapshot_date`.
 
-    get_latest_gold_snapshot_date() first checks table presence via a
-    ``SHOW TABLES`` query (get_tables) before running the MAX query, so the
+    get_latest_trainable_snapshot_date() first checks table presence via a
+    ``SHOW TABLES`` query (get_tables) before running its own query, so the
     fake execute() must respond to both statements rather than always
     returning the same canned fetchone() result.
     """
@@ -117,6 +117,88 @@ def test_main_writes_error_status_when_retrain_raises(tmp_path, monkeypatch):
     assert status["result"] == "error"
     assert status["reason"] == "retrain_failed"
     assert "mlflow boom" in status["error"]
+
+
+def test_main_alerts_when_gold_db_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        check_and_retrain, "GOLD_DB_PATH", str(tmp_path / "missing.duckdb")
+    )
+    monkeypatch.setattr(check_and_retrain, "STATUS_PATH", tmp_path / "status.json")
+    mock_send_alert = MagicMock()
+    monkeypatch.setattr(check_and_retrain, "send_alert", mock_send_alert)
+
+    check_and_retrain.main()
+
+    mock_send_alert.assert_called_once()
+
+
+def test_main_alerts_when_no_snapshot(tmp_path, monkeypatch):
+    db_path = tmp_path / "cards.duckdb"
+    db_path.touch()
+    monkeypatch.setattr(check_and_retrain, "GOLD_DB_PATH", str(db_path))
+    monkeypatch.setattr(check_and_retrain, "STATUS_PATH", tmp_path / "status.json")
+    monkeypatch.setattr(
+        check_and_retrain.duckdb, "connect", lambda *a, **k: MagicMock()
+    )
+    monkeypatch.setattr(
+        check_and_retrain, "should_retrain", lambda conn: (True, "mape_threshold")
+    )
+    monkeypatch.setattr(
+        check_and_retrain,
+        "get_latest_trainable_snapshot_date",
+        lambda conn: None,
+    )
+    mock_send_alert = MagicMock()
+    monkeypatch.setattr(check_and_retrain, "send_alert", mock_send_alert)
+
+    exit_code = check_and_retrain.main()
+
+    assert exit_code == 1
+    mock_send_alert.assert_called_once()
+
+
+def test_main_alerts_when_retrain_raises(tmp_path, monkeypatch):
+    db_path = tmp_path / "cards.duckdb"
+    db_path.touch()
+    monkeypatch.setattr(check_and_retrain, "GOLD_DB_PATH", str(db_path))
+    monkeypatch.setattr(check_and_retrain, "STATUS_PATH", tmp_path / "status.json")
+
+    fake_conn = _make_fake_conn_with_snapshot("2026-07-01")
+    monkeypatch.setattr(check_and_retrain.duckdb, "connect", lambda *a, **k: fake_conn)
+    monkeypatch.setattr(
+        check_and_retrain, "should_retrain", lambda conn: (True, "mape_threshold")
+    )
+
+    def _raise(conn, snapshot_date):
+        raise RuntimeError("mlflow boom")
+
+    monkeypatch.setattr(check_and_retrain, "retrain", _raise)
+    mock_send_alert = MagicMock()
+    monkeypatch.setattr(check_and_retrain, "send_alert", mock_send_alert)
+
+    check_and_retrain.main()
+
+    mock_send_alert.assert_called_once()
+    assert "mlflow boom" in mock_send_alert.call_args.args[1]
+
+
+def test_main_does_not_alert_when_no_trigger(tmp_path, monkeypatch):
+    db_path = tmp_path / "cards.duckdb"
+    db_path.touch()
+    monkeypatch.setattr(check_and_retrain, "GOLD_DB_PATH", str(db_path))
+    monkeypatch.setattr(check_and_retrain, "STATUS_PATH", tmp_path / "status.json")
+    monkeypatch.setattr(
+        check_and_retrain.duckdb, "connect", lambda *a, **k: MagicMock()
+    )
+    monkeypatch.setattr(
+        check_and_retrain, "should_retrain", lambda conn: (False, "no_trigger")
+    )
+    mock_send_alert = MagicMock()
+    monkeypatch.setattr(check_and_retrain, "send_alert", mock_send_alert)
+
+    check_and_retrain.main()
+
+    mock_send_alert.assert_not_called()
 
 
 @pytest.fixture(autouse=True)

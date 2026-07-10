@@ -27,9 +27,10 @@ import duckdb as duckdb  # explicit re-export: tests patch check_and_retrain.duc
 # to importers even though it works fine at runtime.
 
 from scripts._common import gold_db_exists
-from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
+from src.data.cards.storage.gold.storage import get_latest_trainable_snapshot_date
 from src.data.repository import GOLD_DB_PATH, open_repository
 from src.logger import get_logger, setup_logging
+from src.monitoring.alerts import send_alert
 from src.monitoring.retraining import retrain, should_retrain
 
 STATUS_PATH = Path("logs/last_check_status.json")
@@ -53,7 +54,7 @@ def _check_preconditions(
     triggered, reason = should_retrain(conn)
     if not triggered:
         return False, reason, None
-    snapshot_date = get_latest_gold_snapshot_date(conn)
+    snapshot_date = get_latest_trainable_snapshot_date(conn)
     return True, reason, snapshot_date
 
 
@@ -69,6 +70,7 @@ def _do_retrain(
         run_id = retrain(conn, snapshot_date)
     except Exception as exc:
         logger.error("Retrain failed: %s", exc)
+        send_alert("Retrain failed", str(exc))
         return False, {
             "checked_at": datetime.now(timezone.utc).isoformat(),
             "result": "error",
@@ -89,6 +91,10 @@ def main() -> int:
     setup_logging(log_dir=Path("logs"))
 
     if not gold_db_exists(GOLD_DB_PATH):
+        send_alert(
+            "Monitor: Gold DB missing",
+            f"{GOLD_DB_PATH} not found — run the ETL pipeline first.",
+        )
         _write_status(
             {
                 "checked_at": datetime.now(timezone.utc).isoformat(),
@@ -115,7 +121,15 @@ def main() -> int:
             return 0
 
         if snapshot_date is None:
-            logger.error("gold_price_features is empty — cannot retrain.")
+            logger.error(
+                "No trainable snapshot available — gold_price_features is "
+                "either empty or has no snapshot with a t+7 counterpart yet."
+            )
+            send_alert(
+                "Monitor: no trainable snapshot",
+                "No trainable snapshot available — gold_price_features is "
+                "either empty or has no snapshot with a t+7 counterpart yet.",
+            )
             _write_status(
                 {
                     "checked_at": datetime.now(timezone.utc).isoformat(),
