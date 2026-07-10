@@ -41,6 +41,10 @@ class CardSimilarityIndex:
     """
 
     def __init__(self, n_neighbors: int = 10) -> None:
+        # Default of 10 is for standalone/notebook use. Production overrides
+        # this to 50 at startup (app/main.py::_build_similarity_index) — see
+        # ADR-023 Decision 2 for why 50 was chosen as the /similar endpoint's
+        # max result count.
         self.n_neighbors = n_neighbors
         self.scaler: StandardScaler | None = None
         self.knn: NearestNeighbors | None = None

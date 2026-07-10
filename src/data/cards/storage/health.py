@@ -1,0 +1,351 @@
+"""Cross-tier data-quality checks run after each pipeline execution.
+
+Checks are grouped by layer (bronze/silver/gold) and reported as a flat list
+of CheckResult(name, layer, status, detail). Structure checks (tables exist,
+have rows) run unconditionally per layer. For Silver and Gold, deeper quality
+checks (freshness, null columns, duplicate keys) only run if that layer's
+structure checks all passed — querying a column or table that doesn't exist
+would raise instead of producing a meaningful FAIL, so the structure gate
+exists to keep a missing/malformed table from crashing the rest of the health
+check instead of reporting it as one clean FAIL among many. Bronze's one
+deeper check (_check_bronze_prices_schema_drift) does not follow this
+gate-on-structure-PASS pattern — it runs unconditionally and instead guards
+itself with its own try/except, since it can tolerate a missing EAV table.
+
+FAIL on any check causes run_health_checks to raise SystemExit(1) (used by
+scripts/check_health.py as a pipeline gate); WARN is logged but does not fail.
+"""
+
+import datetime
+from dataclasses import dataclass
+from typing import Literal
+
+import duckdb
+
+from src.data.cards.storage.base.storage import get_tables
+from src.data.cards.storage.silver.prices import MTGJSON_PRICE_COMBOS
+from src.data.repository import open_repository
+from src.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+@dataclass
+class CheckResult:
+    name: str
+    layer: str
+    status: Literal["PASS", "WARN", "FAIL"]
+    detail: str
+
+
+def _check_table_has_rows(
+    con: duckdb.DuckDBPyConnection, layer: str, table: str
+) -> CheckResult:
+    if table not in get_tables(con):
+        return CheckResult(
+            f"{table} exists", layer, "FAIL", f"table {table!r} not found"
+        )
+    count: int = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]  # type: ignore[index]
+    if count == 0:
+        return CheckResult(f"{table} rows", layer, "FAIL", "0 rows")
+    return CheckResult(f"{table} rows", layer, "PASS", f"{count} rows")
+
+
+def _check_snapshot_date_today(
+    con: duckdb.DuckDBPyConnection, table: str, today: datetime.date
+) -> CheckResult:
+    count: int = con.execute(
+        f"SELECT COUNT(*) FROM {table} WHERE snapshot_date = ?", [today]
+    ).fetchone()[0]  # type: ignore[index]
+    if count == 0:
+        return CheckResult(
+            f"{table} freshness", "silver", "FAIL", f"no rows for {today}"
+        )
+    return CheckResult(
+        f"{table} freshness", "silver", "PASS", f"{count} rows for {today}"
+    )
+
+
+def _check_no_nulls(
+    con: duckdb.DuckDBPyConnection, layer: str, table: str, column: str
+) -> CheckResult:
+    count: int = con.execute(
+        f"SELECT COUNT(*) FROM {table} WHERE {column} IS NULL"
+    ).fetchone()[0]  # type: ignore[index]
+    if count > 0:
+        return CheckResult(
+            f"{table}.{column} nulls", layer, "FAIL", f"{count} NULL values"
+        )
+    return CheckResult(f"{table}.{column} nulls", layer, "PASS", "no NULLs")
+
+
+def _check_no_duplicate_canonical_uuid(
+    con: duckdb.DuckDBPyConnection,
+) -> CheckResult:
+    count: int = con.execute("""
+        SELECT COUNT(*) FROM (
+            SELECT canonical_uuid
+            FROM silver_cards
+            WHERE uuid IS NOT NULL AND uuid = canonical_uuid
+            GROUP BY canonical_uuid
+            HAVING COUNT(*) > 1
+        ) t
+    """).fetchone()[0]  # type: ignore[index]
+    if count > 0:
+        return CheckResult(
+            "silver_cards duplicate canonical_uuid",
+            "silver",
+            "FAIL",
+            f"{count} duplicated canonical_uuid values",
+        )
+    return CheckResult(
+        "silver_cards duplicate canonical_uuid", "silver", "PASS", "no duplicates"
+    )
+
+
+_ORACLE_ID_CONFLICT_THRESHOLD = 20
+
+
+def _check_oracle_id_conflicts(con: duckdb.DuckDBPyConnection) -> CheckResult:
+    count: int = con.execute("""
+        SELECT COUNT(*) FROM (
+            SELECT name
+            FROM silver_cards
+            WHERE oracle_id IS NOT NULL
+            GROUP BY name
+            HAVING COUNT(DISTINCT oracle_id) > 1
+        ) t
+    """).fetchone()[0]  # type: ignore[index]
+    if count > _ORACLE_ID_CONFLICT_THRESHOLD:
+        return CheckResult(
+            "silver_cards oracle_id conflicts",
+            "silver",
+            "FAIL",
+            f"{count} names map to multiple oracle_ids (threshold: {_ORACLE_ID_CONFLICT_THRESHOLD})",
+        )
+    return CheckResult(
+        "silver_cards oracle_id conflicts",
+        "silver",
+        "PASS",
+        f"{count} conflicts (within threshold of {_ORACLE_ID_CONFLICT_THRESHOLD})",
+    )
+
+
+def _check_silver_prices_no_negative_eur(
+    con: duckdb.DuckDBPyConnection, today: datetime.date
+) -> CheckResult:
+    count: int = con.execute(
+        "SELECT COUNT(*) FROM silver_prices_history"
+        " WHERE snapshot_date = ? AND eur <= 0",
+        [today],
+    ).fetchone()[0]  # type: ignore[index]
+    if count > 0:
+        return CheckResult(
+            "silver_prices_history EUR <= 0",
+            "silver",
+            "FAIL",
+            f"{count} rows with EUR <= 0 for {today}",
+        )
+    return CheckResult(
+        "silver_prices_history EUR <= 0",
+        "silver",
+        "PASS",
+        f"no invalid EUR prices for {today}",
+    )
+
+
+def _check_gold_ml_dataset_has_target(con: duckdb.DuckDBPyConnection) -> CheckResult:
+    count: int = con.execute(
+        "SELECT COUNT(*) FROM gold_ml_dataset WHERE target_price_7d IS NOT NULL"
+    ).fetchone()[0]  # type: ignore[index]
+    if count == 0:
+        return CheckResult(
+            "gold_ml_dataset target_price_7d",
+            "gold",
+            "FAIL",
+            "target_price_7d is 100% NULL — no usable training rows",
+        )
+    return CheckResult(
+        "gold_ml_dataset target_price_7d",
+        "gold",
+        "PASS",
+        f"{count} rows with non-NULL target_price_7d",
+    )
+
+
+def _check_bronze_prices_schema_drift(
+    bronze_con: duckdb.DuckDBPyConnection,
+    today: datetime.date,
+    expected: set[tuple[str, str, str]] | None = None,
+) -> list[CheckResult]:
+    """Check for (retailer, tx_type, finish) combos not in Silver's map.
+
+    Returns WARN for new combinations (captured in Bronze but unknown to Silver)
+    and for missing expected combinations (Silver expects them but absent today).
+    Returns empty list if the EAV table is unavailable or has no EAV columns.
+    """
+    if expected is None:
+        expected = set(MTGJSON_PRICE_COMBOS)
+
+    try:
+        rows = bronze_con.execute(
+            "SELECT DISTINCT retailer, tx_type, finish "
+            "FROM bronze_mtgjson_prices_history "
+            "WHERE snapshot_date = ?",
+            [today.isoformat()],
+        ).fetchall()
+    except Exception:
+        return []
+
+    actual = {(r[0], r[1], r[2]) for r in rows}
+    results: list[CheckResult] = []
+
+    new_combos = actual - expected
+    if new_combos:
+        results.append(
+            CheckResult(
+                name="bronze mtgjson price schema drift",
+                layer="bronze",
+                status="WARN",
+                detail=(
+                    f"{len(new_combos)} new (retailer,tx_type,finish) combinations"
+                    f" not in Silver map: {sorted(new_combos)}"
+                ),
+            )
+        )
+
+    missing = expected - actual
+    if missing:
+        results.append(
+            CheckResult(
+                name="bronze mtgjson price schema drift",
+                layer="bronze",
+                status="WARN",
+                detail=(
+                    f"{len(missing)} expected combinations absent from today's snapshot:"
+                    f" {sorted(missing)}"
+                ),
+            )
+        )
+
+    if not results:
+        results.append(
+            CheckResult(
+                name="bronze mtgjson price schema drift",
+                layer="bronze",
+                status="PASS",
+                detail=f"All {len(actual)} combinations match Silver map",
+            )
+        )
+
+    return results
+
+
+_BRONZE_TABLES = [
+    "bronze_scryfall_cards",
+    "bronze_mtgjson_cards",
+    "bronze_mtgjson_prices_history",
+]
+
+_SILVER_TABLES = [
+    "silver_cards",
+    "silver_prices_history",
+    "silver_language_prices_history",
+    "silver_meta_history",
+    "silver_format_staples_history",
+    "silver_tournament_results_history",
+]
+
+_GOLD_TABLES = [
+    "gold_card_features",
+    "gold_price_features",
+    "gold_language_premiums",
+    "gold_demand_signals",
+    "gold_format_staples",
+    "gold_tournament_signals",
+    "gold_ml_dataset",
+]
+
+_SILVER_FRESHNESS_TABLES = [
+    "silver_prices_history",
+    "silver_language_prices_history",
+    "silver_format_staples_history",
+]
+
+_SILVER_QUALITY_NULL_COLUMNS = ["name", "set_code", "collector_number"]
+
+
+def run_health_checks(
+    bronze_path: str,
+    silver_path: str,
+    gold_path: str,
+    today: datetime.date,
+) -> list[CheckResult]:
+    results: list[CheckResult] = []
+
+    bronze_repo = open_repository(str(bronze_path), read_only=True)
+    silver_repo = open_repository(str(silver_path), read_only=True)
+    gold_repo = open_repository(str(gold_path), read_only=True)
+    bronze_con = bronze_repo.connection
+    silver_con = silver_repo.connection
+    gold_con = gold_repo.connection
+
+    try:
+        bronze_structure = [
+            _check_table_has_rows(bronze_con, "bronze", t) for t in _BRONZE_TABLES
+        ]
+        results.extend(bronze_structure)
+        results.extend(_check_bronze_prices_schema_drift(bronze_con, today))
+
+        silver_structure = [
+            _check_table_has_rows(silver_con, "silver", t) for t in _SILVER_TABLES
+        ]
+        results.extend(silver_structure)
+
+        gold_structure = [
+            _check_table_has_rows(gold_con, "gold", t) for t in _GOLD_TABLES
+        ]
+        results.extend(gold_structure)
+
+        # Gated on full Silver structure PASS — see module docstring for why.
+        if all(r.status == "PASS" for r in silver_structure):
+            for t in _SILVER_FRESHNESS_TABLES:
+                results.append(_check_snapshot_date_today(silver_con, t, today))
+            for col in _SILVER_QUALITY_NULL_COLUMNS:
+                results.append(
+                    _check_no_nulls(silver_con, "silver", "silver_cards", col)
+                )
+            results.append(_check_no_duplicate_canonical_uuid(silver_con))
+            results.append(_check_oracle_id_conflicts(silver_con))
+            results.append(_check_silver_prices_no_negative_eur(silver_con, today))
+
+        # Same rationale as the Silver gate above — gold_ml_dataset's target
+        # column check assumes the table exists.
+        if all(r.status == "PASS" for r in gold_structure):
+            results.append(_check_gold_ml_dataset_has_target(gold_con))
+
+    finally:
+        bronze_repo.close()
+        silver_repo.close()
+        gold_repo.close()
+
+    for r in results:
+        msg = f"[{r.status}] {r.layer} | {r.name} — {r.detail}"
+        if r.status == "PASS":
+            logger.info(msg)
+        elif r.status == "WARN":
+            logger.warning(msg)
+        else:
+            logger.error(msg)
+
+    failed = sum(1 for r in results if r.status == "FAIL")
+    warned = sum(1 for r in results if r.status == "WARN")
+    passed = sum(1 for r in results if r.status == "PASS")
+    logger.info(
+        "Health check complete: %d passed, %d warned, %d failed", passed, warned, failed
+    )
+
+    if failed:
+        raise SystemExit(1)
+
+    return results

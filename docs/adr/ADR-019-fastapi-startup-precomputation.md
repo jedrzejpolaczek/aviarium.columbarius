@@ -24,7 +24,7 @@ Use **startup pre-computation** (Option B).
 
 At startup, `lifespan` in `app/main.py`:
 
-1. Connects DuckDB (read-only) and stores the connection in `app.state.db`.
+1. Connects DuckDB (read-only) and stores the repository in `app.state.repo`.
 2. Builds `X_all` — the full feature matrix for all cards at the latest
    price snapshot — by joining `build_lag_features` output with
    `gold_card_features`.

@@ -70,7 +70,7 @@ classDiagram
 | **SilverTransforms** | Apply config-driven cleaning rules (row filtering, column drops, JSON parsing, string/numeric/boolean normalization, legality extraction) to each Bronze source table |
 | **SilverCardJoin** | Merge MTGJson and Scryfall card data into a unified silver_cards table, resolving conflicts and filtering non-card layouts |
 | **SilverWriter** | Provide write primitives (full_load, append) that wrap DuckDB operations with consistency checks |
-| **SilverPriceBuilder** | Extract prices from bronze_scryfall_meta_history and build appending history tables for both canonical and language-variant prices |
+| **SilverPriceBuilder** | Read scalar EUR/USD columns from `bronze_scryfall_prices_history` and pivot EAV rows from `bronze_mtgjson_prices_history` (via CASE WHEN SQL) to wide price columns; build appending history tables for canonical and language-variant prices |
 
 ## Transformation Pipeline
 
@@ -86,7 +86,7 @@ classDiagram
 
 5. **Append meta history** — Restrict bronze_scryfall_meta_history to IDs present in silver_cards (drop digital/oversized orphans) and append to `silver_meta_history` using deduplication on (scryfall_id, snapshot_date).
 
-6. **Append prices history** — Call `SilverPriceBuilder.build()` to extract canonical prices and `build_language_prices()` for language variants, append both to `silver_prices_history` and `silver_language_prices_history` with deduplication on (scryfall_id, snapshot_date).
+6. **Append prices history** — Call `SilverPriceBuilder.build()` to read scalar EUR/USD columns from `bronze_scryfall_prices_history` and pivot EAV rows from `bronze_mtgjson_prices_history` (CASE WHEN SQL in `mtgjson_prices_daily.sql`) to the six wide price columns. Call `build_language_prices()` for language variants. Append both to `silver_prices_history` and `silver_language_prices_history` with deduplication on (scryfall_id, snapshot_date).
 
 7. **Append format/tournament history** — Append bronze_format_staples_history to silver_format_staples_history and bronze_tournament_results (with normalized names and oracle_id/scryfall_id join) to silver_tournament_results_history.
 

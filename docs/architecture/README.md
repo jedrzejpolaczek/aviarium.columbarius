@@ -51,6 +51,11 @@ Deep dives into specific modules and their internal structure.
 | [API State & Startup](c4/api-state.md) | API initialization and state management |
 | [Monitoring Modules](c4/monitoring-modules.md) | Logging and metrics implementations |
 
+### Data Catalog
+Column schemas, domain glossary, and data lineage for all 22 DuckDB tables.
+
+- [Data Catalog Index](data/README.md)
+
 ---
 
 **For questions on specific topics**: Use Ctrl+F or your search function to find the section you need, or browse the C-level that matches your question granularity.

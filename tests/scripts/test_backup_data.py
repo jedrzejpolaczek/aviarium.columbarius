@@ -1,0 +1,251 @@
+"""Unit tests for scripts/backup_data.py."""
+
+from unittest.mock import MagicMock
+
+import pytest
+
+from scripts import backup_data
+
+
+@pytest.fixture
+def fake_project(tmp_path, monkeypatch):
+    """Build a fake project tree with real (minimal) Bronze/Silver/Gold
+    DuckDB files, mlflow.db, and mlruns/, plus a matching data_sources.yaml
+    config. Real DuckDB files (not text stubs) are required since
+    run_backup now verifies each copy by opening it and checking for
+    tables.
+    """
+    import duckdb
+
+    (tmp_path / "data" / "bronze").mkdir(parents=True)
+    (tmp_path / "data" / "silver").mkdir(parents=True)
+    (tmp_path / "data" / "gold").mkdir(parents=True)
+    for tier in ("bronze", "silver", "gold"):
+        db_path = tmp_path / "data" / tier / "cards.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute(f"CREATE TABLE {tier}_marker (id INTEGER)")
+        conn.close()
+    (tmp_path / "mlflow.db").write_text("mlflow")
+    mlruns = tmp_path / "mlruns" / "0"
+    mlruns.mkdir(parents=True)
+    (mlruns / "meta.yaml").write_text("run: 1")
+
+    config_path = tmp_path / "data_sources.yaml"
+    config_path.write_text(
+        "storage:\n"
+        f'  bronze_duckdb_path: "{(tmp_path / "data/bronze/cards.duckdb").as_posix()}"\n'
+        f'  silver_duckdb_path: "{(tmp_path / "data/silver/cards.duckdb").as_posix()}"\n'
+        f'  gold_duckdb_path: "{(tmp_path / "data/gold/cards.duckdb").as_posix()}"\n'
+    )
+
+    monkeypatch.setattr(backup_data, "MLFLOW_DB_PATH", tmp_path / "mlflow.db")
+    monkeypatch.setattr(backup_data, "MLRUNS_DIR", tmp_path / "mlruns")
+    return tmp_path, config_path
+
+
+def test_run_backup_returns_timestamped_snapshot_dir_under_backup_dir(fake_project):
+    tmp_path, config_path = fake_project
+    backup_dir = tmp_path / "backups"
+
+    snapshot_dir = backup_data.run_backup(
+        backup_dir=backup_dir, keep_last=7, config_path=str(config_path)
+    )
+
+    assert snapshot_dir.parent == backup_dir
+    assert snapshot_dir.exists()
+
+
+def test_run_backup_copies_bronze_silver_gold_mlflow_and_mlruns(fake_project):
+    tmp_path, config_path = fake_project
+    backup_dir = tmp_path / "backups"
+
+    snapshot_dir = backup_data.run_backup(
+        backup_dir=backup_dir, keep_last=7, config_path=str(config_path)
+    )
+
+    # Three DuckDB files all happen to share the basename "cards.duckdb" in
+    # this project's layout, so backup_data must namespace them by source
+    # tier rather than flatten to basenames — verify no data was clobbered.
+    import duckdb
+
+    for tier in ("bronze", "silver", "gold"):
+        conn = duckdb.connect(str(snapshot_dir / f"{tier}.duckdb"), read_only=True)
+        tables = [t[0] for t in conn.execute("SHOW TABLES").fetchall()]
+        conn.close()
+        assert tables == [f"{tier}_marker"]
+    assert (snapshot_dir / "mlflow.db").read_text() == "mlflow"
+    assert (snapshot_dir / "mlruns" / "0" / "meta.yaml").exists()
+
+
+def test_run_backup_raises_when_nothing_to_back_up(tmp_path, monkeypatch):
+    monkeypatch.setattr(backup_data, "MLFLOW_DB_PATH", tmp_path / "no_mlflow.db")
+    monkeypatch.setattr(backup_data, "MLRUNS_DIR", tmp_path / "no_mlruns")
+    config_path = tmp_path / "data_sources.yaml"
+    config_path.write_text(
+        "storage:\n"
+        '  bronze_duckdb_path: "nope/bronze.duckdb"\n'
+        '  silver_duckdb_path: "nope/silver.duckdb"\n'
+        '  gold_duckdb_path: "nope/gold.duckdb"\n'
+    )
+
+    with pytest.raises(FileNotFoundError):
+        backup_data.run_backup(
+            backup_dir=tmp_path / "backups",
+            keep_last=7,
+            config_path=str(config_path),
+        )
+
+
+def test_run_backup_cleans_up_partial_snapshot_on_copy_failure(
+    fake_project, monkeypatch
+):
+    tmp_path, config_path = fake_project
+    backup_dir = tmp_path / "backups"
+    monkeypatch.setattr(
+        backup_data.shutil, "copy2", MagicMock(side_effect=OSError("disk full"))
+    )
+
+    with pytest.raises(OSError):
+        backup_data.run_backup(
+            backup_dir=backup_dir, keep_last=7, config_path=str(config_path)
+        )
+
+    assert not backup_dir.exists() or not any(backup_dir.iterdir())
+
+
+def test_run_backup_raises_verification_error_for_a_corrupt_copy(tmp_path, monkeypatch):
+    (tmp_path / "data" / "bronze").mkdir(parents=True)
+    (tmp_path / "data" / "bronze" / "cards.duckdb").write_text("not a real duckdb file")
+    (tmp_path / "data" / "silver").mkdir(parents=True)
+    (tmp_path / "data" / "silver" / "cards.duckdb").write_text("not a real duckdb file")
+    (tmp_path / "data" / "gold").mkdir(parents=True)
+    (tmp_path / "data" / "gold" / "cards.duckdb").write_text("not a real duckdb file")
+    monkeypatch.setattr(backup_data, "MLFLOW_DB_PATH", tmp_path / "no_mlflow.db")
+    monkeypatch.setattr(backup_data, "MLRUNS_DIR", tmp_path / "no_mlruns")
+
+    config_path = tmp_path / "data_sources.yaml"
+    config_path.write_text(
+        "storage:\n"
+        f'  bronze_duckdb_path: "{(tmp_path / "data/bronze/cards.duckdb").as_posix()}"\n'
+        f'  silver_duckdb_path: "{(tmp_path / "data/silver/cards.duckdb").as_posix()}"\n'
+        f'  gold_duckdb_path: "{(tmp_path / "data/gold/cards.duckdb").as_posix()}"\n'
+    )
+
+    backup_dir = tmp_path / "backups"
+    with pytest.raises(backup_data.BackupVerificationError):
+        backup_data.run_backup(
+            backup_dir=backup_dir, keep_last=7, config_path=str(config_path)
+        )
+    # The timestamped snapshot subdir is what actually holds the corrupt
+    # copy; the parent backup_dir itself may remain (created via mkdir
+    # parents=True before the failure) but must be left empty. This mirrors
+    # the assertion in test_run_backup_cleans_up_partial_snapshot_on_copy_failure.
+    assert not backup_dir.exists() or not any(backup_dir.iterdir())
+
+
+def test_run_backup_verification_passes_against_a_real_duckdb_file(tmp_path):
+    import duckdb
+
+    (tmp_path / "data" / "bronze").mkdir(parents=True)
+    (tmp_path / "data" / "silver").mkdir(parents=True)
+    (tmp_path / "data" / "gold").mkdir(parents=True)
+    for tier in ("bronze", "silver", "gold"):
+        db_path = tmp_path / "data" / tier / "cards.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("CREATE TABLE t (id INTEGER)")
+        conn.close()
+
+    config_path = tmp_path / "data_sources.yaml"
+    config_path.write_text(
+        "storage:\n"
+        f'  bronze_duckdb_path: "{(tmp_path / "data/bronze/cards.duckdb").as_posix()}"\n'
+        f'  silver_duckdb_path: "{(tmp_path / "data/silver/cards.duckdb").as_posix()}"\n'
+        f'  gold_duckdb_path: "{(tmp_path / "data/gold/cards.duckdb").as_posix()}"\n'
+    )
+
+    snapshot_dir = backup_data.run_backup(
+        backup_dir=tmp_path / "backups", keep_last=7, config_path=str(config_path)
+    )
+
+    assert snapshot_dir.exists()  # verification passed — real tables found
+
+
+def test_run_backup_raises_verification_error_for_a_valid_but_tableless_db(
+    tmp_path,
+):
+    """A DuckDB file that opens fine but has zero tables (e.g. created but
+    never populated) must still fail verification — the check is "has at
+    least one table", not just "is a valid DuckDB file"."""
+    import duckdb
+
+    (tmp_path / "data" / "bronze").mkdir(parents=True)
+    (tmp_path / "data" / "silver").mkdir(parents=True)
+    (tmp_path / "data" / "gold").mkdir(parents=True)
+    for tier in ("bronze", "silver", "gold"):
+        db_path = tmp_path / "data" / tier / "cards.duckdb"
+        conn = duckdb.connect(str(db_path))  # valid DuckDB file, no tables created
+        conn.close()
+
+    config_path = tmp_path / "data_sources.yaml"
+    config_path.write_text(
+        "storage:\n"
+        f'  bronze_duckdb_path: "{(tmp_path / "data/bronze/cards.duckdb").as_posix()}"\n'
+        f'  silver_duckdb_path: "{(tmp_path / "data/silver/cards.duckdb").as_posix()}"\n'
+        f'  gold_duckdb_path: "{(tmp_path / "data/gold/cards.duckdb").as_posix()}"\n'
+    )
+
+    with pytest.raises(backup_data.BackupVerificationError):
+        backup_data.run_backup(
+            backup_dir=tmp_path / "backups", keep_last=7, config_path=str(config_path)
+        )
+
+
+def test_prune_old_snapshots_keeps_only_the_last_n(tmp_path):
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    for name in [
+        "2026-01-01_00-00-00",
+        "2026-01-02_00-00-00",
+        "2026-01-03_00-00-00",
+        "2026-01-04_00-00-00",
+    ]:
+        (backup_dir / name).mkdir()
+    (backup_dir / "not_a_snapshot").mkdir()
+
+    backup_data._prune_old_snapshots(backup_dir, keep_last=2)
+
+    remaining = sorted(
+        p.name for p in backup_dir.iterdir() if p.name != "not_a_snapshot"
+    )
+    assert remaining == ["2026-01-03_00-00-00", "2026-01-04_00-00-00"]
+    assert (backup_dir / "not_a_snapshot").exists()
+
+
+def test_main_returns_1_and_alerts_on_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(backup_data, "setup_logging", MagicMock())
+    mock_send_alert = MagicMock()
+    monkeypatch.setattr(backup_data, "send_alert", mock_send_alert)
+    monkeypatch.setattr(
+        backup_data,
+        "run_backup",
+        MagicMock(side_effect=FileNotFoundError("nothing to back up")),
+    )
+
+    exit_code = backup_data.main()
+
+    assert exit_code == 1
+    mock_send_alert.assert_called_once()
+
+
+def test_main_returns_0_on_success(tmp_path, monkeypatch):
+    monkeypatch.setattr(backup_data, "setup_logging", MagicMock())
+    monkeypatch.setattr(
+        backup_data, "run_backup", MagicMock(return_value=tmp_path / "backups/x")
+    )
+    mock_send_alert = MagicMock()
+    monkeypatch.setattr(backup_data, "send_alert", mock_send_alert)
+
+    exit_code = backup_data.main()
+
+    assert exit_code == 0
+    mock_send_alert.assert_not_called()

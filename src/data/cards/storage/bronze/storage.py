@@ -12,23 +12,89 @@ Typical usage:
         storage.daily_update(results)  # incremental daily run
 """
 
-import duckdb
+from collections.abc import Callable, Sequence
+from datetime import date
+from typing import Any
+
 import pandas as pd
 from pydantic import BaseModel
 
-from src.data.cards.storage.base import BaseStorage, _serialize_objects
+from src.data.cards.storage.base.storage import BaseStorage
+from src.data.cards.storage.base.writers import DuckDBWriter
 from src.data.cards.storage.bronze.config import STORAGE_CONFIG
-from src.data.cards.storage.bronze.writers import (
-    BronzeWritersMixin,
-    _filter_prices_to_date,
-)
 from src.data.cards.storage.errors import StorageWriteError
 from src.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class BronzeStorage(BronzeWritersMixin, BaseStorage):
+def _records_to_df(records: Sequence[BaseModel]) -> pd.DataFrame:
+    return pd.DataFrame([r.model_dump(mode="json") for r in records])
+
+
+def _walk_paper_prices(
+    paper_dict: dict[str, Any] | None,
+) -> list[tuple[str, str, str, str, Any]]:
+    """Yield every (retailer, tx_type, finish, date, raw_value) leaf in a paper dict.
+
+    Single source of truth for the 4-level nesting (retailer -> tx_type ->
+    finish -> date) shared by _extract_paper_eav_rows (latest-before selection)
+    and seed_historical_prices (all-dates selection). The raw value is passed
+    through unfiltered and unconverted (it may be None) — callers decide
+    whether/when to drop Nones and coerce to float, since the two consumers
+    have different semantics for None-valued leaves.
+    """
+    if not paper_dict:
+        return []
+    rows: list[tuple[str, str, str, str, Any]] = []
+    for retailer, retailer_data in paper_dict.items():
+        if not retailer_data:
+            continue
+        for tx_type in ("buylist", "retail"):
+            listing = (retailer_data.get(tx_type)) or {}
+            for finish, prices in listing.items():
+                if not isinstance(prices, dict):
+                    continue
+                for d, val in prices.items():
+                    rows.append((retailer, tx_type, finish, d, val))
+    return rows
+
+
+def _extract_paper_eav_rows(
+    paper_dict: dict[str, Any] | None, uuid: str, snapshot_date: str
+) -> list[dict[str, Any]]:
+    """Extract EAV rows from an MTGJson paper dict for a given snapshot date.
+
+    Iterates every (retailer, tx_type, finish) found in paper_dict without
+    pre-selection — all retailers present in the feed are captured. Uses
+    look-back semantics: selects the most recent price per combination where
+    date key <= snapshot_date, regardless of whether that date's value is
+    None — matching the original implementation, a None value at the winning
+    (most recent, <= snapshot_date) date raises TypeError from float(None)
+    rather than silently falling back to an earlier date's value.
+    """
+    by_combo: dict[tuple[str, str, str], tuple[str, Any]] = {}
+    for retailer, tx_type, finish, d, value in _walk_paper_prices(paper_dict):
+        if d > snapshot_date:
+            continue
+        key = (retailer, tx_type, finish)
+        if key not in by_combo or d > by_combo[key][0]:
+            by_combo[key] = (d, value)
+
+    return [
+        {
+            "uuid": uuid,
+            "snapshot_date": snapshot_date,
+            "retailer": retailer,
+            "tx_type": tx_type,
+            "finish": finish,
+            "price": float(value),
+        }
+        for (retailer, tx_type, finish), (_, value) in by_combo.items()
+    ]
+
+
+class BronzeStorage(BaseStorage):
     """Persistence layer for the Bronze (raw ingestion) tier.
 
     Inherits generic write operations from BronzeWritersMixin and connection
@@ -56,24 +122,76 @@ class BronzeStorage(BronzeWritersMixin, BaseStorage):
             StorageConnectionError: If the connection cannot be established.
         """
         self._con = self._open_connection(bronze_datadb_path, read_only=False)
+        self._writer = DuckDBWriter(self._con)
 
     def close(self) -> None:
         """Close the underlying DuckDB connection."""
         logger.progress("Closing connection to DuckDB")
         self._con.close()
 
+    def _full_load_table(self, records: list[BaseModel], table_name: str) -> None:
+        if not records:
+            logger.warning("No records to save to %r — skipping", table_name)
+            return
+        df = _records_to_df(records)
+        self._writer.full_load(df, table_name)
+
+    def _incremental_load(
+        self, records: list[BaseModel], table_name: str, key_column: str
+    ) -> None:
+        if not records:
+            logger.warning("No records to load into %r — skipping", table_name)
+            return
+        df = _records_to_df(records)
+        self._writer.upsert(df, table_name, key_column)
+
+    def _snapshot(
+        self,
+        records: list[BaseModel],
+        key_column: str,
+        history_table: str,
+        fields: list[str] | None = None,
+    ) -> None:
+        if not records:
+            logger.warning("No records to snapshot into %r — skipping", history_table)
+            return
+
+        today_iso = date.today().isoformat()
+        rows = []
+        for record in records:
+            dump = record.model_dump(mode="json")
+            data = (
+                {f: dump[f] for f in fields if f in dump}
+                if fields is not None
+                else dump
+            )
+            rows.append(
+                {
+                    key_column: dump[key_column],
+                    "snapshot_date": today_iso,
+                    **data,
+                }
+            )
+
+        if not rows:
+            logger.warning("No data to snapshot into %r — skipping", history_table)
+            return
+
+        df = pd.DataFrame(rows)
+        logger.progress("Snapshotting %d rows into %r", len(df), history_table)
+        self._writer.append(df, history_table, key_column)
+        logger.info(
+            "Snapshotted %d rows into %r for %s", len(rows), history_table, today_iso
+        )
+
     def seed_historical_prices(self, records: list[BaseModel]) -> None:
-        """One-time seeding: explode AllPrices 90-day history into per-date rows.
+        """One-time seeding: expand AllPrices 90-day history into EAV rows.
 
-        Reads MtgjsonCardPrices instances from AllPrices.json (not
-        AllPricesToday.json). Each card's price dict contains up to 90
-        date-keyed entries; this method expands them so that
-        bronze_mtgjson_prices_history gets one row per (uuid, date). Each row
-        contains only that date's prices, matching the shape of daily snapshot
-        rows produced by _snapshot() from AllPricesToday.json.
-
-        Already-existing (uuid, snapshot_date) pairs are skipped, so the call
-        is idempotent and safe to re-run if interrupted.
+        Each card's paper dict contains date-keyed prices per (retailer, tx_type,
+        finish). This method expands every leaf {date: price} pair into an
+        individual EAV row. All retailers in the feed are captured without
+        pre-selection. Already-existing (uuid, snapshot_date, retailer, tx_type,
+        finish) rows are skipped, making the call idempotent.
 
         Args:
             records: MtgjsonCardPrices instances from AllPrices.json.
@@ -90,22 +208,19 @@ class BronzeStorage(BronzeWritersMixin, BaseStorage):
         for record in records:
             dump = record.model_dump(mode="json")
             uuid_str = dump["uuid"]
+            paper = dump.get("paper") or {}
 
-            dates: set[str] = set()
-            for platform in ("paper", "mtgo"):
-                for retailer_data in (dump.get(platform) or {}).values():
-                    for tx_type in ("buylist", "retail"):
-                        listing = retailer_data.get(tx_type) or {}
-                        dates.update((listing.get("foil") or {}).keys())
-                        dates.update((listing.get("normal") or {}).keys())
-
-            for d in dates:
+            for retailer, tx_type, finish, d, val in _walk_paper_prices(paper):
+                if val is None:
+                    continue
                 rows.append(
                     {
                         "uuid": uuid_str,
                         "snapshot_date": d,
-                        "paper": _filter_prices_to_date(dump.get("paper"), d),
-                        "mtgo": _filter_prices_to_date(dump.get("mtgo"), d),
+                        "retailer": retailer,
+                        "tx_type": tx_type,
+                        "finish": finish,
+                        "price": float(val),
                     }
                 )
 
@@ -113,28 +228,81 @@ class BronzeStorage(BronzeWritersMixin, BaseStorage):
             logger.warning("No date-keyed prices found in records — skipping seed")
             return
 
-        df = _serialize_objects(pd.DataFrame(rows))
-        self._con.register("_seed_staging", df)
-        try:
-            self._con.execute(
-                f"CREATE TABLE IF NOT EXISTS {history_table} AS "
-                f"SELECT * FROM _seed_staging WHERE false"
+        self._writer.append(
+            pd.DataFrame(rows),
+            history_table,
+            ["uuid", "retailer", "tx_type", "finish"],
+        )
+        logger.info("Seeded %d EAV price rows into %r", len(rows), history_table)
+
+    def _snapshot_scryfall_prices(self, records: list[BaseModel]) -> None:
+        """Snapshot today's Scryfall prices into bronze_scryfall_prices_history.
+
+        Extracts scalar FLOAT price columns (eur, eur_foil, usd, usd_foil, tix) from
+        each record's prices dict. Null string values produce NULL float columns.
+        Duplicate (id, snapshot_date) pairs are silently skipped, making the call idempotent.
+
+        Args:
+            records: Pydantic model instances with id and prices fields.
+        """
+        if not records:
+            logger.warning("No Scryfall records to snapshot prices for — skipping")
+            return
+
+        price_columns = ("eur", "eur_foil", "usd", "usd_foil", "tix")
+
+        today_iso = date.today().isoformat()
+        rows = []
+        for record in records:
+            dump = record.model_dump(mode="json")
+            prices = dump.get("prices") or {}
+            row: dict[str, str | float | None] = {
+                "id": dump["id"],
+                "snapshot_date": today_iso,
+            }
+            for col in price_columns:
+                row[col] = float(prices[col]) if prices.get(col) is not None else None
+            rows.append(row)
+
+        df = pd.DataFrame(rows)
+        logger.progress("Snapshotting %d Scryfall price rows", len(df))
+        self._writer.append(df, "bronze_scryfall_prices_history", "id")
+        logger.info("Snapshotted %d Scryfall price rows for %s", len(rows), today_iso)
+
+    def _snapshot_mtgjson_prices(self, records: list[BaseModel]) -> None:
+        """Snapshot today's MTGJson prices into bronze_mtgjson_prices_history (EAV).
+
+        Extracts all (retailer, tx_type, finish) combinations present in each
+        record's paper dict using look-back semantics via _extract_paper_eav_rows.
+        One EAV row = one price point. All retailers are captured.
+
+        Args:
+            records: Pydantic model instances with uuid and paper fields.
+        """
+        if not records:
+            logger.warning("No MTGJson price records to snapshot — skipping")
+            return
+
+        today_iso = date.today().isoformat()
+        rows: list[dict[str, Any]] = []
+        for record in records:
+            dump = record.model_dump(mode="json")
+            rows.extend(
+                _extract_paper_eav_rows(dump.get("paper"), dump["uuid"], today_iso)
             )
-            self._con.execute(
-                f"INSERT INTO {history_table} "
-                f"SELECT s.* FROM _seed_staging s "
-                f"WHERE NOT EXISTS ("
-                f"  SELECT 1 FROM {history_table} h "
-                f"  WHERE h.uuid = s.uuid AND h.snapshot_date = s.snapshot_date"
-                f")"
-            )
-        except duckdb.Error as e:
-            raise StorageWriteError(
-                f"Failed to seed historical prices into {history_table!r}: {e}"
-            ) from e
-        finally:
-            self._con.unregister("_seed_staging")
-        logger.info("Seeded %d historical price rows into %r", len(rows), history_table)
+
+        if not rows:
+            logger.warning("No paper price rows found — skipping MTGJson snapshot")
+            return
+
+        df = pd.DataFrame(rows)
+        logger.progress("Snapshotting %d MTGJson EAV price rows", len(df))
+        self._writer.append(
+            df,
+            "bronze_mtgjson_prices_history",
+            ["uuid", "retailer", "tx_type", "finish"],
+        )
+        logger.info("Snapshotted %d MTGJson EAV rows for %s", len(rows), today_iso)
 
     def _process_sources(
         self,
@@ -192,6 +360,21 @@ class BronzeStorage(BronzeWritersMixin, BaseStorage):
                     exc_info=True,
                 )
 
+    def _snapshot_or_log(
+        self, snapshot_fn: Callable[[], None], label: str, action: str
+    ) -> None:
+        """Run a price-snapshot call; log and skip on StorageWriteError.
+
+        Shared by populate() and daily_update() -- a snapshot failure must
+        not abort the rest of either method's run.
+        """
+        try:
+            snapshot_fn()
+        except StorageWriteError as e:
+            logger.error(
+                "%s failed during %s: %s — skipping", label, action, e, exc_info=True
+            )
+
     def populate(
         self, results: dict[str, tuple[list[BaseModel], list[dict[str, object]]]]
     ) -> None:
@@ -201,9 +384,9 @@ class BronzeStorage(BronzeWritersMixin, BaseStorage):
         All Bronze tables are dropped and recreated via _process_sources.
         Snapshot history tables are created automatically on first call.
 
-        After the config loop, seed_historical_prices is called to backfill
-        the 90-day price history from AllPrices.json (if mtgjson_prices is
-        present in results).
+        After the config loop, _snapshot_scryfall_prices captures today's
+        Scryfall prices as scalars, and seed_historical_prices backfills
+        the 90-day MTGJson price history from AllPrices.json.
 
         Args:
             results: Output of ingesting_pipeline — maps source type to
@@ -212,15 +395,19 @@ class BronzeStorage(BronzeWritersMixin, BaseStorage):
         logger.info("Starting DuckDB populate")
         self._process_sources(results, update=False)
 
+        scryfall_records, _ = results.get("scryfall", ([], []))
+        self._snapshot_or_log(
+            lambda: self._snapshot_scryfall_prices(scryfall_records),
+            "Scryfall price snapshot",
+            "populate",
+        )
+
         prices_records, _ = results.get("mtgjson_prices", ([], []))
-        try:
-            self.seed_historical_prices(prices_records)
-        except StorageWriteError as e:
-            logger.error(
-                "Historical price seed failed during populate: %s — skipping",
-                e,
-                exc_info=True,
-            )
+        self._snapshot_or_log(
+            lambda: self.seed_historical_prices(prices_records),
+            "Historical price seed",
+            "populate",
+        )
 
     def daily_update(
         self, results: dict[str, tuple[list[BaseModel], list[dict[str, object]]]]
@@ -233,6 +420,10 @@ class BronzeStorage(BronzeWritersMixin, BaseStorage):
 
         Sources and their write strategy are declared in STORAGE_CONFIG via
         _process_sources. If one source fails the others are still processed.
+        Price snapshots use dedicated methods (_snapshot_scryfall_prices and
+        _snapshot_mtgjson_prices) called after _process_sources. A snapshot
+        failure is logged and skipped rather than aborting the run, matching
+        populate()'s behavior for the same two calls.
 
         Args:
             results: Output of ingesting_pipeline — maps source type to
@@ -240,3 +431,17 @@ class BronzeStorage(BronzeWritersMixin, BaseStorage):
         """
         logger.info("Starting DuckDB update")
         self._process_sources(results, update=True)
+
+        scryfall_records, _ = results.get("scryfall", ([], []))
+        self._snapshot_or_log(
+            lambda: self._snapshot_scryfall_prices(scryfall_records),
+            "Scryfall price snapshot",
+            "daily_update",
+        )
+
+        mtgjson_records, _ = results.get("mtgjson_prices", ([], []))
+        self._snapshot_or_log(
+            lambda: self._snapshot_mtgjson_prices(mtgjson_records),
+            "MTGJson price snapshot",
+            "daily_update",
+        )

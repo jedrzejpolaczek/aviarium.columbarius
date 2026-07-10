@@ -31,6 +31,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from src.ml.evaluation.metrics import MAPE_CLIP_MIN
+
 
 def worst_predictions(
     df: pd.DataFrame,
@@ -40,8 +42,8 @@ def worst_predictions(
 ) -> pd.DataFrame:
     """Return the N cards with the largest percentage prediction error.
 
-    Percentage error uses the same clip_min=0.01 as mape() in metrics.py to
-    prevent near-zero true returns from producing meaningless 100 000% errors.
+    Percentage error uses the same MAPE_CLIP_MIN as mape() (src/ml/evaluation/
+    metrics.py) to avoid inconsistent denominators between the two error views.
 
     Args:
         df:         DataFrame with columns 'name', 'eur', 'tier', y_true_col,
@@ -58,7 +60,7 @@ def worst_predictions(
     df = df.copy()
     df["pct_error"] = (df[y_pred_col] - df[y_true_col]).abs() / df[
         y_true_col
-    ].abs().clip(lower=0.01)
+    ].abs().clip(lower=MAPE_CLIP_MIN)
     return df.nlargest(n, "pct_error")[
         ["name", "eur", "tier", y_true_col, y_pred_col, "pct_error"]
     ]

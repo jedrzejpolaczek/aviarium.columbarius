@@ -15,8 +15,9 @@ MTGO-only reprints, digital-only sets).
 This project targets the **physical (paper) card market only**. Digital card versions
 and their `tix` pricing are explicitly out of scope.
 
-- The `tix` column is parsed in the bronze-layer Pydantic model but **dropped at the
-  silver transformation step** and never appears in silver or gold outputs.
+- The `tix` column is captured in `bronze_scryfall_prices_history` as a scalar FLOAT
+  column (ADR-025) but **excluded at the silver transformation step** and never appears
+  in silver or gold outputs. The exclusion decision lives in Silver SQL, not Bronze.
 - No filtering, ranking, or valuation logic will be built around `tix`.
 - Cards that exist only in digital formats are not a supported use case.
 
@@ -33,8 +34,8 @@ and their `tix` pricing are explicitly out of scope.
 - If a card has paper price data missing but valid `tix` data, the gap is not filled.
 
 ### Neutral
-- `tix` remains present in the bronze-layer Scryfall Pydantic model to avoid breaking
-  ingest; it is explicitly excluded from the silver SQL extraction.
+- `tix` is stored in the Bronze Scryfall table (ADR-025) and explicitly excluded from
+  Silver SQL extractions (`scryfall_prices_base.sql`, `scryfall_language_prices_base.sql`).
 
 ## Alternatives Considered
 

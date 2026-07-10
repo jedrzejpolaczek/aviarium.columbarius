@@ -17,6 +17,7 @@ Mock model always returns log_returns [0.5, -0.1, 0.0] regardless of input:
 
 from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager
+from typing import TypedDict
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -29,6 +30,24 @@ from app.routers import health, predict, similar, underpriced
 
 
 _LOG_RETURNS = np.array([0.5, -0.1, 0.0])
+
+
+class _StateOverrides(TypedDict, total=False):
+    """Overridable subset of ``app.state`` attributes for ``_build_test_app``.
+
+    ``total=False`` since each fixture only overrides the 1-2 keys it cares
+    about; the field list below is the authoritative set of overridable keys
+    and their real types, so mypy flags typos and wrong-type values at each
+    call site.
+    """
+
+    model: MagicMock | None
+    repo: MagicMock
+    X_all: pd.DataFrame | None
+    X_all_t: pd.DataFrame | None
+    model_run_id: str
+    snapshot_date: str
+    similarity_index: MagicMock | None
 
 
 def _make_X_all() -> pd.DataFrame:
@@ -75,6 +94,45 @@ def _make_mock_model() -> MagicMock:
     return model
 
 
+def _build_test_app(state_overrides: _StateOverrides) -> FastAPI:
+    """Build a test FastAPI app with a mock lifespan populating ``app.state``.
+
+    All ``app.state`` attributes are populated with deterministic test data so
+    tests are fully isolated from the file system and ML infrastructure.
+    ``state_overrides`` replaces individual base values for the app-specific
+    test client variants (e.g. ``model=None`` for a 503 test).
+
+    Args:
+        state_overrides: Mapping of ``app.state`` attribute names to values
+            that override the defaults for this particular test app. Keys
+            must be a subset of ``_StateOverrides``'s fields.
+
+    Returns:
+        A configured but not-yet-started ``FastAPI`` instance.
+    """
+    base_state: _StateOverrides = {
+        "model": _make_mock_model(),
+        "repo": MagicMock(connection=MagicMock()),
+        "X_all": _make_X_all(),
+        "X_all_t": _make_X_all_t(),
+        "model_run_id": "test-run-123",
+        "snapshot_date": "2026-01-01",
+        "similarity_index": _make_similarity_index(),
+    }
+    state: _StateOverrides = {**base_state, **state_overrides}
+
+    @asynccontextmanager
+    async def mock_lifespan(app: FastAPI) -> AsyncIterator[None]:
+        for key, value in state.items():
+            setattr(app.state, key, value)
+        yield
+
+    app = FastAPI(lifespan=mock_lifespan)
+    for router in (health.router, predict.router, similar.router, underpriced.router):
+        app.include_router(router)
+    return app
+
+
 @pytest.fixture(scope="module")
 def test_client() -> Generator[TestClient, None, None]:
     """TestClient backed by a test app with mock lifespan.
@@ -85,102 +143,37 @@ def test_client() -> Generator[TestClient, None, None]:
     Yields:
         Configured ``TestClient`` instance.
     """
-    mock_model = _make_mock_model()
-    mock_sim_index = _make_similarity_index()
-
-    @asynccontextmanager
-    async def mock_lifespan(app: FastAPI) -> AsyncIterator[None]:
-        app.state.model = mock_model
-        app.state.db = MagicMock()
-        app.state.X_all = _make_X_all()
-        app.state.X_all_t = _make_X_all_t()
-        app.state.model_run_id = "test-run-123"
-        app.state.snapshot_date = "2026-01-01"
-        app.state.similarity_index = mock_sim_index
-        yield
-
-    _app = FastAPI(lifespan=mock_lifespan)
-    _app.include_router(health.router)
-    _app.include_router(predict.router)
-    _app.include_router(similar.router)
-    _app.include_router(underpriced.router)
-
-    with TestClient(_app) as client:
+    with TestClient(_build_test_app({})) as client:
         yield client
 
 
 @pytest.fixture(scope="module")
 def test_client_no_model() -> Generator[TestClient, None, None]:
     """TestClient where model=None to test 503 responses."""
-
-    @asynccontextmanager
-    async def mock_lifespan(app: FastAPI) -> AsyncIterator[None]:
-        app.state.model = None
-        app.state.db = MagicMock()
-        app.state.X_all = _make_X_all()
-        app.state.X_all_t = _make_X_all_t()
-        app.state.model_run_id = ""
-        app.state.snapshot_date = "2026-01-01"
-        app.state.similarity_index = _make_similarity_index()
-        yield
-
-    _app = FastAPI(lifespan=mock_lifespan)
-    _app.include_router(health.router)
-    _app.include_router(predict.router)
-    _app.include_router(similar.router)
-    _app.include_router(underpriced.router)
-
-    with TestClient(_app) as client:
+    with TestClient(_build_test_app({"model": None, "model_run_id": ""})) as client:
         yield client
 
 
 @pytest.fixture(scope="module")
 def test_client_no_similarity() -> Generator[TestClient, None, None]:
     """TestClient where similarity_index=None to test 503 response from /similar."""
+    with TestClient(_build_test_app({"similarity_index": None})) as client:
+        yield client
 
-    @asynccontextmanager
-    async def mock_lifespan(app: FastAPI) -> AsyncIterator[None]:
-        app.state.model = _make_mock_model()
-        app.state.db = MagicMock()
-        app.state.X_all = _make_X_all()
-        app.state.X_all_t = _make_X_all_t()
-        app.state.model_run_id = "test-run-123"
-        app.state.snapshot_date = "2026-01-01"
-        app.state.similarity_index = None
-        yield
 
-    _app_no_sim = FastAPI(lifespan=mock_lifespan)
-    _app_no_sim.include_router(health.router)
-    _app_no_sim.include_router(predict.router)
-    _app_no_sim.include_router(similar.router)
-    _app_no_sim.include_router(underpriced.router)
-
-    with TestClient(_app_no_sim) as client:
+@pytest.fixture(scope="module")
+def test_client_no_features() -> Generator[TestClient, None, None]:
+    """TestClient where X_all/X_all_t=None to test 503 from cards/predict/underpriced."""
+    with TestClient(
+        _build_test_app({"X_all": None, "X_all_t": None, "model_run_id": ""})
+    ) as client:
         yield client
 
 
 @pytest.fixture(scope="module")
 def test_client_similarity_error() -> Generator[TestClient, None, None]:
     """TestClient where find_similar raises ValueError to test 404 from /similar."""
-
-    @asynccontextmanager
-    async def mock_lifespan(app: FastAPI) -> AsyncIterator[None]:
-        idx = _make_similarity_index()
-        idx.find_similar.side_effect = ValueError("UUID not in index")
-        app.state.model = _make_mock_model()
-        app.state.db = MagicMock()
-        app.state.X_all = _make_X_all()
-        app.state.X_all_t = _make_X_all_t()
-        app.state.model_run_id = "test-run-123"
-        app.state.snapshot_date = "2026-01-01"
-        app.state.similarity_index = idx
-        yield
-
-    _app_sim_err = FastAPI(lifespan=mock_lifespan)
-    _app_sim_err.include_router(health.router)
-    _app_sim_err.include_router(predict.router)
-    _app_sim_err.include_router(similar.router)
-    _app_sim_err.include_router(underpriced.router)
-
-    with TestClient(_app_sim_err) as client:
+    idx = _make_similarity_index()
+    idx.find_similar.side_effect = ValueError("UUID not in index")
+    with TestClient(_build_test_app({"similarity_index": idx})) as client:
         yield client

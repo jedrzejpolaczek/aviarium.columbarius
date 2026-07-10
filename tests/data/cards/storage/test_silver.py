@@ -1,25 +1,13 @@
 import json
 import logging
 from pathlib import Path
-from unittest.mock import patch
 
 import duckdb
 import pandas as pd
 import pytest
 
-from src.data.cards.storage.silver import SilverStorage, SilverTransforms
-from src.data.cards.storage.silver.card_join import SilverCardJoin
-from src.data.cards.storage.silver.cleaning import (
-    _clean_booleans,
-    _clean_lists,
-    _clean_numerics,
-    _clean_strings,
-    _drop_columns,
-    _filter_rows,
-    _parse_json_columns,
-    _rename_columns,
-)
-from src.data.cards.storage.silver.persistence import SilverWriter
+from src.data.cards.storage.silver import SilverStorage
+from src.data.cards.storage.base.writers import DuckDBWriter as SilverWriter
 from src.data.cards.storage.errors import StorageWriteError
 
 MINIMAL_CONFIG = {
@@ -48,797 +36,494 @@ def storage(tmp_path):
     s.close()
 
 
-@pytest.fixture
-def transforms() -> SilverTransforms:
-    return SilverTransforms(
-        language_map={"en": "English", "es": "Spanish"},
-        legality_map={"Legal": "legal", "Not Legal": "not_legal"},
-        supertypes=["Legendary", "Basic"],
-        card_types=["Creature", "Instant"],
-    )
-
-
-@pytest.fixture
-def card_join() -> SilverCardJoin:
-    return SilverCardJoin(language_map={"en": "English", "es": "Spanish"})
-
-
-# ---------------------------------------------------------------------------
-# _filter_rows
-# ---------------------------------------------------------------------------
-
-
-class TestFilterRows:
-    def test_drops_matching_rows_and_resets_index(self):
-        df = pd.DataFrame({"a": [1, 2, 3]})
-        issues: list = []
-        result = _filter_rows(df, {"a": 2}, issues)
-        assert list(result["a"]) == [1, 3]
-        assert result.index.tolist() == [0, 1]
-
-    def test_no_matching_rows_does_not_add_issue(self):
-        df = pd.DataFrame({"a": [1, 2]})
-        issues: list = []
-        _filter_rows(df, {"a": 99}, issues)
-        assert issues == []
-
-    def test_dropped_rows_adds_issue_with_count(self):
-        df = pd.DataFrame({"flag": [True, False, True]})
-        issues: list = []
-        _filter_rows(df, {"flag": True}, issues)
-        assert any(
-            i["issue"] == "rows_dropped" and i["count"] == 2 and i["value"] is True
-            for i in issues
-        )
-
-    def test_missing_column_adds_issue(self):
-        df = pd.DataFrame({"a": [1]})
-        issues: list = []
-        _filter_rows(df, {"missing": True}, issues)
-        assert any(i["issue"] == "column_not_found" for i in issues)
-
-    def test_drops_matching_rows_with_list_value(self):
-        df = pd.DataFrame(
-            {"layout": ["token", "normal", "double_faced_token", "transform"]}
-        )
-        issues: list = []
-        result = _filter_rows(df, {"layout": ["token", "double_faced_token"]}, issues)
-        assert list(result["layout"]) == ["normal", "transform"]
-        assert result.index.tolist() == [0, 1]
-        assert any(
-            i["issue"] == "rows_dropped"
-            and i["count"] == 2
-            and i["value"] == ["token", "double_faced_token"]
-            for i in issues
-        )
-
-    def test_list_value_no_match_does_not_add_issue(self):
-        df = pd.DataFrame({"layout": ["normal", "transform"]})
-        issues: list = []
-        _filter_rows(df, {"layout": ["token", "emblem"]}, issues)
-        assert issues == []
-
-    def test_empty_list_value_drops_nothing(self):
-        df = pd.DataFrame({"layout": ["normal", "transform"]})
-        issues: list = []
-        result = _filter_rows(df, {"layout": []}, issues)
-        assert list(result["layout"]) == ["normal", "transform"]
-        assert issues == []
-
-
-# ---------------------------------------------------------------------------
-# _drop_columns
-# ---------------------------------------------------------------------------
-
-
-class TestDropColumns:
-    def test_drops_listed_columns(self):
-        df = pd.DataFrame({"a": [1], "b": [2], "c": [3]})
-        issues: list = []
-        result = _drop_columns(df, ["a", "c"], issues)
-        assert list(result.columns) == ["b"]
-
-    def test_missing_column_adds_issue_but_does_not_raise(self):
-        df = pd.DataFrame({"a": [1]})
-        issues: list = []
-        result = _drop_columns(df, ["a", "missing"], issues)
-        assert "a" not in result.columns
-        assert any(i["issue"] == "column_not_found" for i in issues)
-
-
-# ---------------------------------------------------------------------------
-# Dropped columns — near-100% null in bronze (config-level regression tests)
-# ---------------------------------------------------------------------------
-
-_EMPTY_SOURCE_CONFIG: dict = {
-    "drop_entries": {},
-    "drop_columns": [],
-    "json_columns": [],
-    "string_ops": {},
-    "numeric_columns": [],
-    "list_operations": {},
-    "bool_columns": [],
-    "rename_columns": {},
-}
-
-
-class TestScryfallDroppedColumns:
-    """Verify that Scryfall columns dropped for being near-100% null are absent
-    from the transform output.  These columns were confirmed useless via EDA:
-    - variation_of / life_modifier / hand_modifier: Vanguard card-type only
-    - content_warning: always false after digital/oversized cards are filtered
-    - tcgplayer_etched_id: etched-foil niche, 99.8% null
-    - arena_id / mtgo_id / mtgo_foil_id: digital platforms, out of scope
-    """
-
-    _DROPPED = [
-        "variation_of",
-        "life_modifier",
-        "hand_modifier",
-        "content_warning",
-        "tcgplayer_etched_id",
-        "arena_id",
-        "mtgo_id",
-        "mtgo_foil_id",
-    ]
-
-    def _config(self):
-        return {**_EMPTY_SOURCE_CONFIG, "drop_columns": self._DROPPED}
-
-    def test_dropped_columns_absent_after_transform(self, transforms):
-        df = pd.DataFrame({col: [None] for col in self._DROPPED} | {"name": ["A"]})
-        result, _ = transforms.transform(df, self._config())
-        for col in self._DROPPED:
-            assert col not in result.columns, f"{col!r} should have been dropped"
-
-    def test_non_dropped_columns_preserved(self, transforms):
-        df = pd.DataFrame({col: [None] for col in self._DROPPED} | {"name": ["A"]})
-        result, _ = transforms.transform(df, self._config())
-        assert "name" in result.columns
-
-
-class TestMtgjsonDroppedColumns:
-    """Verify that MTGJson columns dropped for being near-100% null are absent
-    from the transform output.  These columns were confirmed useless via EDA:
-    - signature / face_printed_name / face_flavor_name: 100% null
-    - hand / life: Vanguard card-type only
-    - leadership_skills: 90% null, low analytical value
-    - original_release_date: 98% null, not used downstream
-    """
-
-    _DROPPED = [
-        "signature",
-        "face_printed_name",
-        "face_flavor_name",
-        "hand",
-        "life",
-        "leadership_skills",
-        "original_release_date",
-    ]
-
-    def _config(self):
-        return {**_EMPTY_SOURCE_CONFIG, "drop_columns": self._DROPPED}
-
-    def test_dropped_columns_absent_after_transform(self, transforms):
-        df = pd.DataFrame({col: [None] for col in self._DROPPED} | {"uuid": ["u1"]})
-        result, _ = transforms.transform(df, self._config())
-        for col in self._DROPPED:
-            assert col not in result.columns, f"{col!r} should have been dropped"
-
-    def test_non_dropped_columns_preserved(self, transforms):
-        df = pd.DataFrame({col: [None] for col in self._DROPPED} | {"uuid": ["u1"]})
-        result, _ = transforms.transform(df, self._config())
-        assert "uuid" in result.columns
-
-
-# ---------------------------------------------------------------------------
-# _parse_json_columns
-# ---------------------------------------------------------------------------
-
-
-class TestParseJsonColumns:
-    def test_parses_json_strings_to_python_objects(self):
-        df = pd.DataFrame({"col": ["[1, 2]", '{"key": "val"}']})
-        issues: list = []
-        result = _parse_json_columns(df, ["col"], issues)
-        assert result["col"].iloc[0] == [1, 2]
-        assert result["col"].iloc[1] == {"key": "val"}
-
-    def test_leaves_non_strings_unchanged(self):
-        df = pd.DataFrame({"col": [[1, 2], None]})
-        issues: list = []
-        result = _parse_json_columns(df, ["col"], issues)
-        assert result["col"].iloc[0] == [1, 2]
-
-    def test_invalid_json_leaves_value_and_adds_issue(self):
-        df = pd.DataFrame({"col": ["not json"]})
-        issues: list = []
-        result = _parse_json_columns(df, ["col"], issues)
-        assert result["col"].iloc[0] == "not json"
-        assert any(i["issue"] == "json_parse_failed" for i in issues)
-
-    def test_skips_missing_column_silently(self):
-        df = pd.DataFrame({"a": [1]})
-        issues: list = []
-        result = _parse_json_columns(df, ["missing"], issues)
-        assert list(result.columns) == ["a"]
-
-
-# ---------------------------------------------------------------------------
-# _clean_strings
-# ---------------------------------------------------------------------------
-
-
-class TestCleanStrings:
-    def test_strip_removes_whitespace(self):
-        df = pd.DataFrame({"name": ["  hello  ", " world "]})
-        issues: list = []
-        result = _clean_strings(df, {"name": ["strip"]}, issues)
-        assert list(result["name"]) == ["hello", "world"]
-
-    def test_upper(self):
-        df = pd.DataFrame({"code": ["abc"]})
-        issues: list = []
-        result = _clean_strings(df, {"code": ["upper"]}, issues)
-        assert result["code"].iloc[0] == "ABC"
-
-    def test_lower(self):
-        df = pd.DataFrame({"code": ["ABC"]})
-        issues: list = []
-        result = _clean_strings(df, {"code": ["lower"]}, issues)
-        assert result["code"].iloc[0] == "abc"
-
-    def test_title(self):
-        df = pd.DataFrame({"name": ["hello world"]})
-        issues: list = []
-        result = _clean_strings(df, {"name": ["title"]}, issues)
-        assert result["name"].iloc[0] == "Hello World"
-
-    def test_replace_sentinel_replaces_underscore_with_none(self):
-        df = pd.DataFrame({"val": ["_", "real", "_"]})
-        issues: list = []
-        result = _clean_strings(df, {"val": ["replace_sentinel"]}, issues)
-        assert pd.isna(result["val"].iloc[0])
-        assert result["val"].iloc[1] == "real"
-        assert any(
-            i["issue"] == "sentinel_replaced" and i["count"] == 2 for i in issues
-        )
-
-    def test_missing_column_adds_issue(self):
-        df = pd.DataFrame({"a": [1]})
-        issues: list = []
-        _clean_strings(df, {"missing": ["strip"]}, issues)
-        assert any(i["issue"] == "column_not_found" for i in issues)
-
-
-# ---------------------------------------------------------------------------
-# _clean_numerics
-# ---------------------------------------------------------------------------
-
-
-class TestCleanNumerics:
-    def test_coerces_string_numbers_to_float(self):
-        df = pd.DataFrame({"val": ["1.5", "2", "3.0"]})
-        issues: list = []
-        result = _clean_numerics(df, ["val"], issues)
-        assert list(result["val"]) == [1.5, 2.0, 3.0]
-
-    def test_unparseable_value_becomes_nan_and_adds_issue(self):
-        df = pd.DataFrame({"val": ["1", "bad", "3"]})
-        issues: list = []
-        result = _clean_numerics(df, ["val"], issues)
-        assert pd.isna(result["val"].iloc[1])
-        assert any(i["issue"] == "unparseable_values" for i in issues)
-
-    def test_skips_missing_column_silently(self):
-        df = pd.DataFrame({"a": [1]})
-        issues: list = []
-        result = _clean_numerics(df, ["missing"], issues)
-        assert list(result.columns) == ["a"]
-
-
-# ---------------------------------------------------------------------------
-# _clean_lists
-# ---------------------------------------------------------------------------
-
-
-class TestCleanLists:
-    def test_fill_empty_replaces_none_with_empty_list(self):
-        df = pd.DataFrame({"tags": [None, ["a"], None]})
-        issues: list = []
-        result = _clean_lists(df, {"tags": ["fill_empty"]}, issues)
-        assert result["tags"].iloc[0] == []
-        assert result["tags"].iloc[1] == ["a"]
-
-    def test_null_fill_adds_issue_with_count(self):
-        df = pd.DataFrame({"tags": [None, None]})
-        issues: list = []
-        _clean_lists(df, {"tags": ["fill_empty"]}, issues)
-        assert any(
-            i["issue"] == "nulls_filled_with_empty_list" and i["count"] == 2
-            for i in issues
-        )
-
-    def test_upper_applies_to_items(self):
-        df = pd.DataFrame({"tags": [["white", "blue"]]})
-        issues: list = []
-        result = _clean_lists(df, {"tags": ["upper"]}, issues)
-        assert result["tags"].iloc[0] == ["WHITE", "BLUE"]
-
-    def test_lower_applies_to_items(self):
-        df = pd.DataFrame({"tags": [["WHITE", "BLUE"]]})
-        issues: list = []
-        result = _clean_lists(df, {"tags": ["lower"]}, issues)
-        assert result["tags"].iloc[0] == ["white", "blue"]
-
-    def test_title_applies_to_items(self):
-        df = pd.DataFrame({"tags": [["hello world"]]})
-        issues: list = []
-        result = _clean_lists(df, {"tags": ["title"]}, issues)
-        assert result["tags"].iloc[0] == ["Hello World"]
-
-
-# ---------------------------------------------------------------------------
-# _clean_booleans
-# ---------------------------------------------------------------------------
-
-
-class TestCleanBooleans:
-    def test_fills_none_with_false(self):
-        df = pd.DataFrame({"flag": [None, True, None]})
-        issues: list = []
-        result = _clean_booleans(df, ["flag"], issues)
-        assert list(result["flag"]) == [False, True, False]
-
-    def test_casts_column_to_bool_dtype(self):
-        df = pd.DataFrame({"flag": [1, 0, None]})
-        issues: list = []
-        result = _clean_booleans(df, ["flag"], issues)
-        assert result["flag"].dtype == bool
-
-    def test_null_fill_adds_issue(self):
-        df = pd.DataFrame({"flag": [None]})
-        issues: list = []
-        _clean_booleans(df, ["flag"], issues)
-        assert any(i["issue"] == "nulls_filled_with_false" for i in issues)
-
-
-# ---------------------------------------------------------------------------
-# SilverTransforms._normalize_values
-# ---------------------------------------------------------------------------
-
-
-class TestNormalizeValues:
-    def test_expands_known_language_codes(self, transforms):
-        df = pd.DataFrame({"language": ["en", "es"]})
-        issues: list = []
-        result = transforms._normalize_values(df, issues)
-        assert list(result["language"]) == ["English", "Spanish"]
-
-    def test_unknown_language_code_left_unchanged_and_adds_issue(self, transforms):
-        df = pd.DataFrame({"language": ["xx"]})
-        issues: list = []
-        result = transforms._normalize_values(df, issues)
-        assert result["language"].iloc[0] == "xx"
-        assert any(i["issue"] == "unknown_language_codes" for i in issues)
-
-    def test_already_expanded_language_not_re_mapped(self, transforms):
-        df = pd.DataFrame({"language": ["English"]})
-        issues: list = []
-        result = transforms._normalize_values(df, issues)
-        assert result["language"].iloc[0] == "English"
-
-    def test_normalizes_legality_values(self, transforms):
-        df = pd.DataFrame(
-            {"legalities": [{"standard": "Legal", "modern": "Not Legal"}]}
-        )
-        issues: list = []
-        result = transforms._normalize_values(df, issues)
-        leg = result["legalities"].iloc[0]
-        assert leg["standard"] == "legal"
-        assert leg["modern"] == "not_legal"
-
-    def test_uses_lang_column_when_language_absent(self, transforms):
-        df = pd.DataFrame({"lang": ["en"]})
-        issues: list = []
-        result = transforms._normalize_values(df, issues)
-        assert result["lang"].iloc[0] == "English"
-
-
-# ---------------------------------------------------------------------------
-# SilverTransforms._parse_type_line
-# ---------------------------------------------------------------------------
-
-
-class TestParseTypeLine:
-    def test_splits_supertypes_types_and_subtypes(self, transforms):
-        supers, types, subs = transforms._parse_type_line(
-            "Legendary Creature — Human Wizard"
-        )
-        assert supers == ["Legendary"]
-        assert types == ["Creature"]
-        assert subs == ["Human", "Wizard"]
-
-    def test_no_em_dash_returns_empty_subtypes(self, transforms):
-        supers, types, subs = transforms._parse_type_line("Basic Instant")
-        assert supers == ["Basic"]
-        assert types == ["Instant"]
-        assert subs == []
-
-    def test_none_returns_three_empty_lists(self, transforms):
-        assert transforms._parse_type_line(None) == ([], [], [])
-
-    def test_empty_string_returns_three_empty_lists(self, transforms):
-        assert transforms._parse_type_line("") == ([], [], [])
-
-    def test_unknown_words_not_included_in_supertypes_or_types(self, transforms):
-        supers, types, subs = transforms._parse_type_line("Unknown — Foo")
-        assert supers == []
-        assert types == []
-        assert subs == ["Foo"]
-
-
-# ---------------------------------------------------------------------------
-# SilverTransforms._add_computed_columns
-# ---------------------------------------------------------------------------
-
-
-class TestAddComputedColumns:
-    def test_errata_true_when_text_differs_from_original(self, transforms):
-        df = pd.DataFrame(
-            {
-                "text": ["new text", "same"],
-                "original_text": ["old text", "same"],
-            }
-        )
-        issues: list = []
-        result = transforms._add_computed_columns(df, issues)
-        assert list(result["errata"]) == [True, False]
-
-    def test_errata_issue_added_when_errata_cards_exist(self, transforms):
-        df = pd.DataFrame({"text": ["new"], "original_text": ["old"]})
-        issues: list = []
-        transforms._add_computed_columns(df, issues)
-        assert any(i["issue"] == "cards_with_errata" for i in issues)
-
-    def test_original_type_parsed_into_three_columns(self, transforms):
-        df = pd.DataFrame({"original_type": ["Legendary Creature — Elf"]})
-        issues: list = []
-        result = transforms._add_computed_columns(df, issues)
-        assert result["original_supertypes"].iloc[0] == ["Legendary"]
-        assert result["original_types"].iloc[0] == ["Creature"]
-        assert result["original_subtypes"].iloc[0] == ["Elf"]
-
-    def test_ascii_name_null_filled_from_name(self, transforms):
-        df = pd.DataFrame({"ascii_name": [None, "Foo"], "name": ["Bar", "Baz"]})
-        issues: list = []
-        result = transforms._add_computed_columns(df, issues)
-        assert result["ascii_name"].iloc[0] == "Bar"
-        assert result["ascii_name"].iloc[1] == "Foo"
-
-    def test_ascii_name_fill_adds_issue(self, transforms):
-        df = pd.DataFrame({"ascii_name": [None], "name": ["Bar"]})
-        issues: list = []
-        transforms._add_computed_columns(df, issues)
-        assert any(i["issue"] == "nulls_filled_with_name" for i in issues)
-
-
-# ---------------------------------------------------------------------------
-# _rename_columns
-# ---------------------------------------------------------------------------
-
-
-class TestRenameColumns:
-    def test_renames_present_columns(self):
-        df = pd.DataFrame({"old": [1], "other": [2]})
-        issues: list = []
-        result = _rename_columns(df, {"old": "new"}, issues)
-        assert "new" in result.columns
-        assert "old" not in result.columns
-
-    def test_missing_column_adds_issue_and_skips_silently(self):
-        df = pd.DataFrame({"a": [1]})
-        issues: list = []
-        result = _rename_columns(df, {"a": "x", "missing": "y"}, issues)
-        assert "x" in result.columns
-        assert any(i["issue"] == "columns_not_found" for i in issues)
-
-
-# ---------------------------------------------------------------------------
-# SilverCardJoin
-# ---------------------------------------------------------------------------
-
-
-class TestSilverCardJoin:
-    def test_joins_mtgjson_and_scryfall_on_scryfall_id(self, card_join):
-        mtgjson = pd.DataFrame(
-            {
-                "uuid": ["u1", "u2"],
-                "identifiers": [{"scryfall_id": "s1"}, {"scryfall_id": "s2"}],
-                "name": ["CardA", "CardB"],
-            }
-        )
-        scryfall = pd.DataFrame(
-            {
-                "id": ["s1", "s2"],
-                "image_uris": ["img1", "img2"],
-            }
-        )
-        result = card_join.join(mtgjson, scryfall)
-        assert len(result) == 2
-        assert "image_uris" in result.columns
-        assert "id" not in result.columns
-
-    def test_missing_source_returns_empty_dataframe(self, storage):
-        # Tests the orchestration-level guard in SilverStorage._join_cards
-        # which checks for both required sources before delegating to SilverCardJoin.
-        result = storage._join_cards({"mtgjson_cards": pd.DataFrame()})
-        assert result.empty
-
-    def test_scryfall_columns_duplicated_in_mtgjson_are_excluded(self, card_join):
-        mtgjson = pd.DataFrame(
-            {
-                "uuid": ["u1"],
-                "identifiers": [{"scryfall_id": "s1"}],
-                "name": ["CardA"],
-            }
-        )
-        scryfall = pd.DataFrame(
-            {
-                "id": ["s1"],
-                "name": ["CardA"],
-                "extra": ["val"],
-            }
-        )
-        result = card_join.join(mtgjson, scryfall)
-        assert result.columns.tolist().count("name") == 1
-
-    def test_unmatched_mtgjson_rows_kept_with_null_scryfall_columns(self, card_join):
-        mtgjson = pd.DataFrame(
-            {
-                "uuid": ["u1"],
-                "identifiers": [{"scryfall_id": "no-match"}],
-                "name": ["CardA"],
-            }
-        )
-        scryfall = pd.DataFrame({"id": ["s1"], "image_uris": ["img1"]})
-        result = card_join.join(mtgjson, scryfall)
-        mtgjson_row = result[result["uuid"] == "u1"].iloc[0]
-        assert pd.isna(mtgjson_row["image_uris"])
-
-    def test_camel_case_scryfallId_key_produces_null_scryfall_id(self, card_join):
-        # Pydantic serialises MtgjsonIdentifiers with snake_case field names.
-        # Using the raw alias ("scryfallId") must NOT accidentally match.
-        mtgjson = pd.DataFrame(
-            {
-                "uuid": ["u1"],
-                "identifiers": [{"scryfallId": "s1"}],
-                "name": ["CardA"],
-            }
-        )
-        scryfall = pd.DataFrame({"id": ["s1"], "image_uris": ["img1"]})
-        result = card_join.join(mtgjson, scryfall)
-        assert pd.isna(result["scryfall_id"].iloc[0])
-
-    def test_canonical_uuid_equals_uuid_for_mtgjson_matched_rows(self, card_join):
-        # Use post-transform column names: MTGJson 'number' → 'collector_number',
-        # Scryfall 'set' → 'set_code' (transforms run before card_join in production).
-        mtgjson = pd.DataFrame(
-            {
-                "uuid": ["u1"],
-                "identifiers": [{"scryfall_id": "s1"}],
-                "name": ["CardA"],
-                "set_code": ["TST"],
-                "collector_number": ["1"],
-            }
-        )
-        scryfall = pd.DataFrame(
-            {"id": ["s1"], "set_code": ["TST"], "collector_number": ["1"]}
-        )
-        result = card_join.join(mtgjson, scryfall)
-        assert result.loc[result["uuid"] == "u1", "canonical_uuid"].iloc[0] == "u1"
-
-    def test_canonical_uuid_resolved_for_scryfall_only_language_variant(
-        self, card_join
-    ):
-        # English card matched to MTGJson; Japanese variant is Scryfall-only.
-        # Both share set_code=TST, collector_number=1 → canonical_uuid links to u1.
-        # Post-transform column names used (set_code, collector_number).
-        mtgjson = pd.DataFrame(
-            {
-                "uuid": ["u1"],
-                "identifiers": [{"scryfall_id": "s1-en"}],
-                "name": ["CardA"],
-                "set_code": ["TST"],
-                "collector_number": ["1"],
-            }
-        )
-        scryfall = pd.DataFrame(
-            {
-                "id": ["s1-en", "s1-ja"],
-                "set_code": ["TST", "TST"],
-                "collector_number": ["1", "1"],
-                "language": ["English", "Japanese"],
-            }
-        )
-        result = card_join.join(mtgjson, scryfall)
-        ja_row = result[result["scryfall_id"] == "s1-ja"].iloc[0]
-        assert pd.isna(ja_row["uuid"])
-        assert ja_row["canonical_uuid"] == "u1"
-
-    def test_canonical_uuid_null_for_scryfall_only_with_no_en_match(self, card_join):
-        # Digital-exclusive card — only in Scryfall, no MTGJson UUID anywhere with
-        # the same set+collector_number (because set "DIGT" has no paper MTGJson entry).
-        mtgjson = pd.DataFrame(
-            {
-                "uuid": ["u1"],
-                "identifiers": [{"scryfall_id": "s1"}],
-                "name": ["PaperCard"],
-                "set_code": ["TST"],
-                "collector_number": ["1"],
-            }
-        )
-        scryfall = pd.DataFrame(
-            {
-                "id": ["s1", "s-digital"],
-                "set_code": ["TST", "DIGT"],
-                "collector_number": ["1", "99"],
-                "language": ["English", "English"],
-            }
-        )
-        result = card_join.join(mtgjson, scryfall)
-        dig_row = result[result["scryfall_id"] == "s-digital"].iloc[0]
-        assert pd.isna(dig_row["canonical_uuid"])
-
-    def test_scryfall_only_row_name_filled_from_scryfall_fallback(self, card_join):
-        # Scryfall-only rows (no MTGJson match) should have their 'name' backfilled
-        # from the Scryfall 'name' column via _SCRYFALL_FALLBACK_MAP.
-        mtgjson = pd.DataFrame(
-            {
-                "uuid": ["u1"],
-                "identifiers": [{"scryfall_id": "s1"}],
-                "name": ["CardA"],
-            }
-        )
-        scryfall = pd.DataFrame(
-            {
-                "id": ["s1", "s2"],
-                "name": ["CardA", "CardB"],
-                "image_uris": ["img1", "img2"],
-            }
-        )
-        result = card_join.join(mtgjson, scryfall)
-        s2_row = result[result["scryfall_id"] == "s2"].iloc[0]
-        assert s2_row["name"] == "CardB"
-
-    def test_dfc_back_face_deduplicated_keeping_front(self, card_join):
-        # MTGJson stores DFC front and back as separate rows sharing the same scryfall_id.
-        # After join, only the front face (first row) should remain.
-        mtgjson = pd.DataFrame(
-            {
-                "uuid": ["u1-front", "u1-back"],
-                "identifiers": [{"scryfall_id": "s1"}, {"scryfall_id": "s1"}],
-                "name": ["CardFront", "CardBack"],
-            }
-        )
-        scryfall = pd.DataFrame({"id": ["s1"], "image_uris": ["img1"]})
-        result = card_join.join(mtgjson, scryfall)
-        s1_rows = result[result["scryfall_id"] == "s1"]
-        assert len(s1_rows) == 1
-        assert s1_rows.iloc[0]["uuid"] == "u1-front"
-
-
 # ---------------------------------------------------------------------------
 # populate / update (integration smoke tests)
 # ---------------------------------------------------------------------------
 
 
-_META_HISTORY_SOURCE_CONFIG = {
-    "drop_entries": {},
-    "drop_columns": [],
-    "json_columns": [],
-    "string_ops": {"id": ["strip"], "snapshot_date": ["strip"]},
-    "numeric_columns": [],
-    "list_operations": {},
-    "bool_columns": [],
-    "rename_columns": {},
-}
-
-
 def _make_storage_with_meta_bronze(
-    tmp_path: Path, rows: list[tuple[str, str]]
+    tmp_path: Path,
+    rows: list[tuple[str, str]],
 ) -> SilverStorage:
-    """SilverStorage whose config includes scryfall_meta_history and bronze has rows."""
-    config = {
-        **MINIMAL_CONFIG,
-        "sources": {"scryfall_meta_history": _META_HISTORY_SOURCE_CONFIG},
-    }
+    """SilverStorage with Bronze `bronze_scryfall_meta_history` populated.
+
+    Creates the full production Bronze schema; callers supply only
+    (id, snapshot_date) — remaining columns get sensible defaults.
+    """
+    config = {**MINIMAL_CONFIG, "sources": {}}
     config_path = tmp_path / "silver_config.json"
     config_path.write_text(json.dumps(config))
 
     bronze_path = str(tmp_path / "bronze.duckdb")
     con = duckdb.connect(bronze_path)
-    df = pd.DataFrame(rows, columns=["id", "snapshot_date"])
-    con.register("_df", df)
-    con.execute("CREATE TABLE bronze_scryfall_meta_history AS SELECT * FROM _df")
-    con.unregister("_df")
+    con.execute("""
+        CREATE TABLE bronze_scryfall_meta_history (
+            id            VARCHAR,
+            snapshot_date VARCHAR,
+            legalities    VARCHAR,
+            edhrec_rank   DOUBLE,
+            reserved      BOOLEAN,
+            promo_types   VARCHAR,
+            finishes      VARCHAR
+        )
+    """)
+    for id_, snap in rows:
+        con.execute(
+            "INSERT INTO bronze_scryfall_meta_history"
+            " VALUES (?, ?, NULL, NULL, false, '[]', '[]')",
+            [id_, snap],
+        )
     con.close()
-
     return SilverStorage(bronze_path, ":memory:", str(config_path))
+
+
+def _make_minimal_mtgjson_bronze(con: duckdb.DuckDBPyConnection) -> None:
+    """Create bronze_mtgjson_cards with the columns needed by _build_silver_cards_sql."""
+    con.execute("""
+        CREATE TABLE bronze_mtgjson_cards (
+            uuid           VARCHAR,
+            name           VARCHAR,
+            ascii_name     VARCHAR,
+            set_code       VARCHAR,
+            number         VARCHAR,
+            language       VARCHAR,
+            layout         VARCHAR,
+            mana_cost      VARCHAR,
+            mana_value     DOUBLE,
+            face_mana_value DOUBLE,
+            text           VARCHAR,
+            original_text  VARCHAR,
+            original_type  VARCHAR,
+            power          VARCHAR,
+            toughness      VARCHAR,
+            loyalty        VARCHAR,
+            defense        VARCHAR,
+            rarity         VARCHAR,
+            border_color   VARCHAR,
+            frame_version  VARCHAR,
+            watermark      VARCHAR,
+            security_stamp VARCHAR,
+            flavor_text    VARCHAR,
+            flavor_name    VARCHAR,
+            artist         VARCHAR,
+            printed_name   VARCHAR,
+            printed_text   VARCHAR,
+            face_name      VARCHAR,
+            side           VARCHAR,
+            edhrec_rank    DOUBLE,
+            edhrec_saltiness DOUBLE,
+            is_online_only BOOLEAN,
+            is_funny       BOOLEAN,
+            is_oversized   BOOLEAN,
+            is_reprint     BOOLEAN,
+            is_reserved    BOOLEAN,
+            is_promo       BOOLEAN,
+            is_full_art    BOOLEAN,
+            is_textless    BOOLEAN,
+            is_alternative BOOLEAN,
+            is_story_spotlight BOOLEAN,
+            is_timeshifted BOOLEAN,
+            is_rebalanced  BOOLEAN,
+            is_game_changer BOOLEAN,
+            has_alternative_deck_limit BOOLEAN,
+            has_content_warning BOOLEAN,
+            legalities     VARCHAR,
+            identifiers    VARCHAR,
+            colors         VARCHAR,
+            color_identity VARCHAR,
+            color_indicator VARCHAR,
+            produced_mana  VARCHAR,
+            printings      VARCHAR,
+            keywords       VARCHAR,
+            finishes       VARCHAR,
+            availability   VARCHAR,
+            frame_effects  VARCHAR,
+            booster_types  VARCHAR,
+            promo_types    VARCHAR,
+            rulings        VARCHAR,
+            artist_ids     VARCHAR,
+            other_face_ids VARCHAR,
+            card_parts     VARCHAR,
+            variations     VARCHAR
+        )
+    """)
+
+
+def _make_minimal_scryfall_bronze(con: duckdb.DuckDBPyConnection) -> None:
+    """Create bronze_scryfall_cards with the columns needed by _build_silver_cards_sql."""
+    con.execute("""
+        CREATE TABLE bronze_scryfall_cards (
+            id             VARCHAR,
+            oracle_id      VARCHAR,
+            name           VARCHAR,
+            lang           VARCHAR,
+            layout         VARCHAR,
+            mana_cost      VARCHAR,
+            cmc            DOUBLE,
+            oracle_text    VARCHAR,
+            type_line      VARCHAR,
+            power          VARCHAR,
+            toughness      VARCHAR,
+            loyalty        VARCHAR,
+            defense        VARCHAR,
+            artist         VARCHAR,
+            illustration_id VARCHAR,
+            border_color   VARCHAR,
+            collector_number VARCHAR,
+            flavor_name    VARCHAR,
+            flavor_text    VARCHAR,
+            frame          VARCHAR,
+            printed_name   VARCHAR,
+            printed_text   VARCHAR,
+            printed_type_line VARCHAR,
+            rarity         VARCHAR,
+            set            VARCHAR,
+            set_id         VARCHAR,
+            set_name       VARCHAR,
+            set_type       VARCHAR,
+            security_stamp VARCHAR,
+            watermark      VARCHAR,
+            scryfall_uri   VARCHAR,
+            tcgplayer_id   DOUBLE,
+            cardmarket_id  DOUBLE,
+            edhrec_rank    DOUBLE,
+            penny_rank     DOUBLE,
+            digital        BOOLEAN,
+            oversized      BOOLEAN,
+            reserved       BOOLEAN,
+            reprint        BOOLEAN,
+            promo          BOOLEAN,
+            full_art       BOOLEAN,
+            textless       BOOLEAN,
+            variation      BOOLEAN,
+            booster        BOOLEAN,
+            story_spotlight BOOLEAN,
+            game_changer   BOOLEAN,
+            legalities     VARCHAR,
+            color_identity VARCHAR,
+            color_indicator VARCHAR,
+            colors         VARCHAR,
+            produced_mana  VARCHAR,
+            keywords       VARCHAR,
+            finishes       VARCHAR,
+            frame_effects  VARCHAR,
+            games          VARCHAR,
+            promo_types    VARCHAR,
+            artist_ids     VARCHAR,
+            multiverse_ids VARCHAR,
+            all_parts      VARCHAR,
+            card_faces     VARCHAR
+        )
+    """)
+
+
+def _make_storage_with_cards_bronze(
+    tmp_path: Path,
+    mtgjson_rows: list[dict],
+    scryfall_rows: list[dict],
+) -> SilverStorage:
+    """SilverStorage with Bronze card tables populated for SQL path tests."""
+    config = {**MINIMAL_CONFIG, "sources": {}}
+    config_path = tmp_path / "silver_config.json"
+    config_path.write_text(json.dumps(config))
+
+    bronze_path = str(tmp_path / "bronze.duckdb")
+    con = duckdb.connect(bronze_path)
+    _make_minimal_mtgjson_bronze(con)
+    _make_minimal_scryfall_bronze(con)
+
+    for row in mtgjson_rows:
+        cols = ", ".join(row.keys())
+        placeholders = ", ".join(["?"] * len(row))
+        con.execute(
+            f"INSERT INTO bronze_mtgjson_cards ({cols}) VALUES ({placeholders})",
+            list(row.values()),
+        )
+    for row in scryfall_rows:
+        cols = ", ".join(row.keys())
+        placeholders = ", ".join(["?"] * len(row))
+        con.execute(
+            f"INSERT INTO bronze_scryfall_cards ({cols}) VALUES ({placeholders})",
+            list(row.values()),
+        )
+    con.close()
+    return SilverStorage(bronze_path, ":memory:", str(config_path))
+
+
+# Minimal dicts for test rows — only required columns; rest default to NULL/false
+_MTGJSON_ROW = {
+    "uuid": "uuid-a",
+    "name": "Lightning Bolt",
+    "set_code": "M10",
+    "number": "141",
+    "language": "English",
+    "layout": "normal",
+    "rarity": "common",
+    "is_online_only": False,
+    "is_funny": False,
+    "is_oversized": False,
+    "identifiers": '{"scryfall_id": "scryfall-a"}',
+    "legalities": '{"commander": "legal", "standard": "not_legal"}',
+    "colors": '["R"]',
+    "color_identity": '["R"]',
+    "finishes": '["nonfoil"]',
+}
+
+_SCRYFALL_ROW = {
+    "id": "scryfall-a",
+    "name": "Lightning Bolt",
+    "lang": "en",
+    "layout": "normal",
+    "rarity": "common",
+    "set": "m10",
+    "digital": False,
+    "oversized": False,
+    "legalities": '{"commander": "legal", "standard": "not_legal"}',
+    "colors": '["R"]',
+    "color_identity": '["R"]',
+    "finishes": '["nonfoil"]',
+}
 
 
 class TestPopulateUpdate:
     def test_populate_with_empty_sources_does_not_raise(self, tmp_path):
-        with patch.object(SilverStorage, "_write_report", create=True):
-            with _make_storage(tmp_path) as s:
-                s.populate()
+        with _make_storage(tmp_path) as s:
+            s.populate()
 
     def test_update_with_empty_sources_does_not_raise(self, tmp_path):
-        with patch.object(SilverStorage, "_write_report", create=True):
-            with _make_storage(tmp_path) as s:
-                s.update()
-
-    def test_pipeline_writes_meta_history_to_silver_meta_history(self, tmp_path):
-        with patch("src.data.cards.storage.silver.storage.write_report"):
-            with _make_storage_with_meta_bronze(
-                tmp_path, [("abc", "2026-05-11"), ("def", "2026-05-11")]
-            ) as s:
-                s.populate()
-                tables = {r[0] for r in s._silver_con.execute("SHOW TABLES").fetchall()}
-                assert "silver_meta_history" in tables
-                row = s._silver_con.execute(
-                    "SELECT count(*) FROM silver_meta_history"
-                ).fetchone()
-                assert row is not None and row[0] == 2
+        with _make_storage(tmp_path) as s:
+            s.update()
 
     def test_pipeline_does_not_create_silver_scryfall_meta_history(self, tmp_path):
-        with patch("src.data.cards.storage.silver.storage.write_report"):
-            with _make_storage_with_meta_bronze(tmp_path, [("abc", "2026-05-11")]) as s:
-                s.populate()
-                tables = {r[0] for r in s._silver_con.execute("SHOW TABLES").fetchall()}
-                assert "silver_scryfall_meta_history" not in tables
+        with _make_storage_with_meta_bronze(tmp_path, [("abc", "2026-05-11")]) as s:
+            s.populate()
+            tables = {r[0] for r in s._silver_con.execute("SHOW TABLES").fetchall()}
+            assert "silver_scryfall_meta_history" not in tables
 
-    def test_meta_history_filtered_to_ids_in_silver_cards(self, tmp_path):
-        # meta_df has two IDs; _join_cards is patched to return a cards_df that
-        # only contains one of them — the other should be excluded from silver_meta_history.
-        with patch("src.data.cards.storage.silver.storage.write_report"):
-            s = _make_storage_with_meta_bronze(
-                tmp_path,
-                [("id-keep", "2026-05-11"), ("id-drop", "2026-05-11")],
+
+class TestAppendMetaHistorySql:
+    """Unit tests for SilverStorage._append_meta_history_sql."""
+
+    def test_creates_silver_meta_history_table(self, tmp_path):
+        with _make_storage_with_meta_bronze(tmp_path, [("abc", "2026-06-20")]) as s:
+            s.populate()
+            tables = {r[0] for r in s._silver_con.execute("SHOW TABLES").fetchall()}
+            assert "silver_meta_history" in tables
+
+    def test_trims_id_and_snapshot_date(self, tmp_path):
+        bronze_path = str(tmp_path / "bronze.duckdb")
+        con = duckdb.connect(bronze_path)
+        con.execute("""
+            CREATE TABLE bronze_scryfall_meta_history (
+                id VARCHAR, snapshot_date VARCHAR, legalities VARCHAR,
+                edhrec_rank DOUBLE, reserved BOOLEAN, promo_types VARCHAR, finishes VARCHAR
             )
-            cards_mock = pd.DataFrame({"scryfall_id": ["id-keep"]})
-            with s, patch.object(s, "_join_cards", return_value=cards_mock):
-                s.populate()
-                row = s._silver_con.execute(
-                    "SELECT count(*) FROM silver_meta_history"
-                ).fetchone()
-                assert row is not None and row[0] == 1
-                kept = s._silver_con.execute(
-                    "SELECT id FROM silver_meta_history"
-                ).fetchone()
-                assert kept is not None and kept[0] == "id-keep"
+        """)
+        con.execute(
+            "INSERT INTO bronze_scryfall_meta_history VALUES (?, ?, NULL, NULL, false, '[]', '[]')",
+            ["  abc  ", " 2026-06-20 "],
+        )
+        con.close()
+        config_path = tmp_path / "cfg.json"
+        config_path.write_text(json.dumps({**MINIMAL_CONFIG, "sources": {}}))
+        with SilverStorage(bronze_path, ":memory:", str(config_path)) as s:
+            s._append_meta_history_sql()
+            row = s._silver_con.execute(
+                "SELECT id, snapshot_date FROM silver_meta_history"
+            ).fetchone()
+            assert row == ("abc", "2026-06-20")
+
+    def test_casts_edhrec_rank_to_integer(self, tmp_path):
+        bronze_path = str(tmp_path / "bronze.duckdb")
+        con = duckdb.connect(bronze_path)
+        con.execute("""
+            CREATE TABLE bronze_scryfall_meta_history (
+                id VARCHAR, snapshot_date VARCHAR, legalities VARCHAR,
+                edhrec_rank DOUBLE, reserved BOOLEAN, promo_types VARCHAR, finishes VARCHAR
+            )
+        """)
+        con.execute(
+            "INSERT INTO bronze_scryfall_meta_history VALUES (?, ?, NULL, ?, false, '[]', '[]')",
+            ["x", "2026-06-20", 42.0],
+        )
+        con.close()
+        config_path = tmp_path / "cfg.json"
+        config_path.write_text(json.dumps({**MINIMAL_CONFIG, "sources": {}}))
+        with SilverStorage(bronze_path, ":memory:", str(config_path)) as s:
+            s._append_meta_history_sql()
+            row = s._silver_con.execute(
+                "SELECT edhrec_rank FROM silver_meta_history"
+            ).fetchone()
+            assert row is not None and row[0] == 42
+
+    def test_renames_reserved_to_is_reserved_and_fills_nulls(self, tmp_path):
+        bronze_path = str(tmp_path / "bronze.duckdb")
+        con = duckdb.connect(bronze_path)
+        con.execute("""
+            CREATE TABLE bronze_scryfall_meta_history (
+                id VARCHAR, snapshot_date VARCHAR, legalities VARCHAR,
+                edhrec_rank DOUBLE, reserved BOOLEAN, promo_types VARCHAR, finishes VARCHAR
+            )
+        """)
+        con.execute(
+            "INSERT INTO bronze_scryfall_meta_history VALUES (?, ?, NULL, NULL, ?, '[]', '[]')",
+            ["a", "2026-06-20", None],
+        )
+        con.execute(
+            "INSERT INTO bronze_scryfall_meta_history VALUES (?, ?, NULL, NULL, ?, '[]', '[]')",
+            ["b", "2026-06-20", True],
+        )
+        con.close()
+        config_path = tmp_path / "cfg.json"
+        config_path.write_text(json.dumps({**MINIMAL_CONFIG, "sources": {}}))
+        with SilverStorage(bronze_path, ":memory:", str(config_path)) as s:
+            s._append_meta_history_sql()
+            cols = [
+                r[0]
+                for r in s._silver_con.execute(
+                    "DESCRIBE silver_meta_history"
+                ).fetchall()
+            ]
+            assert "is_reserved" in cols
+            assert "reserved" not in cols
+            rows = dict(
+                s._silver_con.execute(
+                    "SELECT id, is_reserved FROM silver_meta_history ORDER BY id"
+                ).fetchall()
+            )
+            assert rows == {"a": False, "b": True}
+
+    def test_lowercases_promo_types_and_fills_null_finishes(self, tmp_path):
+        bronze_path = str(tmp_path / "bronze.duckdb")
+        con = duckdb.connect(bronze_path)
+        con.execute("""
+            CREATE TABLE bronze_scryfall_meta_history (
+                id VARCHAR, snapshot_date VARCHAR, legalities VARCHAR,
+                edhrec_rank DOUBLE, reserved BOOLEAN, promo_types VARCHAR, finishes VARCHAR
+            )
+        """)
+        con.execute(
+            "INSERT INTO bronze_scryfall_meta_history VALUES (?, ?, NULL, NULL, false, ?, ?)",
+            ["x", "2026-06-20", '["Nonfoil","Foil"]', None],
+        )
+        con.close()
+        config_path = tmp_path / "cfg.json"
+        config_path.write_text(json.dumps({**MINIMAL_CONFIG, "sources": {}}))
+        with SilverStorage(bronze_path, ":memory:", str(config_path)) as s:
+            s._append_meta_history_sql()
+            row = s._silver_con.execute(
+                "SELECT promo_types, finishes FROM silver_meta_history"
+            ).fetchone()
+            assert row is not None
+            assert row[0] == '["nonfoil","foil"]'
+            assert row[1] == "[]"
+
+    def test_skips_duplicate_id_snapshot_date_pairs(self, tmp_path):
+        with _make_storage_with_meta_bronze(tmp_path, [("abc", "2026-06-20")]) as s:
+            s.populate()
+            s._append_meta_history_sql()  # second call must not insert duplicate
+            row = s._silver_con.execute(
+                "SELECT count(*) FROM silver_meta_history"
+            ).fetchone()
+            assert row is not None and row[0] == 1
+
+    def test_filters_to_ids_in_silver_cards(self, tmp_path):
+        s = _make_storage_with_meta_bronze(
+            tmp_path,
+            [("id-keep", "2026-06-20"), ("id-drop", "2026-06-20")],
+        )
+        with s:
+            # Pre-seed silver_cards with only "id-keep" so that _append_meta_history_sql
+            # filters meta rows to ids present in silver_cards.
+            s._silver_con.execute("CREATE TABLE silver_cards (scryfall_id VARCHAR)")
+            s._silver_con.execute("INSERT INTO silver_cards VALUES ('id-keep')")
+            s._append_meta_history_sql()
+            row = s._silver_con.execute(
+                "SELECT count(*) FROM silver_meta_history"
+            ).fetchone()
+            assert row is not None and row[0] == 1
+            kept = s._silver_con.execute(
+                "SELECT id FROM silver_meta_history"
+            ).fetchone()
+            assert kept is not None and kept[0] == "id-keep"
+
+    def test_writes_all_rows_when_silver_cards_absent(self, tmp_path):
+        with _make_storage_with_meta_bronze(
+            tmp_path, [("abc", "2026-06-20"), ("def", "2026-06-20")]
+        ) as s:
+            s._append_meta_history_sql()
+            row = s._silver_con.execute(
+                "SELECT count(*) FROM silver_meta_history"
+            ).fetchone()
+            assert row is not None and row[0] == 2
 
 
 # ---------------------------------------------------------------------------
 # Helpers for SilverPriceBuilder tests
 # ---------------------------------------------------------------------------
 
-_SCRYFALL_PRICES_JSON = json.dumps(
-    {"eur": 3.20, "eur_foil": 8.50, "usd": 3.50, "usd_foil": 9.00, "tix": 0.05}
-)
+_SCRYFALL_PRICE_COLS = {
+    "eur": 3.20,
+    "eur_foil": 8.50,
+    "usd": 3.50,
+    "usd_foil": 9.00,
+    "tix": 0.05,
+}
 
-_MTGJSON_PAPER_JSON = json.dumps(
-    {
-        "cardmarket": {
-            "retail": {"normal": {"2026-05-11": 3.20}, "foil": {"2026-05-11": 8.50}},
-            "buylist": {"normal": {"2026-05-11": 1.80}},
-        },
-        "tcgplayer": {
-            "retail": {"normal": {"2026-05-11": 3.50}, "foil": {"2026-05-11": 9.00}},
-            "buylist": {"normal": {"2026-05-11": 2.10}},
-        },
-    }
-)
+
+def _scryfall_hist(*ids_and_dates: tuple[str, str]) -> pd.DataFrame:
+    """Build a bronze_scryfall_prices_history DataFrame with scalar price columns."""
+    ids, dates = zip(*ids_and_dates) if ids_and_dates else ([], [])
+    n = len(ids)
+    return pd.DataFrame(
+        {
+            "id": list(ids),
+            "snapshot_date": list(dates),
+            "eur": [3.20] * n,
+            "eur_foil": [8.50] * n,
+            "usd": [3.50] * n,
+            "usd_foil": [9.00] * n,
+            "tix": [0.05] * n,
+        }
+    )
+
+
+def _mtgjson_eav_hist(*uuids_and_dates: tuple[str, str]) -> pd.DataFrame:
+    """Build a bronze_mtgjson_prices_history EAV DataFrame with 6 price rows per card."""
+    rows: list[dict] = []
+    combos = [
+        ("cardmarket", "retail", "normal", 3.20),
+        ("cardmarket", "retail", "foil", 8.50),
+        ("cardmarket", "buylist", "normal", 1.80),
+        ("tcgplayer", "retail", "normal", 3.50),
+        ("tcgplayer", "retail", "foil", 9.00),
+        ("tcgplayer", "buylist", "normal", 2.10),
+        ("cardkingdom", "retail", "normal", 12.00),
+        ("cardkingdom", "retail", "foil", 28.00),
+        ("cardkingdom", "buylist", "normal", 6.50),
+        ("cardkingdom", "buylist", "foil", 15.00),
+        ("manapool", "retail", "normal", 11.75),
+        ("manapool", "retail", "foil", 26.50),
+    ]
+    for uuid, date in uuids_and_dates:
+        for retailer, tx_type, finish, price in combos:
+            rows.append(
+                {
+                    "uuid": uuid,
+                    "snapshot_date": date,
+                    "retailer": retailer,
+                    "tx_type": tx_type,
+                    "finish": finish,
+                    "price": price,
+                }
+            )
+    return (
+        pd.DataFrame(rows)
+        if rows
+        else pd.DataFrame(
+            columns=["uuid", "snapshot_date", "retailer", "tx_type", "finish", "price"]
+        )
+    )
 
 
 def _make_storage_with_bronze(
@@ -883,15 +568,9 @@ def _seed_silver_cards(storage: SilverStorage, rows: list[tuple]) -> None:
 
 class TestSilverPriceBuilder:
     def test_returns_empty_dataframe_when_silver_cards_missing(self, tmp_path):
-        scryfall_hist = pd.DataFrame(
-            {
-                "id": ["s1"],
-                "snapshot_date": ["2026-05-11"],
-                "prices": [_SCRYFALL_PRICES_JSON],
-            }
-        )
         with _make_storage_with_bronze(
-            tmp_path, {"bronze_scryfall_prices_history": scryfall_hist}
+            tmp_path,
+            {"bronze_scryfall_prices_history": _scryfall_hist(("s1", "2026-05-11"))},
         ) as s:
             result = s._prices.build("2026-05-11")
             assert result.empty
@@ -905,25 +584,13 @@ class TestSilverPriceBuilder:
             assert result.empty
 
     def test_happy_path_both_sources_present(self, tmp_path):
-        scryfall_hist = pd.DataFrame(
-            {
-                "id": ["s1"],
-                "snapshot_date": ["2026-05-11"],
-                "prices": [_SCRYFALL_PRICES_JSON],
-            }
-        )
-        mtgjson_hist = pd.DataFrame(
-            {
-                "uuid": ["u1"],
-                "snapshot_date": ["2026-05-11"],
-                "paper": [_MTGJSON_PAPER_JSON],
-            }
-        )
         with _make_storage_with_bronze(
             tmp_path,
             {
-                "bronze_scryfall_prices_history": scryfall_hist,
-                "bronze_mtgjson_prices_history": mtgjson_hist,
+                "bronze_scryfall_prices_history": _scryfall_hist(("s1", "2026-05-11")),
+                "bronze_mtgjson_prices_history": _mtgjson_eav_hist(
+                    ("u1", "2026-05-11")
+                ),
             },
         ) as s:
             _seed_silver_cards(s, [("u1", "s1")])
@@ -938,16 +605,31 @@ class TestSilverPriceBuilder:
             assert row["cardmarket_buylist_eur"] == pytest.approx(1.80)
             assert row["tcgplayer_usd"] == pytest.approx(3.50)
 
-    def test_happy_path_has_all_expected_columns(self, tmp_path):
-        scryfall_hist = pd.DataFrame(
-            {
-                "id": ["s1"],
-                "snapshot_date": ["2026-05-11"],
-                "prices": [_SCRYFALL_PRICES_JSON],
-            }
-        )
+    def test_new_retailer_prices_are_captured(self, tmp_path):
         with _make_storage_with_bronze(
-            tmp_path, {"bronze_scryfall_prices_history": scryfall_hist}
+            tmp_path,
+            {
+                "bronze_scryfall_prices_history": _scryfall_hist(("s1", "2026-05-11")),
+                "bronze_mtgjson_prices_history": _mtgjson_eav_hist(
+                    ("u1", "2026-05-11")
+                ),
+            },
+        ) as s:
+            _seed_silver_cards(s, [("u1", "s1")])
+            result = s._prices.build("2026-05-11")
+
+            row = result.iloc[0]
+            assert row["cardkingdom_usd"] == pytest.approx(12.00)
+            assert row["cardkingdom_usd_foil"] == pytest.approx(28.00)
+            assert row["cardkingdom_buylist_usd"] == pytest.approx(6.50)
+            assert row["cardkingdom_buylist_usd_foil"] == pytest.approx(15.00)
+            assert row["manapool_usd"] == pytest.approx(11.75)
+            assert row["manapool_usd_foil"] == pytest.approx(26.50)
+
+    def test_happy_path_has_all_expected_columns(self, tmp_path):
+        with _make_storage_with_bronze(
+            tmp_path,
+            {"bronze_scryfall_prices_history": _scryfall_hist(("s1", "2026-05-11"))},
         ) as s:
             _seed_silver_cards(s, [("u1", "s1")])
             result = s._prices.build("2026-05-11")
@@ -966,19 +648,19 @@ class TestSilverPriceBuilder:
                 "tcgplayer_usd",
                 "tcgplayer_usd_foil",
                 "tcgplayer_buylist_usd",
+                "cardkingdom_usd",
+                "cardkingdom_usd_foil",
+                "cardkingdom_buylist_usd",
+                "cardkingdom_buylist_usd_foil",
+                "manapool_usd",
+                "manapool_usd_foil",
             ]
             assert list(result.columns) == expected_columns
 
     def test_mtgjson_missing_fills_columns_with_none(self, tmp_path):
-        scryfall_hist = pd.DataFrame(
-            {
-                "id": ["s1"],
-                "snapshot_date": ["2026-05-11"],
-                "prices": [_SCRYFALL_PRICES_JSON],
-            }
-        )
         with _make_storage_with_bronze(
-            tmp_path, {"bronze_scryfall_prices_history": scryfall_hist}
+            tmp_path,
+            {"bronze_scryfall_prices_history": _scryfall_hist(("s1", "2026-05-11"))},
         ) as s:
             _seed_silver_cards(s, [("u1", "s1")])
             result = s._prices.build("2026-05-11")
@@ -988,15 +670,13 @@ class TestSilverPriceBuilder:
             assert pd.isna(result.iloc[0]["tcgplayer_usd"])
 
     def test_scryfall_card_with_no_silver_match_is_dropped(self, tmp_path):
-        scryfall_hist = pd.DataFrame(
-            {
-                "id": ["s1", "s-no-match"],
-                "snapshot_date": ["2026-05-11", "2026-05-11"],
-                "prices": [_SCRYFALL_PRICES_JSON, _SCRYFALL_PRICES_JSON],
-            }
-        )
         with _make_storage_with_bronze(
-            tmp_path, {"bronze_scryfall_prices_history": scryfall_hist}
+            tmp_path,
+            {
+                "bronze_scryfall_prices_history": _scryfall_hist(
+                    ("s1", "2026-05-11"), ("s-no-match", "2026-05-11")
+                )
+            },
         ) as s:
             _seed_silver_cards(s, [("u1", "s1")])
             result = s._prices.build("2026-05-11")
@@ -1005,25 +685,13 @@ class TestSilverPriceBuilder:
             assert result.iloc[0]["scryfall_id"] == "s1"
 
     def test_mtgjson_card_with_no_scryfall_history_row_is_excluded(self, tmp_path):
-        scryfall_hist = pd.DataFrame(
-            {
-                "id": ["s1"],
-                "snapshot_date": ["2026-05-11"],
-                "prices": [_SCRYFALL_PRICES_JSON],
-            }
-        )
-        mtgjson_hist = pd.DataFrame(
-            {
-                "uuid": ["u1", "u-no-scryfall"],
-                "snapshot_date": ["2026-05-11", "2026-05-11"],
-                "paper": [_MTGJSON_PAPER_JSON, _MTGJSON_PAPER_JSON],
-            }
-        )
         with _make_storage_with_bronze(
             tmp_path,
             {
-                "bronze_scryfall_prices_history": scryfall_hist,
-                "bronze_mtgjson_prices_history": mtgjson_hist,
+                "bronze_scryfall_prices_history": _scryfall_hist(("s1", "2026-05-11")),
+                "bronze_mtgjson_prices_history": _mtgjson_eav_hist(
+                    ("u1", "2026-05-11"), ("u-no-scryfall", "2026-05-11")
+                ),
             },
         ) as s:
             _seed_silver_cards(s, [("u1", "s1"), ("u-no-scryfall", None)])
@@ -1033,15 +701,13 @@ class TestSilverPriceBuilder:
             assert result.iloc[0]["uuid"] == "u1"
 
     def test_build_ignores_bronze_rows_from_other_dates(self, tmp_path):
-        scryfall_hist = pd.DataFrame(
-            {
-                "id": ["s1", "s1"],
-                "snapshot_date": ["2026-05-10", "2026-05-11"],
-                "prices": [_SCRYFALL_PRICES_JSON, _SCRYFALL_PRICES_JSON],
-            }
-        )
         with _make_storage_with_bronze(
-            tmp_path, {"bronze_scryfall_prices_history": scryfall_hist}
+            tmp_path,
+            {
+                "bronze_scryfall_prices_history": _scryfall_hist(
+                    ("s1", "2026-05-10"), ("s1", "2026-05-11")
+                )
+            },
         ) as s:
             _seed_silver_cards(s, [("u1", "s1")])
             result = s._prices.build("2026-05-11")
@@ -1055,15 +721,13 @@ class TestSilverPriceBuilder:
         # but (set_code, collector_number) resolved canonical_uuid="u1".
         # The card's current Scryfall ID "s-stale" has real prices and must be
         # included in silver_prices_history under canonical_uuid.
-        scryfall_hist = pd.DataFrame(
-            {
-                "id": ["s-stale"],
-                "snapshot_date": ["2026-05-11"],
-                "prices": [_SCRYFALL_PRICES_JSON],
-            }
-        )
         with _make_storage_with_bronze(
-            tmp_path, {"bronze_scryfall_prices_history": scryfall_hist}
+            tmp_path,
+            {
+                "bronze_scryfall_prices_history": _scryfall_hist(
+                    ("s-stale", "2026-05-11")
+                )
+            },
         ) as s:
             # uuid=None forces COALESCE path; canonical_uuid resolves to "u1"
             _seed_silver_cards(s, [(None, "s-stale", "u1", "English")])
@@ -1078,15 +742,13 @@ class TestSilverPriceBuilder:
         # Non-English language variants (uuid=NULL, canonical_uuid=NOT NULL, language≠English)
         # must NOT appear in the main price history — they are handled by
         # build_language_prices to avoid duplicating the canonical card's prices.
-        scryfall_hist = pd.DataFrame(
-            {
-                "id": ["s1-en", "s1-ja"],
-                "snapshot_date": ["2026-05-11", "2026-05-11"],
-                "prices": [_SCRYFALL_PRICES_JSON, _SCRYFALL_PRICES_JSON],
-            }
-        )
         with _make_storage_with_bronze(
-            tmp_path, {"bronze_scryfall_prices_history": scryfall_hist}
+            tmp_path,
+            {
+                "bronze_scryfall_prices_history": _scryfall_hist(
+                    ("s1-en", "2026-05-11"), ("s1-ja", "2026-05-11")
+                )
+            },
         ) as s:
             _seed_silver_cards(s, [("u1", "s1-en")])
             _seed_silver_language_variant_cards(s, [("s1-ja", "u1", "Japanese")])
@@ -1386,31 +1048,18 @@ def _seed_silver_language_variant_cards(
 
 class TestBuildLanguagePrices:
     def test_returns_empty_when_silver_cards_missing(self, tmp_path):
-        scryfall_hist = pd.DataFrame(
-            {
-                "id": ["s1-ja"],
-                "snapshot_date": ["2026-05-11"],
-                "prices": [_SCRYFALL_PRICES_JSON],
-            }
-        )
         with _make_storage_with_bronze(
-            tmp_path, {"bronze_scryfall_prices_history": scryfall_hist}
+            tmp_path,
+            {"bronze_scryfall_prices_history": _scryfall_hist(("s1-ja", "2026-05-11"))},
         ) as s:
             result = s._prices.build_language_prices("2026-05-11")
             assert result.empty
 
     def test_returns_empty_when_no_language_variant_cards(self, tmp_path):
-        scryfall_hist = pd.DataFrame(
-            {
-                "id": ["s1"],
-                "snapshot_date": ["2026-05-11"],
-                "prices": [_SCRYFALL_PRICES_JSON],
-            }
-        )
         with _make_storage_with_bronze(
             tmp_path,
             {
-                "bronze_scryfall_prices_history": scryfall_hist,
+                "bronze_scryfall_prices_history": _scryfall_hist(("s1", "2026-05-11")),
                 "bronze_scryfall_cards": pd.DataFrame({"id": ["s1"], "lang": ["en"]}),
             },
         ) as s:
@@ -1420,17 +1069,12 @@ class TestBuildLanguagePrices:
             assert result.empty
 
     def test_happy_path_language_variant_gets_prices(self, tmp_path):
-        scryfall_hist = pd.DataFrame(
-            {
-                "id": ["s1-ja"],
-                "snapshot_date": ["2026-05-11"],
-                "prices": [_SCRYFALL_PRICES_JSON],
-            }
-        )
         with _make_storage_with_bronze(
             tmp_path,
             {
-                "bronze_scryfall_prices_history": scryfall_hist,
+                "bronze_scryfall_prices_history": _scryfall_hist(
+                    ("s1-ja", "2026-05-11")
+                ),
                 "bronze_scryfall_cards": pd.DataFrame(
                     {"id": ["s1-ja"], "lang": ["ja"]}
                 ),
@@ -1447,17 +1091,12 @@ class TestBuildLanguagePrices:
             assert row["eur"] == pytest.approx(3.20)
 
     def test_has_expected_columns(self, tmp_path):
-        scryfall_hist = pd.DataFrame(
-            {
-                "id": ["s1-ja"],
-                "snapshot_date": ["2026-05-11"],
-                "prices": [_SCRYFALL_PRICES_JSON],
-            }
-        )
         with _make_storage_with_bronze(
             tmp_path,
             {
-                "bronze_scryfall_prices_history": scryfall_hist,
+                "bronze_scryfall_prices_history": _scryfall_hist(
+                    ("s1-ja", "2026-05-11")
+                ),
                 "bronze_scryfall_cards": pd.DataFrame(
                     {"id": ["s1-ja"], "lang": ["ja"]}
                 ),
@@ -1480,17 +1119,12 @@ class TestBuildLanguagePrices:
 
     def test_english_card_scryfall_id_not_included(self, tmp_path):
         # English card has uuid NOT NULL — must not appear in language prices
-        scryfall_hist = pd.DataFrame(
-            {
-                "id": ["s1-en", "s1-ja"],
-                "snapshot_date": ["2026-05-11", "2026-05-11"],
-                "prices": [_SCRYFALL_PRICES_JSON, _SCRYFALL_PRICES_JSON],
-            }
-        )
         with _make_storage_with_bronze(
             tmp_path,
             {
-                "bronze_scryfall_prices_history": scryfall_hist,
+                "bronze_scryfall_prices_history": _scryfall_hist(
+                    ("s1-en", "2026-05-11"), ("s1-ja", "2026-05-11")
+                ),
                 "bronze_scryfall_cards": pd.DataFrame(
                     {"id": ["s1-en", "s1-ja"], "lang": ["en", "ja"]}
                 ),
@@ -1505,29 +1139,38 @@ class TestBuildLanguagePrices:
 
 
 # ---------------------------------------------------------------------------
-# SilverStorage._pipeline — oracle ID name conflict check (EDA-01 §7)
+# SilverStorage._check_oracle_id_conflicts — oracle ID name conflict check (EDA-01 §7)
 # ---------------------------------------------------------------------------
 
 
 class TestOracleIdConflictCheck:
-    def test_no_warning_when_all_names_have_unique_oracle_id(self, tmp_path, caplog):
-        cards_mock = pd.DataFrame(
-            {
-                "scryfall_id": ["s1", "s2"],
-                "name": ["CardA", "CardB"],
-                "oracle_id": ["o1", "o2"],
-            }
+    def _seed_silver_cards_with_oracle(
+        self, storage: SilverStorage, rows: list[dict]
+    ) -> None:
+        """Create silver_cards with name and oracle_id columns for conflict tests."""
+        storage._silver_con.execute(
+            "CREATE TABLE silver_cards (scryfall_id VARCHAR, name VARCHAR, oracle_id VARCHAR)"
         )
+        for row in rows:
+            storage._silver_con.execute(
+                "INSERT INTO silver_cards VALUES (?, ?, ?)",
+                [row["scryfall_id"], row["name"], row["oracle_id"]],
+            )
+
+    def test_no_warning_when_all_names_have_unique_oracle_id(self, tmp_path, caplog):
         with _make_storage(tmp_path) as s:
-            with (
-                patch.object(s, "_join_cards", return_value=cards_mock),
-                patch("src.data.cards.storage.silver.storage.write_report"),
-                caplog.at_level(
-                    logging.INFO,
-                    logger="src.data.cards.storage.silver.storage",
-                ),
+            self._seed_silver_cards_with_oracle(
+                s,
+                [
+                    {"scryfall_id": "s1", "name": "CardA", "oracle_id": "o1"},
+                    {"scryfall_id": "s2", "name": "CardB", "oracle_id": "o2"},
+                ],
+            )
+            with caplog.at_level(
+                logging.INFO,
+                logger="src.data.cards.storage.silver.storage",
             ):
-                s.populate()
+                s._check_oracle_id_conflicts()
 
         warning_records = [
             r
@@ -1540,23 +1183,19 @@ class TestOracleIdConflictCheck:
         self, tmp_path, caplog
     ):
         # "Fire // Ice" appears with two different oracle_ids — split card regression.
-        cards_mock = pd.DataFrame(
-            {
-                "scryfall_id": ["s1", "s2"],
-                "name": ["Fire // Ice", "Fire // Ice"],
-                "oracle_id": ["o1", "o2"],
-            }
-        )
         with _make_storage(tmp_path) as s:
-            with (
-                patch.object(s, "_join_cards", return_value=cards_mock),
-                patch("src.data.cards.storage.silver.storage.write_report"),
-                caplog.at_level(
-                    logging.WARNING,
-                    logger="src.data.cards.storage.silver.storage",
-                ),
+            self._seed_silver_cards_with_oracle(
+                s,
+                [
+                    {"scryfall_id": "s1", "name": "Fire // Ice", "oracle_id": "o1"},
+                    {"scryfall_id": "s2", "name": "Fire // Ice", "oracle_id": "o2"},
+                ],
+            )
+            with caplog.at_level(
+                logging.WARNING,
+                logger="src.data.cards.storage.silver.storage",
             ):
-                s.populate()
+                s._check_oracle_id_conflicts()
 
         warning_records = [
             r
@@ -1565,6 +1204,34 @@ class TestOracleIdConflictCheck:
         ]
         assert len(warning_records) == 1
         assert "Fire // Ice" in warning_records[0].message
+
+    def test_warning_reports_true_count_beyond_five_examples(self, tmp_path, caplog):
+        # 7 conflicting names exist; the old LIMIT 5 in the query truncated the
+        # list before Python counted it, so the log always said "5" regardless
+        # of the true total.
+        with _make_storage(tmp_path) as s:
+            rows = []
+            for i in range(7):
+                rows.append(
+                    {"scryfall_id": f"s{i}a", "name": f"Card{i}", "oracle_id": f"o{i}a"}
+                )
+                rows.append(
+                    {"scryfall_id": f"s{i}b", "name": f"Card{i}", "oracle_id": f"o{i}b"}
+                )
+            self._seed_silver_cards_with_oracle(s, rows)
+            with caplog.at_level(
+                logging.WARNING,
+                logger="src.data.cards.storage.silver.storage",
+            ):
+                s._check_oracle_id_conflicts()
+
+        warning_records = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "Oracle ID conflict" in r.message
+        ]
+        assert len(warning_records) == 1
+        assert "7 name(s)" in warning_records[0].message
 
 
 # ---------------------------------------------------------------------------
@@ -1734,81 +1401,287 @@ class TestSilverWriterIncremental:
             writer.upsert(df, "cards", "uuid")
 
 
-# ---------------------------------------------------------------------------
-# SilverTransforms._extract_legality_features
-# ---------------------------------------------------------------------------
+class TestBuildSilverCardsSql:
+    """Unit tests for SilverStorage._build_silver_cards_sql."""
 
+    def test_creates_silver_cards_table(self, tmp_path):
+        with _make_storage_with_cards_bronze(
+            tmp_path, [_MTGJSON_ROW], [_SCRYFALL_ROW]
+        ) as s:
+            s._build_silver_cards_sql()
+            tables = {r[0] for r in s._silver_con.execute("SHOW TABLES").fetchall()}
+            assert "silver_cards" in tables
 
-class TestExtractLegalityFeatures:
-    """SilverTransforms._extract_legality_features produces scalar columns."""
-
-    @pytest.fixture
-    def t(self) -> SilverTransforms:
-        return SilverTransforms(
-            language_map={},
-            legality_map={},
-            supertypes=[],
-            card_types=[],
-        )
-
-    def test_extracts_is_commander_legal_true(self, t):
-        df = pd.DataFrame({"legalities": [{"commander": "legal"}]})
-        result = t._extract_legality_features(df, [])
-        assert result["is_commander_legal"].iloc[0] is True
-
-    def test_extracts_is_commander_legal_false(self, t):
-        df = pd.DataFrame({"legalities": [{"commander": "not_legal"}]})
-        result = t._extract_legality_features(df, [])
-        assert result["is_commander_legal"].iloc[0] is False
-
-    def test_extracts_all_four_format_columns(self, t):
-        df = pd.DataFrame(
-            {
-                "legalities": [
-                    {
-                        "commander": "legal",
-                        "standard": "legal",
-                        "modern": "not_legal",
-                        "legacy": "legal",
-                    }
-                ]
+    def test_filters_out_is_online_only_mtgjson_rows(self, tmp_path):
+        online_row = {
+            **_MTGJSON_ROW,
+            "uuid": "uuid-online",
+            "is_online_only": True,
+            "identifiers": '{"scryfall_id": "scryfall-online"}',
+        }
+        scryfall_online = {**_SCRYFALL_ROW, "id": "scryfall-online"}
+        with _make_storage_with_cards_bronze(
+            tmp_path,
+            [_MTGJSON_ROW, online_row],
+            [_SCRYFALL_ROW, scryfall_online],
+        ) as s:
+            s._build_silver_cards_sql()
+            uuids = {
+                r[0]
+                for r in s._silver_con.execute(
+                    "SELECT uuid FROM silver_cards WHERE uuid IS NOT NULL"
+                ).fetchall()
             }
-        )
-        result = t._extract_legality_features(df, [])
-        assert result["is_commander_legal"].iloc[0] is True
-        assert result["is_standard_legal"].iloc[0] is True
-        assert result["is_modern_legal"].iloc[0] is False
-        assert result["is_legacy_legal"].iloc[0] is True
+            assert "uuid-a" in uuids
+            assert "uuid-online" not in uuids
 
-    def test_format_count_sums_all_legal_formats(self, t):
-        df = pd.DataFrame(
-            {
-                "legalities": [
-                    {
-                        "commander": "legal",
-                        "modern": "legal",
-                        "standard": "not_legal",
-                        "vintage": "legal",
-                    }
-                ]
+    def test_filters_out_digital_scryfall_rows(self, tmp_path):
+        digital_scryfall = {**_SCRYFALL_ROW, "id": "scryfall-digital", "digital": True}
+        with _make_storage_with_cards_bronze(
+            tmp_path, [_MTGJSON_ROW], [_SCRYFALL_ROW, digital_scryfall]
+        ) as s:
+            s._build_silver_cards_sql()
+            ids = {
+                r[0]
+                for r in s._silver_con.execute(
+                    "SELECT scryfall_id FROM silver_cards"
+                ).fetchall()
             }
-        )
-        result = t._extract_legality_features(df, [])
-        assert result["format_count"].iloc[0] == 3
+            assert "scryfall-digital" not in ids
 
-    def test_drops_legalities_column(self, t):
-        df = pd.DataFrame({"legalities": [{"commander": "legal"}]})
-        result = t._extract_legality_features(df, [])
-        assert "legalities" not in result.columns
+    def test_filters_out_token_layout_scryfall_rows(self, tmp_path):
+        token_scryfall = {**_SCRYFALL_ROW, "id": "scryfall-token", "layout": "token"}
+        with _make_storage_with_cards_bronze(
+            tmp_path, [_MTGJSON_ROW], [_SCRYFALL_ROW, token_scryfall]
+        ) as s:
+            s._build_silver_cards_sql()
+            ids = {
+                r[0]
+                for r in s._silver_con.execute(
+                    "SELECT scryfall_id FROM silver_cards"
+                ).fetchall()
+            }
+            assert "scryfall-token" not in ids
 
-    def test_none_legalities_produces_false_and_zero(self, t):
-        df = pd.DataFrame({"legalities": [None]})
-        result = t._extract_legality_features(df, [])
-        assert result["is_commander_legal"].iloc[0] is False
-        assert result["format_count"].iloc[0] == 0
+    def test_filters_out_funny_and_memorabilia_set_type_scryfall_rows(self, tmp_path):
+        funny_scryfall = {
+            **_SCRYFALL_ROW,
+            "id": "scryfall-funny",
+            "set_type": "funny",
+        }
+        memorabilia_scryfall = {
+            **_SCRYFALL_ROW,
+            "id": "scryfall-memorabilia",
+            "set_type": "memorabilia",
+        }
+        with _make_storage_with_cards_bronze(
+            tmp_path,
+            [_MTGJSON_ROW],
+            [_SCRYFALL_ROW, funny_scryfall, memorabilia_scryfall],
+        ) as s:
+            s._build_silver_cards_sql()
+            ids = {
+                r[0]
+                for r in s._silver_con.execute(
+                    "SELECT scryfall_id FROM silver_cards"
+                ).fetchall()
+            }
+            assert "scryfall-funny" not in ids
+            assert "scryfall-memorabilia" not in ids
 
-    def test_no_legalities_column_is_noop(self, t):
-        df = pd.DataFrame({"name": ["Lightning Bolt"]})
-        result = t._extract_legality_features(df, [])
-        assert "is_commander_legal" not in result.columns
-        assert list(result.columns) == ["name"]
+    def test_excludes_mtgjson_rows_whose_scryfall_counterpart_is_funny_or_memorabilia(
+        self, tmp_path
+    ):
+        # MTGJson's own is_funny flag is False/unset here, but the matching Scryfall
+        # printing (joined via scryfall_id) is funny/memorabilia -- the MTGJson row
+        # must still be excluded. Previously it leaked into silver_cards with
+        # oracle_id=NULL because mtgjson_filtered only checked MTGJson's own flag.
+        memorabilia_mtgjson = {
+            **_MTGJSON_ROW,
+            "uuid": "uuid-memorabilia",
+            "identifiers": '{"scryfall_id": "scryfall-memorabilia-2"}',
+        }
+        memorabilia_scryfall = {
+            **_SCRYFALL_ROW,
+            "id": "scryfall-memorabilia-2",
+            "set_type": "memorabilia",
+        }
+        funny_mtgjson = {
+            **_MTGJSON_ROW,
+            "uuid": "uuid-funny-mismatch",
+            "identifiers": '{"scryfall_id": "scryfall-funny-2"}',
+        }
+        funny_scryfall = {
+            **_SCRYFALL_ROW,
+            "id": "scryfall-funny-2",
+            "set_type": "funny",
+        }
+        with _make_storage_with_cards_bronze(
+            tmp_path,
+            [_MTGJSON_ROW, memorabilia_mtgjson, funny_mtgjson],
+            [_SCRYFALL_ROW, memorabilia_scryfall, funny_scryfall],
+        ) as s:
+            s._build_silver_cards_sql()
+            uuids = {
+                r[0]
+                for r in s._silver_con.execute(
+                    "SELECT uuid FROM silver_cards WHERE uuid IS NOT NULL"
+                ).fetchall()
+            }
+            assert "uuid-memorabilia" not in uuids
+            assert "uuid-funny-mismatch" not in uuids
+
+    def test_joined_row_has_uuid_and_oracle_id(self, tmp_path):
+        scryfall_with_oracle = {**_SCRYFALL_ROW, "oracle_id": "oracle-a"}
+        with _make_storage_with_cards_bronze(
+            tmp_path, [_MTGJSON_ROW], [scryfall_with_oracle]
+        ) as s:
+            s._build_silver_cards_sql()
+            row = s._silver_con.execute(
+                "SELECT uuid, oracle_id FROM silver_cards WHERE scryfall_id = 'scryfall-a'"
+            ).fetchone()
+            assert row is not None
+            assert row[0] == "uuid-a"
+            assert row[1] == "oracle-a"
+
+    def test_joins_mtgjson_row_with_whitespace_in_scryfall_id(self, tmp_path):
+        # identifiers.scryfall_id can come from upstream MTGJson data with incidental
+        # whitespace; the join to Scryfall must still succeed (both sides trimmed).
+        whitespace_mtgjson = {
+            **_MTGJSON_ROW,
+            "uuid": "uuid-whitespace",
+            "identifiers": '{"scryfall_id": "  scryfall-a  "}',
+        }
+        scryfall_with_oracle = {**_SCRYFALL_ROW, "oracle_id": "oracle-a"}
+        with _make_storage_with_cards_bronze(
+            tmp_path,
+            [whitespace_mtgjson],
+            [scryfall_with_oracle],
+        ) as s:
+            s._build_silver_cards_sql()
+            row = s._silver_con.execute(
+                "SELECT oracle_id FROM silver_cards WHERE uuid = 'uuid-whitespace'"
+            ).fetchone()
+            assert row is not None
+            assert row[0] is not None, (
+                "join failed -- oracle_id is NULL despite a matching Scryfall row"
+            )
+
+    def test_scryfall_only_row_has_null_uuid(self, tmp_path):
+        scryfall_only = {**_SCRYFALL_ROW, "id": "scryfall-only", "lang": "ja"}
+        with _make_storage_with_cards_bronze(
+            tmp_path, [_MTGJSON_ROW], [_SCRYFALL_ROW, scryfall_only]
+        ) as s:
+            s._build_silver_cards_sql()
+            row = s._silver_con.execute(
+                "SELECT uuid FROM silver_cards WHERE scryfall_id = 'scryfall-only'"
+            ).fetchone()
+            assert row is not None and row[0] is None
+
+    def test_dfc_scryfall_id_deduplicated_to_one_row(self, tmp_path):
+        # DFC: two MTGJson rows share the same scryfall_id (front/back face)
+        back_face = {
+            **_MTGJSON_ROW,
+            "uuid": "uuid-back",
+            "name": "Lightning Bolt // Back",
+        }
+        with _make_storage_with_cards_bronze(
+            tmp_path, [_MTGJSON_ROW, back_face], [_SCRYFALL_ROW]
+        ) as s:
+            s._build_silver_cards_sql()
+            count = s._silver_con.execute(
+                "SELECT count(*) FROM silver_cards WHERE scryfall_id = 'scryfall-a'"
+            ).fetchone()
+            assert count is not None and count[0] == 1
+
+    def test_is_commander_legal_extracted_from_legalities(self, tmp_path):
+        with _make_storage_with_cards_bronze(
+            tmp_path, [_MTGJSON_ROW], [_SCRYFALL_ROW]
+        ) as s:
+            s._build_silver_cards_sql()
+            row = s._silver_con.execute(
+                "SELECT is_commander_legal FROM silver_cards WHERE scryfall_id = 'scryfall-a'"
+            ).fetchone()
+            assert row is not None and row[0] is True
+
+    def test_rarity_lowercased(self, tmp_path):
+        row = {**_MTGJSON_ROW, "rarity": "  RARE  "}
+        with _make_storage_with_cards_bronze(tmp_path, [row], [_SCRYFALL_ROW]) as s:
+            s._build_silver_cards_sql()
+            r = s._silver_con.execute(
+                "SELECT rarity FROM silver_cards WHERE uuid = 'uuid-a'"
+            ).fetchone()
+            assert r is not None and r[0] == "rare"
+
+    def test_sentinel_replaced_with_null(self, tmp_path):
+        row = {**_MTGJSON_ROW, "artist": "_"}
+        with _make_storage_with_cards_bronze(tmp_path, [row], [_SCRYFALL_ROW]) as s:
+            s._build_silver_cards_sql()
+            r = s._silver_con.execute(
+                "SELECT artist FROM silver_cards WHERE uuid = 'uuid-a'"
+            ).fetchone()
+            assert r is not None and r[0] is None
+
+    def test_colors_stored_as_uppercase_array(self, tmp_path):
+        row = {**_MTGJSON_ROW, "colors": '["r"]'}
+        with _make_storage_with_cards_bronze(tmp_path, [row], [_SCRYFALL_ROW]) as s:
+            s._build_silver_cards_sql()
+            r = s._silver_con.execute(
+                "SELECT colors FROM silver_cards WHERE uuid = 'uuid-a'"
+            ).fetchone()
+            assert r is not None and r[0] == ["R"]
+
+    def test_original_type_parsed_into_supertypes_and_subtypes(self, tmp_path):
+        row = {**_MTGJSON_ROW, "original_type": "Legendary Creature — Human Wizard"}
+        with _make_storage_with_cards_bronze(tmp_path, [row], [_SCRYFALL_ROW]) as s:
+            s._build_silver_cards_sql()
+            r = s._silver_con.execute(
+                "SELECT original_supertypes, original_types, original_subtypes"
+                " FROM silver_cards WHERE uuid = 'uuid-a'"
+            ).fetchone()
+            assert r is not None
+            assert "Legendary" in r[0]
+            assert "Creature" in r[1]
+            assert set(r[2]) == {"Human", "Wizard"}
+
+    def test_errata_true_when_text_differs_from_original(self, tmp_path):
+        row = {**_MTGJSON_ROW, "text": "New text", "original_text": "Old text"}
+        with _make_storage_with_cards_bronze(tmp_path, [row], [_SCRYFALL_ROW]) as s:
+            s._build_silver_cards_sql()
+            r = s._silver_con.execute(
+                "SELECT errata FROM silver_cards WHERE uuid = 'uuid-a'"
+            ).fetchone()
+            assert r is not None and r[0] is True
+
+    def test_scryfall_lang_code_mapped_to_full_language_name(self, tmp_path):
+        scryfall_ja = {**_SCRYFALL_ROW, "id": "scryfall-ja", "lang": "ja"}
+        with _make_storage_with_cards_bronze(tmp_path, [], [scryfall_ja]) as s:
+            s._build_silver_cards_sql()
+            r = s._silver_con.execute(
+                "SELECT language FROM silver_cards WHERE scryfall_id = 'scryfall-ja'"
+            ).fetchone()
+            assert r is not None and r[0] == "Japanese"
+
+    def test_format_count_is_non_null_and_counts_legal_formats(self, tmp_path):
+        # legalities has commander=legal and standard=not_legal → format_count should be 1
+        with _make_storage_with_cards_bronze(
+            tmp_path, [_MTGJSON_ROW], [_SCRYFALL_ROW]
+        ) as s:
+            s._build_silver_cards_sql()
+            r = s._silver_con.execute(
+                "SELECT format_count FROM silver_cards WHERE scryfall_id = 'scryfall-a'"
+            ).fetchone()
+            assert r is not None and r[0] == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 12: dead code removal verification
+# ---------------------------------------------------------------------------
+
+
+def test_extract_all_prices_removed():
+    import src.data.cards.storage.silver.prices as mod
+
+    assert not hasattr(mod.SilverPriceBuilder, "_extract_all_prices"), (
+        "_extract_all_prices should have been removed"
+    )

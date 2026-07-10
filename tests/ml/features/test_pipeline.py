@@ -10,10 +10,11 @@ from src.ml.features.pipeline import (
     IMPUTE_ZERO_COLS,
     LEAKAGE_COLS,
     NUMERIC_PASS_COLS,
-    _enrich_card_df,
-    _enrich_lag_df,
     build_feature_pipeline,
     build_inference_features,
+    enrich_card_df,
+    enrich_lag_df,
+    fit_transform_features,
     get_feature_names,
     prepare_training_data,
 )
@@ -167,6 +168,34 @@ def test_get_feature_names_does_not_contain_leakage_columns(fitted_pipeline):
     names = get_feature_names(fitted_pipeline)
     for col in LEAKAGE_COLS:
         assert col not in names
+
+
+# ---------------------------------------------------------------------------
+# fit_transform_features()
+# ---------------------------------------------------------------------------
+
+
+def test_fit_transform_features_returns_dataframe_pipeline_and_names(sample_X):
+    X_transformed, pipeline, feature_names = fit_transform_features(sample_X)
+    assert isinstance(X_transformed, pd.DataFrame)
+    assert isinstance(pipeline, Pipeline)
+    assert list(X_transformed.columns) == feature_names
+
+
+def test_fit_transform_features_row_count_matches_input(sample_X):
+    X_transformed, _, _ = fit_transform_features(sample_X)
+    assert len(X_transformed) == len(sample_X)
+
+
+def test_fit_transform_features_matches_manual_fit_transform(sample_X):
+    X_transformed, pipeline, feature_names = fit_transform_features(sample_X)
+
+    manual_pipeline = build_feature_pipeline()
+    manual_X_t = manual_pipeline.fit_transform(sample_X)
+    manual_names = get_feature_names(manual_pipeline)
+
+    assert feature_names == manual_names
+    np.testing.assert_array_equal(X_transformed.to_numpy(), manual_X_t)
 
 
 # ---------------------------------------------------------------------------
@@ -336,13 +365,13 @@ def test_build_inference_features_is_legendary_from_gold_table():
 
 
 # ---------------------------------------------------------------------------
-# _enrich_card_df()
+# enrich_card_df()
 # ---------------------------------------------------------------------------
 
 
 def test_enrich_card_df_adds_rarity_ord():
     card_df = pd.DataFrame({"uuid": ["u1"], "rarity": ["rare"]})
-    result = _enrich_card_df(card_df)
+    result = enrich_card_df(card_df)
     assert "rarity_ord" in result.columns
     assert result.iloc[0]["rarity_ord"] == 2
 
@@ -354,82 +383,82 @@ def test_enrich_card_df_rarity_ord_all_values():
             "rarity": ["common", "uncommon", "rare", "mythic"],
         }
     )
-    result = _enrich_card_df(card_df)
+    result = enrich_card_df(card_df)
     assert list(result["rarity_ord"]) == [0, 1, 2, 3]
 
 
 def test_enrich_card_df_adds_has_mtgjson_data_true():
     card_df = pd.DataFrame({"uuid": ["u1"], "rarity": ["common"]})
-    result = _enrich_card_df(card_df)
+    result = enrich_card_df(card_df)
     assert "has_mtgjson_data" in result.columns
     assert result.iloc[0]["has_mtgjson_data"] == True  # noqa: E712
 
 
 def test_enrich_card_df_adds_stub_zero_columns():
     card_df = pd.DataFrame({"uuid": ["u1"], "rarity": ["common"]})
-    result = _enrich_card_df(card_df)
+    result = enrich_card_df(card_df)
     assert result.iloc[0]["top8_appearances_30d"] == 0.0
     assert result.iloc[0]["deck_pct"] == 0.0
 
 
 def test_enrich_card_df_does_not_mutate_input():
     card_df = pd.DataFrame({"uuid": ["u1"], "rarity": ["common"]})
-    _ = _enrich_card_df(card_df)
+    _ = enrich_card_df(card_df)
     assert "rarity_ord" not in card_df.columns
 
 
 # ---------------------------------------------------------------------------
-# _enrich_lag_df()
+# enrich_lag_df()
 # ---------------------------------------------------------------------------
 
 
 def test_enrich_lag_df_adds_log_eur():
     lag_df = pd.DataFrame({"eur": [9.0], "lag_1d": [8.0], "rolling_mean_7d": [8.5]})
-    result = _enrich_lag_df(lag_df)
+    result = enrich_lag_df(lag_df)
     assert "log_eur" in result.columns
     assert result.iloc[0]["log_eur"] == pytest.approx(np.log1p(9.0))
 
 
 def test_enrich_lag_df_applies_log_to_rolling_mean_7d():
     lag_df = pd.DataFrame({"eur": [5.0], "lag_1d": [4.0], "rolling_mean_7d": [4.5]})
-    result = _enrich_lag_df(lag_df)
+    result = enrich_lag_df(lag_df)
     assert result.iloc[0]["rolling_mean_7d"] == pytest.approx(np.log1p(4.5))
 
 
 def test_enrich_lag_df_adds_lag_1d_return():
     lag_df = pd.DataFrame({"eur": [5.0], "lag_1d": [4.0], "rolling_mean_7d": [4.5]})
-    result = _enrich_lag_df(lag_df)
+    result = enrich_lag_df(lag_df)
     assert "lag_1d_return" in result.columns
     assert result.iloc[0]["lag_1d_return"] == pytest.approx((5.0 - 4.0) / 4.0)
 
 
 def test_enrich_lag_df_lag_1d_return_nan_when_lag_is_zero():
     lag_df = pd.DataFrame({"eur": [5.0], "lag_1d": [0.0], "rolling_mean_7d": [4.5]})
-    result = _enrich_lag_df(lag_df)
+    result = enrich_lag_df(lag_df)
     assert pd.isna(result.iloc[0]["lag_1d_return"])
 
 
 def test_enrich_lag_df_does_not_mutate_input():
     lag_df = pd.DataFrame({"eur": [5.0], "lag_1d": [4.0], "rolling_mean_7d": [4.5]})
     original_rolling = lag_df.iloc[0]["rolling_mean_7d"]
-    _ = _enrich_lag_df(lag_df)
+    _ = enrich_lag_df(lag_df)
     assert lag_df.iloc[0]["rolling_mean_7d"] == original_rolling
 
 
 def test_enrich_lag_df_rolling_mean_7d_absent_adds_nan_column():
-    """When rolling_mean_7d is missing, _enrich_lag_df must add a NaN-filled column.
+    """When rolling_mean_7d is missing, enrich_lag_df must add a NaN-filled column.
 
     rolling_mean_7d is listed in NUMERIC_PASS_COLS; a missing column would cause a
     ColumnTransformer key error at transform time.  The fallback prevents that.
     """
     lag_df = pd.DataFrame({"eur": [5.0], "lag_1d": [4.0]})  # no rolling_mean_7d
-    result = _enrich_lag_df(lag_df)
+    result = enrich_lag_df(lag_df)
     assert "rolling_mean_7d" in result.columns
     assert pd.isna(result.iloc[0]["rolling_mean_7d"])
 
 
 # ---------------------------------------------------------------------------
-# Alignment: _enrich_card_df and _enrich_lag_df produce the same columns
+# Alignment: enrich_card_df and enrich_lag_df produce the same columns
 # that build_inference_features adds inline — no training/serving skew.
 # ---------------------------------------------------------------------------
 

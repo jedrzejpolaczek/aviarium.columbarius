@@ -20,12 +20,13 @@ Performance note:
 
 from datetime import date
 
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query
 
-from app.dependencies import get_model
-from app.routers.predict import inverse_log_return
+from app.dependencies import RequestFeatures, get_request_features, require_model
+from app.pricing import inverse_log_return
 from app.schemas.responses import UnderpricedCard, UnderpricedResponse
 from src.ml.recommendation.underpriced import flag_underpriced
 
@@ -33,52 +34,14 @@ from src.ml.recommendation.underpriced import flag_underpriced
 router = APIRouter(prefix="/underpriced", tags=["recommendation"])
 
 
-@router.get("/", response_model=UnderpricedResponse)
-def get_underpriced_cards(
-    request: Request,
-    tier: int | None = Query(
-        default=None, ge=1, le=3, description="Filter by tier (1, 2, or 3)"
-    ),
-    min_confidence: float = Query(
-        default=1.3, ge=1.0, description="Minimum predicted/actual ratio"
-    ),
-    model: object | None = Depends(get_model),
-) -> UnderpricedResponse:
-    """Return all cards the model considers underpriced at the latest snapshot.
-
-    Runs batch inference over the pre-built feature matrix, computes
-    ``predicted_eur = expm1(log1p(eur) + log_return_7d)`` for each card,
-    then calls ``flag_underpriced`` to apply tier-based thresholds.
-
-    Results are sorted by confidence (predicted/actual ratio) descending so
-    the most underpriced cards appear first.
-
-    Args:
-        request:        FastAPI request object for accessing ``app.state``.
-        tier:           Optional tier filter (1, 2, or 3). Returns all tiers
-                        when not specified.
-        min_confidence: Minimum predicted/actual ratio to include in results.
-                        Default 1.3 matches the ``TIER1_FLAG_THRESHOLD``
-                        constant in ``flag_underpriced``.
-        model:          LightGBM booster injected via ``get_model`` dependency.
-
-    Returns:
-        UnderpricedResponse containing a list of UnderpricedCard objects, the
-        generation date, and the MLflow run_id of the model used.
-
-    Raises:
-        HTTPException 503: Model not loaded (MODEL_RUN_ID not set or load failed).
-    """
-    if model is None:
-        raise HTTPException(
-            503, detail="Model not loaded. Set MODEL_RUN_ID env variable."
-        )
-
-    X_all: pd.DataFrame = request.app.state.X_all
-    X_all_t: pd.DataFrame = request.app.state.X_all_t
-    model_run_id: str = getattr(request.app.state, "model_run_id", "")
-
-    log_returns: np.ndarray = model.predict(X_all_t)  # type: ignore[attr-defined]
+def _run_underpriced_inference(
+    X_all: pd.DataFrame,
+    X_all_t: pd.DataFrame,
+    model: lgb.Booster,
+    tier: int | None,
+    min_confidence: float,
+) -> pd.DataFrame:
+    log_returns: np.ndarray = np.asarray(model.predict(X_all_t))
     eur = X_all["eur"].to_numpy()
     predicted_eur = inverse_log_return(eur, log_returns)
 
@@ -94,12 +57,13 @@ def get_underpriced_cards(
 
     flagged = flag_underpriced(result_df)
     flagged = flagged[flagged["is_underpriced"]]
-
     if tier is not None:
         flagged = flagged[flagged["tier"] == tier]
-    flagged = flagged[flagged["confidence"] >= min_confidence]
+    return flagged[flagged["confidence"] >= min_confidence]
 
-    cards = [
+
+def _to_underpriced_cards(flagged: pd.DataFrame) -> list[UnderpricedCard]:
+    return [
         UnderpricedCard(
             name=str(row["name"]),
             uuid=str(row["uuid"]),
@@ -111,6 +75,51 @@ def get_underpriced_cards(
         )
         for _, row in flagged.iterrows()
     ]
+
+
+@router.get("/", response_model=UnderpricedResponse)
+def get_underpriced_cards(
+    tier: int | None = Query(
+        default=None, ge=1, le=3, description="Filter by tier (1, 2, or 3)"
+    ),
+    min_confidence: float = Query(
+        default=1.3, ge=1.0, description="Minimum predicted/actual ratio"
+    ),
+    features: RequestFeatures = Depends(get_request_features),
+    model: lgb.Booster = Depends(require_model),
+) -> UnderpricedResponse:
+    """Return all cards the model considers underpriced at the latest snapshot.
+
+    Runs batch inference over the pre-built feature matrix, computes
+    ``predicted_eur = expm1(log1p(eur) + log_return_7d)`` for each card,
+    then calls ``flag_underpriced`` to apply tier-based thresholds.
+
+    Results are sorted by confidence (predicted/actual ratio) descending so
+    the most underpriced cards appear first.
+
+    Args:
+        tier:           Optional tier filter (1, 2, or 3). Returns all tiers
+                        when not specified.
+        min_confidence: Minimum predicted/actual ratio to include in results.
+                        Default 1.3 matches the ``TIER1_FLAG_THRESHOLD``
+                        constant in ``flag_underpriced``.
+        features:       Pre-computed feature matrices and model_run_id,
+                        injected via ``get_request_features`` dependency.
+        model:          LightGBM booster injected via ``require_model`` dependency.
+
+    Returns:
+        UnderpricedResponse containing a list of UnderpricedCard objects, the
+        generation date, and the MLflow run_id of the model used.
+
+    Raises:
+        HTTPException 503: Model not loaded (MODEL_RUN_ID not set or load failed).
+    """
+    X_all = features.X_all
+    X_all_t = features.X_all_t
+    model_run_id = features.model_run_id
+
+    flagged = _run_underpriced_inference(X_all, X_all_t, model, tier, min_confidence)
+    cards = _to_underpriced_cards(flagged)
 
     return UnderpricedResponse(
         cards=cards,

@@ -1,6 +1,7 @@
 """Unit tests for src/data/cards/sources/{pipeline,scrapers,registry}.py."""
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -16,6 +17,7 @@ from src.data.cards.sources import (
     ingesting_pipeline,
     load_from_json,
 )
+from src.data.cards.sources.scrapers import _cleanup_html_files
 
 
 class _Simple(BaseModel):
@@ -589,3 +591,145 @@ class TestIngestTournamentResultsAsync:
             await _ingest_tournament_results_async(client, self._config())
         # Error on event page → no card rows saved
         assert mock_save.call_args[0][0] == []
+
+
+class TestIngestTournamentResultsAsyncRealParsing:
+    """Exercises the real extract_mtgtop8_* parsers — only the HTTP call is mocked.
+
+    Unlike TestIngestTournamentResultsAsync above (which mocks every extractor),
+    this class lets extract_mtgtop8_tournament_list, extract_mtgtop8_event_decks,
+    and extract_mtgtop8_decklist run against real inline HTML fixtures, built in
+    the same style as tests/data/cards/sources/test_extractors.py's _html()
+    helpers. This is what actually catches a real HTML/selector regression.
+    """
+
+    # Level 1: format list page — table.Stable > tr.hover_tr, cols[1] has the
+    # event link "event?e={id}&f={code}", cols[-1] the DD/MM/YY date.
+    _LIST_HTML = (
+        '<html><body><table class="Stable"><tbody>'
+        '<tr class="hover_tr"><td></td>'
+        '<td><a href="event?e=111&f=MO">Modern Open</a></td>'
+        "<td></td><td>01/06/26</td></tr>"
+        "</tbody></table></body></html>"
+    )
+
+    # Level 2: event page — div.hover_tr with the deck link "...&d={deck_id}",
+    # span.G11 for player, span.S14 for deck (archetype) name. Four rows so
+    # the ">=4 decks" sanity check in _fetch_event doesn't warn.
+    _EVENT_HTML = (
+        "<html><body>"
+        '<div class="hover_tr"><a href="event?e=111&d=1&f=MO">Player A Deck</a>'
+        '<span class="G11">Player A</span><span class="S14">Boros Aggro</span></div>'
+        '<div class="hover_tr"><a href="event?e=111&d=2&f=MO">Player B Deck</a>'
+        '<span class="G11">Player B</span><span class="S14">Mono Green</span></div>'
+        '<div class="hover_tr"><a href="event?e=111&d=3&f=MO">Player C Deck</a>'
+        '<span class="G11">Player C</span><span class="S14">Dimir Control</span></div>'
+        '<div class="hover_tr"><a href="event?e=111&d=4&f=MO">Player D Deck</a>'
+        '<span class="G11">Player D</span><span class="S14">Amulet Titan</span></div>'
+        "</body></html>"
+    )
+
+    # Level 3: deck page — div.deck_line id="md{ref}" (main deck) / "sb{ref}"
+    # (sideboard), text "{copies} {card name}". One main-deck card per deck.
+    _DECK_HTML = (
+        '<html><body><div id="md1" class="deck_line hover_tr">'
+        "4 <span class=L14>Lightning Bolt</span></div></body></html>"
+    )
+
+    @pytest.fixture(autouse=True)
+    def _patch_downloads(self, monkeypatch, tmp_path):
+        """Replace the network boundary only: download_html_page writes an
+        inline HTML fixture to output_path instead of making an HTTP call.
+        Everything downstream (Path.read_text, the extract_* calls,
+        _save_to_json, load_from_json) runs for real.
+        """
+
+        async def fake_download(client, url, output_path):
+            path_str = str(output_path)
+            if "tournament_list_" in path_str:
+                html = self._LIST_HTML
+            elif "tournament_event_" in path_str:
+                html = self._EVENT_HTML
+            else:
+                html = self._DECK_HTML
+            Path(output_path).write_text(html, encoding="utf-8")
+
+        monkeypatch.setattr(
+            "src.data.cards.sources.scrapers.download_html_page", fake_download
+        )
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "data" / "raw").mkdir(parents=True)
+
+    @pytest.mark.asyncio
+    async def test_real_extractors_produce_deck_records(self):
+        config = {
+            "tournament_results": {
+                "formats": ["modern"],
+                "format_codes": {"modern": "MO"},
+                "list_url": "https://www.mtgtop8.com/format?f={code}",
+                "deck_url_prefix": "https://www.mtgtop8.com",
+                "max_tournaments_per_format": 5,
+                "path": "data/raw/tournament_results.json",
+            }
+        }
+        async with httpx.AsyncClient() as client:
+            result = await _ingest_tournament_results_async(client, config)
+
+        records, errors = result["tournament_results"]
+        assert errors == []
+        # 1 tournament -> 4 decks (_EVENT_HTML) -> 1 card row per deck page
+        # (_DECK_HTML) => 4 TournamentResult records total.
+        assert len(records) == 4
+
+        assert {r.player for r in records} == {
+            "Player A",
+            "Player B",
+            "Player C",
+            "Player D",
+        }
+        assert {r.deck_name for r in records} == {
+            "Boros Aggro",
+            "Mono Green",
+            "Dimir Control",
+            "Amulet Titan",
+        }
+        assert {r.placement for r in records} == {1, 2, 3, 4}
+        for r in records:
+            assert r.tournament_id == "mtgtop8_111"
+            assert r.tournament_date == "2026-06-01"
+            assert r.event_name == "Modern Open"
+            assert r.format == "modern"
+            assert r.card_name == "Lightning Bolt"
+            assert r.copies == 4
+            assert r.is_sideboard is False
+
+
+# ---------------------------------------------------------------------------
+# _cleanup_html_files
+# ---------------------------------------------------------------------------
+
+
+class TestCleanupHtmlFiles:
+    def test_cleanup_html_files_removes_existing_files(self, tmp_path):
+        f1 = tmp_path / "a.html"
+        f2 = tmp_path / "b.html"
+        f1.write_text("x")
+        f2.write_text("y")
+
+        _cleanup_html_files([str(f1), str(f2)])
+
+        assert not f1.exists()
+        assert not f2.exists()
+
+    def test_cleanup_html_files_ignores_missing_files(self, tmp_path):
+        missing = tmp_path / "does_not_exist.html"
+        # Must not raise.
+        _cleanup_html_files([str(missing)])
+
+    def test_cleanup_html_files_ignores_permission_error(self, tmp_path):
+        f1 = tmp_path / "locked.html"
+        f1.write_text("x")
+
+        with patch.object(Path, "unlink", side_effect=PermissionError):
+            # Must not raise — this is the Windows "file still held" case.
+            _cleanup_html_files([str(f1)])

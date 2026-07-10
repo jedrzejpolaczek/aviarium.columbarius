@@ -25,11 +25,17 @@ services:
       - ../mlflow.db:/app/mlflow.db:ro
       # MLflow artifact store: model weights, pipelines, etc.
       - ../notebooks/ml_models/mlruns:/app/mlruns:ro
+      # Writable: src.monitoring.alerts.send_alert writes logs/alerts.jsonl
+      # here on a degraded startup (see app/main.py lifespan). Without this
+      # mount the file is container-local and lost on every restart.
+      - ../logs:/app/logs
     environment:
       - GOLD_DB_PATH=/app/data/gold/cards.duckdb
       # SQLite tracking DB mounted at /app/mlflow.db
       - MLFLOW_TRACKING_URI=sqlite:////app/mlflow.db
     restart: unless-stopped
+    mem_limit: 2g
+    cpus: 2.0
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -46,3 +52,5 @@ services:
       - "3000:80"
     depends_on:
       - api
+    mem_limit: 256m
+    cpus: 0.5

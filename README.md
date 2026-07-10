@@ -16,11 +16,13 @@
 6. [Configuration](#configuration)
 7. [Usage](#usage)
 8. [Model Training](#model-training)
-9. [API & UI](#api--ui)
-10. [Bronze Tables](#bronze-tables)
-11. [Silver Tables](#silver-tables)
-12. [Testing](#testing)
-13. [Architecture Decision Records](#architecture-decision-records)
+9. [Results](#results)
+10. [Monitoring & Scheduled Retraining](#monitoring--scheduled-retraining)
+11. [API & UI](#api--ui)
+12. [Data Catalog](#data-catalog)
+13. [Testing](#testing)
+14. [Architecture Decision Records](#architecture-decision-records)
+15. [References](#references)
 
 ---
 
@@ -33,7 +35,7 @@
 | Package manager | [uv](https://docs.astral.sh/uv/) |
 | Storage | DuckDB |
 | Validation | Pydantic v2 |
-| Status | Bronze complete · Silver implemented · Gold stub |
+| Status | Bronze complete · Silver complete · Gold complete · ML training complete |
 
 **Data sources:**
 
@@ -79,11 +81,10 @@ The pipeline follows a **Medallion architecture** (Bronze → Silver → Gold).
                      │ Silver DuckDB (read-only)
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  GOLD  —  DuckDB  (data/gold/cards.duckdb)  [stub]          │
+│  GOLD  —  DuckDB  (data/gold/cards.duckdb)  (done)          │
 │  Aggregated views ready for ML                              │
-│  Config: configs/gold_config.json                           │
 └────────────────────┬────────────────────────────────────────┘
-                     │  (planned)
+                     │  (trained)
                      ▼
               ML price prediction model
 ```
@@ -99,54 +100,65 @@ The pipeline follows a **Medallion architecture** (Bronze → Silver → Gold).
 
 ```
 aviarium.columbarius/
+├── app/                              # FastAPI price-prediction service
+│   ├── main.py                       #   app factory, startup precomputation
+│   ├── pricing.py                    #   tiered pricing strategy (ADR-018)
+│   ├── dependencies.py
+│   └── routers/                      #   cards, health, predict, similar, underpriced
+├── frontend/                         # Vite/React web UI
+│   └── src/                          #   CardSearch, PredictionResult, api.ts
 ├── scripts/
-│   ├── run_pipeline.py              # ETL pipeline entry point
-│   └── train_model.py               # model training entry point
+│   ├── run_pipeline.py               # ETL pipeline entry point
+│   ├── train_model.py                # model training entry point
+│   └── check_and_retrain.py          # scheduled drift/MAPE check
 ├── pyproject.toml
 ├── configs/
-│   ├── data_sources.yaml            # source URLs, local paths, download flags
-│   ├── bronze_config.json           # Bronze table definitions
-│   ├── silver_config.json           # Silver transform config
-│   └── gold_config.json             # Gold config (stub)
+│   ├── data_sources.yaml             # source URLs, local paths, download flags
+│   ├── bronze_config.json            # Bronze table definitions
+│   └── silver_config.json            # Silver transform config
 ├── data/
-│   ├── raw/                         # downloaded JSON files (gitignored)
-│   ├── bronze/                      # Bronze DuckDB file (gitignored)
-│   ├── silver/                      # Silver DuckDB file (gitignored)
-│   └── gold/                        # Gold DuckDB file (gitignored)
+│   ├── raw/                          # downloaded JSON files (gitignored)
+│   ├── bronze/                       # Bronze DuckDB file (gitignored)
+│   ├── silver/                       # Silver DuckDB file (gitignored)
+│   └── gold/                         # Gold DuckDB file (gitignored)
 ├── docs/
-│   └── adr/                         # Architecture Decision Records
-├── notebooks/                       # Jupyter notebooks for exploration
+│   ├── adr/                          # Architecture Decision Records
+│   └── architecture/                 # C4 architecture docs + data catalog
+├── notebooks/                        # Jupyter notebooks for exploration
 ├── src/
-│   └── data/
-│       ├── cards/
-│       │   ├── pipelines.py         # initial_pipeline / daily_pipeline
-│       │   ├── sources.py           # download, extract, validate
-│       │   └── storage/
-│       │       ├── base.py          # BaseStorage / TransformStorage ABCs
-│       │       ├── bronze/          # BronzeStorage — raw DuckDB persistence
-│       │       │   ├── config.py    #   STORAGE_CONFIG declarations
-│       │       │   ├── writers.py   #   BronzeWritersMixin (write primitives)
-│       │       │   └── storage.py   #   BronzeStorage orchestration class
-│       │       ├── silver.py        # SilverStorage — cleaning and joining
-│       │       ├── gold.py          # GoldStorage — aggregation (stub)
-│       │       └── errors.py        # StorageError hierarchy
-│       ├── dataclasses/
-│       │   ├── mtgjson.py           # Pydantic models for MTGJson
-│       │   └── scryfall.py          # Pydantic models for Scryfall
-│       └── markets/
-│           ├── allegro.py           # Allegro market integration (stub)
-│           └── cardmarket.py        # Cardmarket integration (stub)
-└── tests/
+│   ├── data/
+│   │   └── cards/
+│   │       ├── pipelines.py          # initial_pipeline / daily_pipeline
+│   │       ├── sources/              # download, extract, validate
+│   │       │   ├── pipeline.py       #   ingestion orchestration
+│   │       │   ├── registry.py       #   source-type registry (ADR-004)
+│   │       │   ├── extractors.py     #   HTML → record parsing
+│   │       │   ├── scrapers.py       #   per-source async fetch functions
+│   │       │   ├── http.py           #   download helpers, retry (ADR-014)
+│   │       │   └── errors.py
+│   │       └── storage/
+│   │           ├── base/             # BaseStorage / TransformStorage ABCs
+│   │           ├── bronze/           # BronzeStorage — raw DuckDB persistence
+│   │           │   ├── config.py     #   STORAGE_CONFIG declarations
+│   │           │   └── storage.py    #   BronzeStorage orchestration class
+│   │           ├── silver/           # SilverStorage — cleaning and joining
+│   │           ├── gold/             # GoldStorage — Gold layer aggregation
+│   │           └── errors.py         # StorageError hierarchy
+│   ├── ml/                           # feature engineering, models, evaluation
+│   └── monitoring/                   # drift detection, retraining triggers
+└── tests/                            # mirrors src/ and app/ layout
     └── data/
-        ├── cards/
-        │   ├── test_sources.py
-        │   ├── test_pipelines.py
-        │   └── storage/
-        │       ├── test_base.py
-        │       └── test_silver.py
-        └── dataclasses/
-            ├── test_mtgjson.py
-            └── test_scryfall.py
+        └── cards/
+            ├── sources/
+            │   ├── test_extractors.py
+            │   ├── test_http.py
+            │   ├── test_pipeline.py
+            │   └── test_registry.py
+            └── storage/
+                ├── test_base.py
+                ├── test_bronze.py
+                ├── test_silver.py
+                └── test_gold.py
 ```
 
 ---
@@ -180,6 +192,7 @@ make install-hooks
 | `make install-hooks` | Register git hooks from `scripts/` |
 | `make pipeline` | Run the daily ETL pipeline |
 | `make train` | Train the LightGBM model and log to MLflow |
+| `make monitor` | Run the drift/MAPE check and conditionally retrain |
 | `make lint` | Run `ruff check` |
 | `make format` | Run `ruff format` |
 | `make type-check` | Run `mypy` |
@@ -218,7 +231,7 @@ storage:
 
 Set `flag: true` for any source you want to download fresh from the API. Set `flag: false` to load from the existing local JSON file without hitting the network.
 
-Per-tier table and transformation rules are in `configs/bronze_config.json`, `configs/silver_config.json`, and `configs/gold_config.json`.
+Per-tier table and transformation rules are in `configs/bronze_config.json` and `configs/silver_config.json`.
 
 ---
 
@@ -292,9 +305,11 @@ uv run uvicorn app.main:app --reload
 **Inspect runs in the MLflow UI:**
 
 ```bash
-uv run mlflow ui
+uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
 # open http://localhost:5000
 ```
+
+Always pass `--backend-store-uri` explicitly (run from the project root). Without it, `mlflow ui` ignores `mlflow.db` entirely and falls back to a plain local `./mlruns` folder in whatever directory you launched it from — a different, untracked store from the one the training scripts and the API actually use.
 
 **Optional — custom Gold DB path:**
 
@@ -306,17 +321,69 @@ uv run python -m scripts.train_model --db-path path/to/gold/cards.duckdb
 
 ---
 
+## Results
+
+Exploratory and confirmatory analysis behind the feature set and modelling choices is written up per phase in `notebooks/`:
+
+| Phase | Write-up |
+|---|---|
+| Exploratory data analysis | [notebooks/exploratory_data_analysis/EDA_FINDINGS.md](notebooks/exploratory_data_analysis/EDA_FINDINGS.md) |
+| Confirmatory data analysis | [notebooks/confirmatory_data_analysis/CDA_FINDINGS.md](notebooks/confirmatory_data_analysis/CDA_FINDINGS.md) |
+| Statistical properties (stationarity, seasonality, cointegration) | [notebooks/statistical_properties/STAT_FINDINGS.md](notebooks/statistical_properties/STAT_FINDINGS.md) |
+| Bayesian analysis | [notebooks/bayesian_analysis/BAYESIAN_FINDINGS.md](notebooks/bayesian_analysis/BAYESIAN_FINDINGS.md) |
+| Model preparation (leakage review, validation strategy) | [notebooks/model_preparation/MODEL_PREP_FINDINGS.md](notebooks/model_preparation/MODEL_PREP_FINDINGS.md) |
+
+**Model status:** the LightGBM pipeline trains, logs to MLflow, and serves predictions through the [API](#api--ui) using the tiered pricing strategy from [ADR-018](docs/adr/ADR-018-tier-based-model-selection.md).
+
+> **Known gap:** [`notebooks/ml_models/ML_FINDINGS.md`](notebooks/ml_models/ML_FINDINGS.md) (baseline-vs-LightGBM comparison, SHAP importance) has not been filled in yet, and the most recently logged MLflow runs show suspicious `mae_test = 0.0` metrics that need triage before being quoted anywhere. Treat any specific accuracy number as unverified until that investigation happens — this is flagged here for follow-up investigation, not covered by this section.
+
+---
+
+## Monitoring & Scheduled Retraining
+
+`scripts/check_and_retrain.py` checks for a ban/unban event or a 3-day MAPE alert (see `src/monitoring/retraining.py` (`should_retrain`)) and only retrains when one fires. Run it once a day, after the ETL pipeline:
+
+```bash
+make pipeline
+make monitor
+```
+
+**Linux/macOS (cron)** — run daily at 07:00, after the pipeline:
+
+```cron
+0 7 * * * cd /path/to/aviarium.columbarius && make pipeline && make monitor && make backup >> logs/cron.log 2>&1
+```
+
+**Windows (Task Scheduler)** — create a daily trigger running:
+
+```powershell
+uv run python -m scripts.run_pipeline; if ($?) { uv run python -m scripts.check_and_retrain }; uv run python -m scripts.backup_data
+```
+
+`make backup` (or `python -m scripts.backup_data`) copies the Gold/Silver/Bronze DuckDB files, `mlflow.db`, and `mlruns/` into timestamped, auto-pruned snapshots under `backups/` — point `--backup-dir` at an external drive or cloud-synced folder for off-host protection. Each copied DuckDB file is opened read-only and checked for at least one table immediately after copying — a corrupt or truncated copy raises `BackupVerificationError` and the whole snapshot is discarded rather than silently kept.
+
+(Set the task's "Start in (optional)" field to the project root — relative paths like `logs/` and `data/gold/cards.duckdb` won't resolve otherwise.)
+
+Every run writes `logs/last_check_status.json` with one of `no_retrain` / `retrained` / `error`, so the outcome can be checked without reading log files. See [docs/runbooks/model-incidents.md](docs/runbooks/model-incidents.md) for what to do with each result.
+
+---
+
 ## API & UI
 
 The price prediction API and its web UI run as Docker containers.
 
 **Prerequisites:** Docker, a trained MLflow model run ID (from `mlflow ui`), and a populated Gold DuckDB (`data/gold/cards.duckdb`).
 
+`docker-compose.yml` reads `MODEL_RUN_ID` from `docker/.env` (via `env_file`) — not from the host shell's environment. Set it there, then start both containers:
+
 ```bash
-# Set the model run ID, then start both containers
-export MODEL_RUN_ID=<run_id_from_mlflow>
+# docker/.env
+echo "MODEL_RUN_ID=<run_id_from_mlflow>" > docker/.env
+
 docker compose -f docker/docker-compose.yml up --build
 ```
+
+To switch models after retraining, edit `docker/.env` and restart the container — a shell `export` has no effect since it isn't wired into `environment:`. Alternatively, if `ADMIN_TOKEN` is set in `docker/.env`, call `POST /admin/reload-model` with `{"model_run_id": "<run_id>"}` and header `X-Admin-Token: <ADMIN_TOKEN>` to hot-swap the model in the running container without a restart — see [docs/runbooks/model-incidents.md](docs/runbooks/model-incidents.md) for the full rollback flow. The endpoint returns 503 if `ADMIN_TOKEN` isn't configured.
 
 | URL | Description |
 |---|---|
@@ -325,56 +392,32 @@ docker compose -f docker/docker-compose.yml up --build
 | `http://localhost:8000/health` | Health check endpoint |
 | `http://localhost:8000/cards` | List of all cards available for prediction |
 | `http://localhost:8000/predict/{card_name}` | Price prediction for a single card |
+| `POST http://localhost:8000/admin/reload-model` | Hot-reload the model by run_id (requires `X-Admin-Token`) |
+
+The `api` container is capped at 2 GB memory / 2 CPUs and `frontend` at 256 MB / 0.5 CPU (`docker/docker-compose.yml`) — a runaway process is killed by Docker rather than exhausting the host. Only `api` has `restart: unless-stopped`, so it comes back up automatically after being killed; `frontend` (static nginx, no restart policy) would need a manual restart.
 
 The API starts in degraded mode if `MODEL_RUN_ID` is not set — `/health` and `/cards` still work, but `/predict` returns 503.
 
 ---
 
-## Bronze Tables
+## Data Catalog
 
-| Table | Mode | Content |
-|---|---|---|
-| `bronze_scryfall_cards` | full replace / upsert | All Scryfall card records |
-| `bronze_mtgjson_cards` | upsert | All MTGJson card printings |
-| `bronze_mtgjson_prices` | full replace | Current MTGJson prices |
-| `bronze_scryfall_prices_history` | append (daily) | `id`, `snapshot_date`, `prices` |
-| `bronze_scryfall_meta_history` | append (daily) | `id`, `snapshot_date`, `legalities`, `edhrec_rank`, `reserved`, `promo_types`, `finishes` |
-| `bronze_mtgjson_prices_history` | append (daily) | Full `MtgjsonCardPrices` record + `snapshot_date` |
+Full column schemas for all 22 DuckDB tables (7 Bronze · 6 Silver · 9 Gold), domain glossary, and cross-layer data lineage are documented in the data catalog:
 
-Query example (DuckDB dot notation for nested structs):
-
-```sql
-SELECT id, snapshot_date, prices.usd, prices.usd_foil
-FROM bronze_scryfall_prices_history
-ORDER BY snapshot_date DESC;
-```
-
----
-
-## Silver Tables
-
-Silver reads from Bronze and applies a ten-step config-driven cleaning pipeline before writing its own tables. The main join merges `bronze_mtgjson_cards` and `bronze_scryfall_cards` on the Scryfall UUID embedded in MTGJson's `identifiers` field; MTGJson is the authoritative source for cards present in both.
-
-Cleaning steps (declared in `silver_config.json`):
-
-1. Filter rows — drop rows where a column matches a sentinel value
-2. Drop columns — remove unused raw columns
-3. Parse JSON columns — deserialize stored JSON strings back to objects
-4. Clean strings — strip, case-normalize, replace sentinels with `None`
-5. Clean numerics — coerce to numeric, `NaN` on failure
-6. Clean lists — fill `None` with `[]`, apply per-item transforms
-7. Clean booleans — fill `None` with `False`, cast to `bool`
-8. Normalize values — expand language codes, normalize legality strings to snake_case
-9. Add computed columns — derive `errata`, type lists from `original_type`, fill `ascii_name` nulls
-10. Rename columns — apply final column name mapping
+**[docs/architecture/data/README.md](docs/architecture/data/README.md)**
 
 ---
 
 ## Testing
 
+Tests are split into two invocations — see [ADR-026](docs/adr/ADR-026-isolate-mlflow-tracking-tests.md) for why.
+
 ```bash
-uv run pytest
+uv run pytest --ignore=tests/ml/training/test_tracking.py
+uv run pytest tests/ml/training/test_tracking.py
 ```
+
+Or simply `make test`, which runs both.
 
 Tests are in `tests/` and mirror the `src/` layout. No network access or real files are required — I/O is covered with `tmp_path` and `unittest.mock`.
 
@@ -412,6 +455,8 @@ Current coverage (`src/data/cards/sources/`):
 
 The remaining gaps are defensive guards for near-impossible HTML states (empty `<div>` nodes, regex matches that can't fail given the earlier CSS selector, etc.) and one error branch for an individual deck-page download failure inside `_ingest_tournament_results`.
 
+All of the above covers the Python backend only. The `frontend/` app has its own Vitest suite — run it with `cd frontend && npm test`.
+
 ---
 
 ## Architecture Decision Records
@@ -431,6 +476,34 @@ Design decisions are documented in `docs/adr/`:
 | [ADR-009](docs/adr/ADR-009-mtgjson-priority-card-join-strategy.md) | MTGJson-priority card join strategy |
 | [ADR-010](docs/adr/ADR-010-mypy-strict-mode-quality-gate.md) | mypy strict mode as a hard quality gate |
 | [ADR-011](docs/adr/ADR-011-uv-package-manager.md) | uv as the Python package manager |
+| [ADR-012](docs/adr/ADR-012-physical-cards-only.md) | Physical cards only — no digital formats or tix pricing |
+| [ADR-013](docs/adr/ADR-013-data-source-selection.md) | Data source selection |
+| [ADR-014](docs/adr/ADR-014-http-retry-exponential-backoff.md) | HTTP retry with exponential backoff for download functions |
+| [ADR-015](docs/adr/ADR-015-scraping-rights-review.md) | Scraping rights review for external HTML sources |
+| [ADR-016](docs/adr/ADR-016-app-src-layer-separation.md) | Separation of `app/` and `src/` layers |
+| [ADR-017](docs/adr/ADR-017-lightgbm-over-xgboost-tensorflow.md) | LightGBM as the primary gradient boosting library |
+| [ADR-018](docs/adr/ADR-018-tier-based-model-selection.md) | Tier-based model selection strategy |
+| [ADR-019](docs/adr/ADR-019-fastapi-startup-precomputation.md) | FastAPI startup pre-computation strategy |
+| [ADR-020](docs/adr/ADR-020-monitoring-and-retraining-architecture.md) | Monitoring and automated retraining architecture |
+| [ADR-021](docs/adr/ADR-021-duckdb-map-type-for-legalities.md) | DuckDB MAP type for the `legalities` column |
+| [ADR-022](docs/adr/ADR-022-gold-layer-tables.md) | Gold layer table design |
+| [ADR-023](docs/adr/ADR-023-card-recommendation-strategy.md) | Card recommendation and underpriced detection strategy |
+| [ADR-024](docs/adr/ADR-024-duckdb-compute-layer.md) | DuckDB as the compute layer for large Silver history queries |
+| [ADR-025](docs/adr/ADR-025-scalar-bronze-prices.md) | Scalar Bronze price tables with EAV for MTGJson |
+| [ADR-026](docs/adr/ADR-026-isolate-mlflow-tracking-tests.md) | Isolate MLflow tracking tests into a separate pytest process |
+| [ADR-027](docs/adr/ADR-027-tfidf-card-embeddings.md) | TF-IDF card embeddings |
+| [ADR-028](docs/adr/ADR-028-shap-interpretability.md) | SHAP interpretability |
+| [ADR-029](docs/adr/ADR-029-duckdb-repository.md) | `DuckDBRepository` for connection creation outside the storage tier |
+| [ADR-030](docs/adr/ADR-030-shared-idiom-conventions.md) | Shared idiom conventions (indexes intentional cross-module repetition) |
+| [ADR-031](docs/adr/ADR-031-remote-alerting-channels.md) | Remote alerting channels — webhook + heartbeat |
+| [ADR-032](docs/adr/ADR-032-hot-model-reload-endpoint.md) | Hot model-reload endpoint |
+| [ADR-033](docs/adr/ADR-033-global-exception-handler.md) | Global API exception handler |
+
+---
+
+## References
+
+- [ML Project Checklist](https://threere.com/notes/machine-learning/project-checklist/) — Aurélien Géron's 8-step ML project checklist, used as a structural reference for the data and modelling pipeline.
 
 ---
 

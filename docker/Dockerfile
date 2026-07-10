@@ -46,6 +46,14 @@ COPY --from=builder /app/.venv /app/.venv
 COPY src/ ./src/
 COPY app/ ./app/
 
+# logs/ must be writable by the non-root app user — this is where
+# src.monitoring.alerts.send_alert writes logs/alerts.jsonl on a degraded
+# startup (see app/main.py lifespan). Without this, the write fails with
+# a silently-swallowed PermissionError (send_alert never raises) and the
+# alert is lost. Mount a volume over it (see docker-compose.yml) so the
+# file also survives container restarts.
+RUN mkdir -p /app/logs && chown app:app /app/logs
+
 # Add venv to PATH so uvicorn / python resolve from .venv
 ENV PATH="/app/.venv/bin:$PATH"
 

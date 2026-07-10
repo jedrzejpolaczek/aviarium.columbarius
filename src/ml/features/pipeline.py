@@ -20,9 +20,11 @@ ROWS frame — they scan the entire partition including future rows.
 remainder='drop' in ColumnTransformer silently excludes them.
 
 ENRICHMENT HELPERS:
-_enrich_card_df() and _enrich_lag_df() are private helpers that apply the same
-transformations in both build_inference_features() and walk_forward_cv(), keeping
-the serving and training feature matrices identical (no training/serving skew).
+enrich_card_df() and enrich_lag_df() are public, shared between
+build_inference_features() (this module) and walk_forward_cv()
+(src/ml/training/trainer.py), keeping the serving and training feature
+matrices identical (no training/serving skew). Public because both are
+legitimate cross-module consumers, not internal-only helpers.
 """
 
 import duckdb
@@ -47,7 +49,7 @@ IMPUTE_ZERO_COLS = ["top8_appearances_30d", "deck_pct"]
 
 # Numeric columns passed through without transformation.
 # LightGBM handles NaN natively, so lag features with short history are safe.
-# lag_1d_return is intentionally excluded — computed by _enrich_lag_df for exploratory use,
+# lag_1d_return is intentionally excluded — computed by enrich_lag_df for exploratory use,
 # not selected as a model feature.
 NUMERIC_PASS_COLS = [
     "rarity_ord",
@@ -117,6 +119,25 @@ def get_feature_names(pipeline: Pipeline) -> list[str]:
     return [name.split("__", 1)[-1] for name in ct.get_feature_names_out()]
 
 
+def fit_transform_features(X: pd.DataFrame) -> tuple[pd.DataFrame, Pipeline, list[str]]:
+    """Fit a fresh feature pipeline on X and return the transformed DataFrame.
+
+    Shared by app/main.py's inference-matrix build and retraining.py's
+    training-matrix build -- the only difference between the two call sites
+    is what X already went through upstream (raw inference features vs.
+    target-merged, leakage-dropped, NaN-filtered training features).
+
+    Returns:
+        (X_transformed, fitted_pipeline, feature_names) -- X_transformed has
+        one column per feature_names entry, in the same order.
+    """
+    pipeline = build_feature_pipeline()
+    X_t = pipeline.fit_transform(X)
+    feature_names = get_feature_names(pipeline)
+    X_transformed = pd.DataFrame(np.array(X_t, dtype=np.float64), columns=feature_names)
+    return X_transformed, pipeline, feature_names
+
+
 def prepare_training_data(
     lag_df: pd.DataFrame,
     card_df: pd.DataFrame,
@@ -165,7 +186,7 @@ def _normalise_nullable_dtypes(df: pd.DataFrame) -> pd.DataFrame:
 _RARITY_MAP = {"common": 0, "uncommon": 1, "rare": 2, "mythic": 3}
 
 
-def _enrich_card_df(card_df: pd.DataFrame) -> pd.DataFrame:
+def enrich_card_df(card_df: pd.DataFrame) -> pd.DataFrame:
     """Add derived columns to a gold_card_features DataFrame.
 
     Applies the same enrichments in both training (walk_forward_cv) and serving
@@ -177,6 +198,19 @@ def _enrich_card_df(card_df: pd.DataFrame) -> pd.DataFrame:
                               prerequisite for a card to reach the Gold layer).
         top8_appearances_30d — stub 0.0 (tournament data not yet integrated).
         deck_pct            — stub 0.0 (EDHREC deck percentage not yet integrated).
+
+    BOOL_COLS present on input (is_reserved, is_legendary, is_commander_legal)
+    are cast to float64, matching has_mtgjson_data below. build_feature_pipeline()
+    passes BOOL_COLS through the ColumnTransformer in the same block as
+    NUMERIC_PASS_COLS; pandas' DataFrame.to_numpy() silently degrades that block
+    to dtype=object whenever it mixes bool with numeric dtypes (unlike plain
+    numpy, which upcasts bool+float to float64 without complaint), and once one
+    ColumnTransformer block is object-dtype, hstack propagates object to the
+    *entire* output array — which LightGBM's dtype validation then rejects with
+    "pandas dtypes must be int, float or bool" even though every value is
+    numeric. Casting here, the single enrichment choke point shared by
+    walk_forward_cv() and build_inference_features(), keeps the passthrough
+    block uniformly numeric so this never bites downstream.
 
     Args:
         card_df: gold_card_features DataFrame (one row per card printing).
@@ -193,10 +227,13 @@ def _enrich_card_df(card_df: pd.DataFrame) -> pd.DataFrame:
     card_df["has_mtgjson_data"] = True
     card_df["top8_appearances_30d"] = 0.0
     card_df["deck_pct"] = 0.0
+    for col in BOOL_COLS:
+        if col in card_df.columns:
+            card_df[col] = card_df[col].astype(float)
     return card_df
 
 
-def _enrich_lag_df(lag_df: pd.DataFrame) -> pd.DataFrame:
+def enrich_lag_df(lag_df: pd.DataFrame) -> pd.DataFrame:
     """Add derived columns to a lag-features DataFrame.
 
     Applies the same log transforms and return calculation in both training
@@ -250,7 +287,7 @@ def build_inference_features(
     static card attributes, with log transforms applied and stub columns for
     tournament/EDHREC data not yet integrated into the Gold layer.
 
-    Enrichment is delegated to _enrich_lag_df() and _enrich_card_df(), which are
+    Enrichment is delegated to enrich_lag_df() and enrich_card_df(), which are
     also called by walk_forward_cv() in trainer.py, guaranteeing that training
     and serving see identical features (no training/serving skew).
 
@@ -267,8 +304,8 @@ def build_inference_features(
         Pandas nullable extension types (BooleanDtype, Int64Dtype) are
         normalised to numpy-native types.
     """
-    lag_df = _enrich_lag_df(build_lag_features(conn, snapshot_date))
-    card_df = _enrich_card_df(conn.execute("SELECT * FROM gold_card_features").df())
+    lag_df = enrich_lag_df(build_lag_features(conn, snapshot_date))
+    card_df = enrich_card_df(conn.execute("SELECT * FROM gold_card_features").df())
 
     X = lag_df.merge(card_df, on="uuid", how="inner").reset_index(drop=True)
     return _normalise_nullable_dtypes(X)

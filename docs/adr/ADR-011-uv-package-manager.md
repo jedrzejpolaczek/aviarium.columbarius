@@ -42,6 +42,12 @@ Use **uv** as the package manager.
   ecosystem support are less proven than pip or Poetry.
 - Some existing tutorials, Docker base images, and CI templates assume pip or Poetry;
   minor adaptation is needed.
+- uv's resolver computes per-platform dependency floors, which can differ across
+  platforms for the same package. We hit a real case of this: `shap`'s transitive
+  `pymc`/`pytensor`/`numba` constraints resolve it to a lower version on Intel macOS
+  (x86_64+darwin) than on other platforms, so a naive version floor that's fine
+  elsewhere can make `uv lock` unsatisfiable on that platform. See the `shap`
+  constraint comment in `pyproject.toml` for the concrete example.
 
 ### Neutral
 - The `uv` binary must be installed separately before `uv sync` can run. This is

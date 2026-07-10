@@ -8,8 +8,6 @@ GoldSignalBuilders reads clean Silver tables and produces five Gold tables:
                               (event_date, format, event_type) with card_count.
                               Anchor table for Chow structural break tests and
                               days_since_last_ban/days_since_last_unban features.
-                              A SQL pre-check short-circuits before _load_and_parse_meta
-                              when no legality transitions exist.
     gold_format_staples     — per-(card, format, date) rolling deck-inclusion
                               averages and momentum signals.
     gold_ban_price_impact   — per-(card, format, event) EUR price windows before
@@ -18,123 +16,101 @@ GoldSignalBuilders reads clean Silver tables and produces five Gold tables:
                               and copy averages over 30-day and 90-day windows.
 """
 
-import json
+from pathlib import Path
 
 import duckdb
 import pandas as pd
 
-from src.data.cards.storage.base import get_tables
+from src.data.cards.storage.base.storage import get_tables
 from src.logger import get_logger
 
 
 logger = get_logger(__name__)
 
-_FORMATS = ["commander", "standard", "modern", "legacy", "vintage"]
-
-_EVENTS_COLS = ["event_date", "format", "event_type", "card_count"]
-
-_BAN_IMPACT_COLS = [
-    "scryfall_id",
-    "format",
-    "event_type",
-    "event_date",
-    "price_30d_before",
-    "price_7d_before",
-    "price_at_event",
-    "price_7d_after",
-    "price_30d_after",
-    "price_change_7d_pct",
-    "price_change_30d_pct",
-]
+_SQL_DIR = Path(__file__).parent / "sql"
 
 
 class GoldSignalBuilders:
     """Builds event-driven and time-series signal tables from Silver history data."""
 
+    _EVENTS_COLS = ["event_date", "format", "event_type", "card_count"]
+
+    _BAN_IMPACT_COLS = [
+        "scryfall_id",
+        "format",
+        "event_type",
+        "event_date",
+        "price_30d_before",
+        "price_7d_before",
+        "price_at_event",
+        "price_7d_after",
+        "price_30d_after",
+        "price_change_7d_pct",
+        "price_change_30d_pct",
+    ]
+
+    # Shared by build_demand_signals(), build_events() and
+    # build_ban_price_impact(): computes each format's current legality plus
+    # its previous-snapshot value via LAG() over (id, snapshot_date), along
+    # with edhrec_rank/prev_rank. Canonical columns: id, snapshot_date,
+    # edhrec_rank, prev_rank, curr_<format>, prev_<format> for each of
+    # commander/standard/modern/legacy/vintage.
+    _LEGALITY_LAG_CTE = (_SQL_DIR / "_legality_lag_cte.sql").read_text()
+
+    # Shared by build_events() and build_ban_price_impact(): detects every
+    # ban/unban legality transition per (card id, snapshot_date, format) by
+    # comparing each snapshot's legality to the previous one via LAG().
+    # Canonical columns: id, snapshot_date, format, event_type.
+    _TRANSITIONS_CTE = (
+        (_SQL_DIR / "transitions_cte.sql")
+        .read_text()
+        .format(legality_lag=_LEGALITY_LAG_CTE)
+    )
+
+    # Shared by build_format_staples() (and by GoldFeatureBuilders.build_price_features()
+    # in features.py): the standard 7d/30d trailing-window pair, parameterized by
+    # partition/order column name. See sql/_rolling_7_30_window.sql.
+    _ROLLING_7_30 = (_SQL_DIR / "_rolling_7_30_window.sql").read_text()
+
     def __init__(self, silver_con: duckdb.DuckDBPyConnection) -> None:
         self._silver_con = silver_con
-
-    def _load_and_parse_meta(self, extra_cols: tuple[str, ...] = ()) -> pd.DataFrame:
-        """Query silver_meta_history and expand to per-format columns.
-
-        Returns a DataFrame with columns: id, snapshot_date, legalities (dict),
-        one {fmt}_legality column per format in _FORMATS, plus any extra_cols requested.
-        Callers are responsible for dropping the legalities column if not needed.
-        """
-        # extra_cols must be hard-coded column names — not user input
-        select_cols = ", ".join(("id", "snapshot_date", "legalities") + extra_cols)
-        df = self._silver_con.execute(
-            f"SELECT {select_cols} FROM silver_meta_history"
-        ).df()
-        if df.empty:
-            return df
-        df = df.sort_values(["id", "snapshot_date"]).reset_index(drop=True)
-        df["legalities"] = df["legalities"].apply(
-            lambda x: (
-                json.loads(x)
-                if isinstance(x, str)
-                else (x if isinstance(x, dict) else {})
-            )
-        )
-        for fmt in _FORMATS:
-            df[f"{fmt}_legality"] = df["legalities"].apply(lambda x, f=fmt: x.get(f))
-        return df
 
     def _has_legality_transitions(self) -> bool:
         """Return True if any card has more than one distinct legality value across snapshots.
 
-        Runs entirely in SQL (O(N) table scan with GROUP BY) so it avoids loading
-        silver_meta_history into Python when no transitions exist.
-        Called as a fast pre-check in build_events() and build_ban_price_impact()
-        before the expensive _load_and_parse_meta() + groupby-shift pipeline.
+        Fast SQL pre-check (O(N) GROUP BY) used by build_events() and
+        build_ban_price_impact() to skip the full window-function query when
+        the silver_meta_history table has no transitions at all.
         """
-        row = self._silver_con.execute("""
-            SELECT 1 FROM (
-                SELECT id
-                FROM silver_meta_history
-                WHERE legalities IS NOT NULL
-                GROUP BY id
-                HAVING COUNT(DISTINCT legalities) > 1
-            ) t
-            LIMIT 1
-        """).fetchone()
+        sql = (_SQL_DIR / "legality_transitions_check.sql").read_text()
+        row = self._silver_con.execute(sql).fetchone()
         return row is not None
 
     def build_demand_signals(self) -> pd.DataFrame:
         """Build gold_demand_signals from silver_meta_history.
 
-        Detects ban/unban events by comparing consecutive daily legality
-        snapshots per card, and computes EDHREC rank deltas as a proxy for
-        demand momentum.
-
-        Returns:
-            One row per (id, snapshot_date) with event flags and rank deltas.
+        Detects ban/unban events and EDHREC rank deltas entirely in DuckDB using
+        LAG() window functions and json_extract_string(). No data leaves DuckDB.
         """
-        df = self._load_and_parse_meta(extra_cols=("edhrec_rank",))
-        if df.empty:
-            return df
-
-        for fmt in _FORMATS:
-            prev = df.groupby("id")[f"{fmt}_legality"].shift(1)
-            df[f"{fmt}_banned"] = (prev == "legal") & (
-                df[f"{fmt}_legality"] == "banned"
-            )
-            df[f"{fmt}_unbanned"] = (prev == "banned") & (
-                df[f"{fmt}_legality"] == "legal"
-            )
-
-        prev_rank = df.groupby("id")["edhrec_rank"].shift(1)
-        df["edhrec_rank_change"] = df["edhrec_rank"] - prev_rank
-
-        return df.drop(columns=["legalities"])
+        silver_tables = get_tables(self._silver_con)
+        if "silver_meta_history" not in silver_tables:
+            return pd.DataFrame()
+        sql = (
+            (_SQL_DIR / "demand_signals.sql")
+            .read_text()
+            .format(legality_lag=self._LEGALITY_LAG_CTE)
+        )
+        return self._silver_con.execute(sql).df()
 
     def build_events(self) -> pd.DataFrame:
         """Build gold_events — format-level ban/unban event calendar.
 
-        Aggregates per-card legality transitions from silver_meta_history into
-        one row per (event_date, format, event_type), with a card_count of how
-        many cards were affected. Serves as the anchor table for Chow structural
-        break tests (NB06) and days_since_last_ban/days_since_last_unban features.
+        Detects legality transitions entirely in DuckDB using LAG() window
+        functions and json_extract_string(), then aggregates to one row per
+        (event_date, format, event_type) with card_count. No data leaves DuckDB.
+
+        Serves as the anchor table for Chow structural break tests (NB06) and
+        days_since_last_ban/days_since_last_unban features.
 
         event_type values: 'ban' (legal → banned), 'unban' (banned → legal).
 
@@ -142,7 +118,7 @@ class GoldSignalBuilders:
             One row per (event_date, format, event_type) with card_count.
             Empty DataFrame with correct schema if no transitions detected.
         """
-        empty = pd.DataFrame(columns=_EVENTS_COLS)
+        empty = pd.DataFrame(columns=self._EVENTS_COLS)
 
         if not self._has_legality_transitions():
             logger.info(
@@ -150,37 +126,16 @@ class GoldSignalBuilders:
             )
             return empty
 
-        meta_df = self._load_and_parse_meta()
-        if meta_df.empty:
-            return empty
-
-        chunks: list[pd.DataFrame] = []
-        for fmt in _FORMATS:
-            col = f"{fmt}_legality"
-            prev = meta_df.groupby("id")[col].shift(1)
-            for mask, event_type in [
-                ((prev == "legal") & (meta_df[col] == "banned"), "ban"),
-                ((prev == "banned") & (meta_df[col] == "legal"), "unban"),
-            ]:
-                agg = (
-                    meta_df.loc[mask, ["snapshot_date"]]
-                    .assign(format=fmt, event_type=event_type)
-                    .groupby(["snapshot_date", "format", "event_type"])
-                    .size()
-                    .reset_index(name="card_count")
-                    .rename(columns={"snapshot_date": "event_date"})
-                )
-                chunks.append(agg)
-
-        non_empty = [c for c in chunks if not c.empty]
-        if not non_empty:
-            return empty
-
-        return (
-            pd.concat(non_empty, ignore_index=True)[_EVENTS_COLS]
-            .sort_values(["event_date", "format", "event_type"])
-            .reset_index(drop=True)
+        sql = (
+            (_SQL_DIR / "events.sql")
+            .read_text()
+            .format(transitions_cte=self._TRANSITIONS_CTE)
         )
+        result = self._silver_con.execute(sql).df()
+
+        if result.empty:
+            return empty
+        return result[self._EVENTS_COLS]
 
     def build_format_staples(self) -> pd.DataFrame:
         """Build gold_format_staples from silver_format_staples_history.
@@ -192,48 +147,24 @@ class GoldSignalBuilders:
         Returns:
             One row per (id, snapshot_date) with format staple feature columns.
         """
-        return self._silver_con.execute("""
-            SELECT
-                id,
-                card_name,
-                format,
-                snapshot_date,
-                deck_pct,
-                played,
-                top,
-                AVG(deck_pct) OVER w7  AS deck_pct_7d_avg,
-                AVG(deck_pct) OVER w30 AS deck_pct_30d_avg,
-                deck_pct - LAG(deck_pct, 7)  OVER (PARTITION BY id ORDER BY snapshot_date)
-                    AS deck_pct_change_7d,
-                deck_pct - LAG(deck_pct, 30) OVER (PARTITION BY id ORDER BY snapshot_date)
-                    AS deck_pct_change_30d
-            FROM silver_format_staples_history
-            WINDOW
-                w7  AS (PARTITION BY id ORDER BY snapshot_date
-                         ROWS BETWEEN 6 PRECEDING AND CURRENT ROW),
-                w30 AS (PARTITION BY id ORDER BY snapshot_date
-                         ROWS BETWEEN 29 PRECEDING AND CURRENT ROW)
-            ORDER BY id, snapshot_date
-        """).df()
+        sql = (
+            (_SQL_DIR / "format_staples.sql")
+            .read_text()
+            .format(
+                rolling_7_30=self._ROLLING_7_30.format(
+                    partition_col="id", order_col="snapshot_date"
+                )
+            )
+        )
+        return self._silver_con.execute(sql).df()
 
     def build_ban_price_impact(self) -> pd.DataFrame:
         """Build gold_ban_price_impact from silver_meta_history and silver_prices_history.
 
-        For each ban/unban event detected in daily legality snapshots, computes EUR
-        price windows (7d and 30d) before and after the event date. Useful for
-        correlating legality changes with price movements.
-
-        Event detection: a "banned" event fires when a format legality transitions
-        from "legal" → "banned" between two consecutive daily snapshots; "unbanned"
-        fires on the reverse transition.
-
-        Price columns are NULL when fewer than 7/30 days of price history exist
-        around the event — they fill in over time as the pipeline accumulates data.
-
-        Returns:
-            One row per (scryfall_id, format, event_type, event_date).
+        Event detection (legality transitions) runs in DuckDB SQL. Price window
+        averaging (merge + groupby) runs in pandas on the small events DataFrame.
         """
-        empty = pd.DataFrame(columns=_BAN_IMPACT_COLS)
+        empty = pd.DataFrame(columns=self._BAN_IMPACT_COLS)
 
         if not self._has_legality_transitions():
             logger.info(
@@ -241,29 +172,18 @@ class GoldSignalBuilders:
             )
             return empty
 
-        meta_df = self._load_and_parse_meta()
-        if meta_df.empty:
-            return empty
+        sql = (
+            (_SQL_DIR / "ban_price_impact_events.sql")
+            .read_text()
+            .format(transitions_cte=self._TRANSITIONS_CTE)
+        )
+        events_df = self._silver_con.execute(sql).df()
 
-        event_chunks: list[pd.DataFrame] = []
-        for fmt in _FORMATS:
-            col = f"{fmt}_legality"
-            prev = meta_df.groupby("id")[col].shift(1)
-            for mask, event_type in [
-                ((prev == "legal") & (meta_df[col] == "banned"), "ban"),
-                ((prev == "banned") & (meta_df[col] == "legal"), "unban"),
-            ]:
-                rows = meta_df.loc[mask, ["id", "snapshot_date"]].copy()
-                rows["format"] = fmt
-                rows["event_type"] = event_type
-                rows = rows.rename(
-                    columns={"id": "scryfall_id", "snapshot_date": "event_date"}
-                )
-                event_chunks.append(rows)
-
-        events_df = pd.concat(event_chunks, ignore_index=True)
         if events_df.empty:
-            snapshot_dates = meta_df["snapshot_date"].nunique()
+            _row = self._silver_con.execute(
+                "SELECT COUNT(DISTINCT snapshot_date) FROM silver_meta_history"
+            ).fetchone()
+            snapshot_dates = _row[0] if _row is not None else 0
             logger.info(
                 "No ban/unban transitions detected across %d snapshot date(s) "
                 "in silver_meta_history — gold_ban_price_impact will be empty",
@@ -273,18 +193,18 @@ class GoldSignalBuilders:
 
         silver_tables = get_tables(self._silver_con)
         if "silver_prices_history" not in silver_tables:
-            for c in _BAN_IMPACT_COLS[4:]:
+            for c in self._BAN_IMPACT_COLS[4:]:
                 events_df[c] = None
-            return events_df[_BAN_IMPACT_COLS]
+            return events_df[self._BAN_IMPACT_COLS]
 
         prices_df = self._silver_con.execute(
             "SELECT scryfall_id, snapshot_date, eur FROM silver_prices_history"
         ).df()
 
         if prices_df.empty:
-            for c in _BAN_IMPACT_COLS[4:]:
+            for c in self._BAN_IMPACT_COLS[4:]:
                 events_df[c] = None
-            return events_df[_BAN_IMPACT_COLS]
+            return events_df[self._BAN_IMPACT_COLS]
 
         merged = events_df.merge(prices_df, on="scryfall_id", how="left")
         merged["days_diff"] = (
@@ -321,7 +241,7 @@ class GoldSignalBuilders:
             result["price_30d_after"] - result["price_30d_before"]
         ) / result["price_30d_before"].replace(0, float("nan"))
 
-        return result[_BAN_IMPACT_COLS]
+        return result[self._BAN_IMPACT_COLS]
 
     def build_tournament_signals(self) -> pd.DataFrame:
         """Build gold_tournament_signals from silver_tournament_results_history.
@@ -335,40 +255,5 @@ class GoldSignalBuilders:
             One row per (oracle_id, format) with appearance counts, copy
             averages, sideboard ratio, and last appearance date.
         """
-        return self._silver_con.execute("""
-            WITH base AS (
-                SELECT *,
-                    CAST(tournament_date AS DATE) AS tournament_dt,
-                    (CURRENT_DATE - CAST(tournament_date AS DATE)) AS days_ago
-                FROM silver_tournament_results_history
-                WHERE oracle_id IS NOT NULL
-            )
-            SELECT
-                oracle_id,
-                MIN(scryfall_id) AS scryfall_id,
-                format,
-                COUNT(DISTINCT CASE
-                    WHEN days_ago <= 30 AND NOT is_sideboard THEN tournament_id
-                END) AS top8_appearances_30d,
-                COUNT(DISTINCT CASE
-                    WHEN days_ago <= 90 AND NOT is_sideboard THEN tournament_id
-                END) AS top8_appearances_90d,
-                AVG(CASE
-                    WHEN NOT is_sideboard THEN CAST(copies AS FLOAT)
-                END) AS top8_copies_avg,
-                COUNT(DISTINCT CASE
-                    WHEN days_ago <= 30 AND is_sideboard THEN tournament_id
-                END) AS sideboard_appearances_30d,
-                COUNT(DISTINCT CASE
-                    WHEN days_ago <= 90 AND NOT is_sideboard THEN tournament_id
-                END) * 100.0
-                    / NULLIF(COUNT(DISTINCT CASE
-                        WHEN days_ago <= 90 THEN tournament_id
-                    END), 0) AS main_deck_pct,
-                MAX(CASE
-                    WHEN NOT is_sideboard THEN tournament_date
-                END) AS last_top8_date
-            FROM base
-            GROUP BY oracle_id, format
-            ORDER BY oracle_id, format
-        """).df()
+        sql = (_SQL_DIR / "tournament_signals.sql").read_text()
+        return self._silver_con.execute(sql).df()

@@ -9,6 +9,11 @@ def _client(rows: list[dict]) -> TestClient:
     app = FastAPI()
     app.include_router(router)
     app.state.X_all = pd.DataFrame(rows)
+    # list_cards is injected via get_request_features (app/dependencies.py),
+    # which reads X_all_t/model_run_id too even though this router only
+    # uses X_all — set them so the shared dependency resolves.
+    app.state.X_all_t = pd.DataFrame()
+    app.state.model_run_id = "test-run-123"
     return TestClient(app)
 
 
@@ -90,3 +95,18 @@ def test_empty_dataset_returns_empty_list():
     response = client.get("/cards")
     assert response.status_code == 200
     assert response.json() == {"cards": []}
+
+
+def test_returns_503_when_features_unavailable():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient as _TestClient
+
+    app = FastAPI()
+    app.include_router(router)
+    app.state.X_all = None
+    app.state.X_all_t = None
+    app.state.model_run_id = ""
+
+    response = _TestClient(app).get("/cards")
+
+    assert response.status_code == 503

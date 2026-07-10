@@ -1,9 +1,14 @@
+import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
 
 from src.data.cards.pipelines import (
+    _StageResult,
+    _log_pipeline_summary,
+    _run_timed,
     daily_bronze_pipeline,
     daily_silver_pipeline,
     initial_pipeline,
@@ -16,7 +21,6 @@ MINIMAL_PIPELINE_CONFIG = {
         "silver_duckdb_path": ":memory:",
         "gold_duckdb_path": ":memory:",
         "silver_config_path": "configs/silver_config.json",
-        "gold_config_path": "configs/gold_config.json",
         "bronze_config_path": "configs/bronze_config.json",
         "bronze_config_seed_path": "configs/bronze_config_seed.json",
     },
@@ -30,7 +34,6 @@ def test_load_config_storage_is_dict(tmp_path):
   silver_duckdb_path: "data/silver/cards.duckdb"
   gold_duckdb_path: "data/gold/cards.duckdb"
   silver_config_path: "configs/silver_config.json"
-  gold_config_path: "configs/gold_config.json"
   bronze_config_path: "configs/bronze_config.json"
   bronze_config_seed_path: "configs/bronze_config_seed.json"
 """
@@ -41,7 +44,6 @@ def test_load_config_storage_is_dict(tmp_path):
     assert isinstance(storage, dict), f"storage must be a dict, got {type(storage)}"
     assert storage["bronze_duckdb_path"] == "data/bronze/cards.duckdb"
     assert storage["bronze_config_seed_path"] == "configs/bronze_config_seed.json"
-    assert storage["gold_config_path"] == "configs/gold_config.json"
 
 
 @pytest.fixture
@@ -126,9 +128,7 @@ class TestInitialPipeline:
             MockSilver.assert_called_once_with(
                 ":memory:", ":memory:", "configs/silver_config.json"
             )
-            MockGold.assert_called_once_with(
-                ":memory:", ":memory:", "configs/gold_config.json"
-            )
+            MockGold.assert_called_once_with(":memory:", ":memory:")
 
 
 # ---------------------------------------------------------------------------
@@ -186,3 +186,135 @@ class TestDailySilverPipeline:
             MockSilver.assert_called_once_with(
                 ":memory:", ":memory:", "configs/silver_config.json"
             )
+
+
+# ---------------------------------------------------------------------------
+# _run_timed
+# ---------------------------------------------------------------------------
+
+
+class TestRunTimed:
+    def test_appends_ok_result_on_success(self) -> None:
+        results: list[_StageResult] = []
+        _run_timed("Bronze", lambda: None, results)
+        assert len(results) == 1
+        name, elapsed, status = results[0]
+        assert name == "Bronze"
+        assert status == "ok"
+        assert elapsed >= 0
+
+    def test_appends_error_result_on_failure(self) -> None:
+        results: list[_StageResult] = []
+        with pytest.raises(ValueError):
+            _run_timed(
+                "Silver", lambda: (_ for _ in ()).throw(ValueError("boom")), results
+            )
+        assert len(results) == 1
+        name, elapsed, status = results[0]
+        assert name == "Silver"
+        assert status == "error"
+        assert elapsed >= 0
+
+    def test_reraises_exception(self) -> None:
+        results: list[_StageResult] = []
+        with pytest.raises(RuntimeError, match="stage failed"):
+            _run_timed(
+                "Gold",
+                lambda: (_ for _ in ()).throw(RuntimeError("stage failed")),
+                results,
+            )
+
+    def test_elapsed_is_non_negative(self) -> None:
+        results: list[_StageResult] = []
+        _run_timed("Bronze", lambda: None, results)
+        assert results[0][1] >= 0
+
+    def test_multiple_stages_accumulate(self) -> None:
+        results: list[_StageResult] = []
+        _run_timed("Bronze", lambda: None, results)
+        _run_timed("Silver", lambda: None, results)
+        assert len(results) == 2
+        assert results[0][0] == "Bronze"
+        assert results[1][0] == "Silver"
+
+
+# ---------------------------------------------------------------------------
+# _log_pipeline_summary
+# ---------------------------------------------------------------------------
+
+
+class TestBronzeConfigDownloadFlags:
+    def test_daily_pipeline_config_has_downloads_enabled(self):
+        # The daily/incremental pipeline (unlike the one-time seed pipeline) must
+        # actually re-download fresh source data every run -- if "flag" is false,
+        # the pipeline silently re-ingests the same static local JSON file forever,
+        # producing byte-identical bronze/silver/gold data on every "daily" run.
+        config_path = (
+            Path(__file__).resolve().parents[3] / "configs" / "bronze_config.json"
+        )
+        config = json.loads(config_path.read_text())
+        for source in config["sources"]:
+            assert source["flag"] is True, (
+                f"{source['type']} has flag=False in the daily pipeline config "
+                "-- downloads are disabled, bronze data will never refresh"
+            )
+
+
+class TestLogPipelineSummary:
+    def test_logs_at_info_level(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="src.data.cards.pipelines"):
+            _log_pipeline_summary([("Bronze", 1.5, "ok")], total=1.5)
+        assert any(r.levelno == logging.INFO for r in caplog.records)
+
+    def test_summary_contains_stage_name(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="src.data.cards.pipelines"):
+            _log_pipeline_summary([("Bronze", 1.5, "ok")], total=1.5)
+        assert "Bronze" in caplog.text
+
+    def test_summary_contains_checkmark_for_ok(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="src.data.cards.pipelines"):
+            _log_pipeline_summary([("Bronze", 1.5, "ok")], total=1.5)
+        assert "✓" in caplog.text
+
+    def test_summary_contains_cross_for_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="src.data.cards.pipelines"):
+            _log_pipeline_summary([("Silver", 0.3, "error")], total=0.3)
+        assert "✗" in caplog.text
+
+    def test_summary_contains_total(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="src.data.cards.pipelines"):
+            _log_pipeline_summary(
+                [("Bronze", 2.0, "ok"), ("Silver", 1.0, "ok")], total=3.0
+            )
+        assert "Total" in caplog.text
+
+    def test_all_stages_appear_in_summary(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        stages: list[_StageResult] = [
+            ("Bronze", 1.0, "ok"),
+            ("Silver", 2.0, "ok"),
+            ("Gold", 3.0, "error"),
+        ]
+        with caplog.at_level(logging.INFO, logger="src.data.cards.pipelines"):
+            _log_pipeline_summary(stages, total=6.0)
+        for name in ("Bronze", "Silver", "Gold"):
+            assert name in caplog.text

@@ -1,19 +1,15 @@
 """Tests for BaseStorage, TransformStorage, and DuckDBWriter base classes."""
 
-import json
 from unittest.mock import MagicMock, patch
 
 import duckdb
 import pandas as pd
 import pytest
 
-from src.data.cards.storage.base import (
-    BaseStorage,
-    DuckDBWriter,
-    TransformStorage,
-    _serialize_objects,
-    get_tables,
-)
+from src.data.cards.storage.base.storage import get_tables, warn_if_missing
+from src.data.cards.storage.base.writers import DuckDBWriter
+from src.data.cards.storage.base.transformer import TransformStorage
+from src.data.cards.storage.base.storage import BaseStorage
 from src.data.cards.storage.errors import StorageConnectionError, StorageWriteError
 
 
@@ -78,7 +74,7 @@ class TestOpenConnection:
     def test_raises_storage_connection_error_on_bad_path(self, tmp_path):
         bad_path = str(tmp_path / "does_not_exist" / "test.duckdb")
         # Monkeypatch mkdir to prevent creation so duckdb.connect fails
-        with patch("src.data.cards.storage.base.Path") as MockPath:
+        with patch("src.data.db.Path") as MockPath:
             mock_instance = MagicMock()
             mock_instance.parent.mkdir.side_effect = PermissionError("denied")
             MockPath.return_value = mock_instance
@@ -86,70 +82,10 @@ class TestOpenConnection:
                 BaseStorage._open_connection(bad_path, read_only=False)
 
     def test_raises_storage_connection_error_when_duckdb_fails(self):
-        with patch("src.data.cards.storage.base.duckdb.connect") as mock_connect:
+        with patch("src.data.db.duckdb.connect") as mock_connect:
             mock_connect.side_effect = duckdb.Error("connection failed")
             with pytest.raises(StorageConnectionError, match="Cannot open DuckDB"):
                 BaseStorage._open_connection(":memory:", read_only=False)
-
-
-# ---------------------------------------------------------------------------
-# _serialize_objects (module-level function)
-# ---------------------------------------------------------------------------
-
-
-class TestSerializeObjects:
-    def test_serializes_dict_cells_to_json_string(self):
-        df = pd.DataFrame({"col": [{"a": 1}]})
-        result = _serialize_objects(df)
-        assert json.loads(result["col"].iloc[0]) == {"a": 1}
-
-    def test_leaves_non_object_columns_unchanged(self):
-        df = pd.DataFrame({"num": [1, 2], "flt": [1.1, 2.2]})
-        result = _serialize_objects(df)
-        assert list(result["num"]) == [1, 2]
-        assert list(result["flt"]) == [1.1, 2.2]
-
-    def test_leaves_string_cells_unchanged(self):
-        df = pd.DataFrame({"col": ["hello", "world"]})
-        result = _serialize_objects(df)
-        assert list(result["col"]) == ["hello", "world"]
-
-    def test_leaves_none_cells_unchanged(self):
-        df = pd.DataFrame({"col": [None, {"a": 1}]})
-        result = _serialize_objects(df)
-        assert pd.isna(result["col"].iloc[0])
-        assert json.loads(result["col"].iloc[1]) == {"a": 1}
-
-    def test_returns_dataframe(self):
-        df = pd.DataFrame({"a": [1]})
-        result = _serialize_objects(df)
-        assert isinstance(result, pd.DataFrame)
-
-    def test_serialize_objects_does_not_mutate_input(self):
-        df = pd.DataFrame({"a": [{"key": "val"}, None], "b": [1, 2]})
-        original_a = df["a"].tolist()
-        _serialize_objects(df)
-        # Input must be unchanged after the call
-        assert df["a"].tolist() == original_a
-
-    def test_serialize_objects_returns_serialized_copy(self):
-        df = pd.DataFrame({"a": [{"key": "val"}, None], "b": [1, 2]})
-        result = _serialize_objects(df)
-        assert result["a"].iloc[0] == '{"key": "val"}'
-        assert result["a"].iloc[1] is None
-        # Original is not changed
-        assert isinstance(df["a"].iloc[0], dict)
-
-    def test_list_cells_serialized_to_json_string(self):
-        df = pd.DataFrame({"col": [[1, 2, 3]]})
-        result = _serialize_objects(df)
-        assert json.loads(result["col"].iloc[0]) == [1, 2, 3]
-
-    def test_list_with_none_serializes_list_leaves_none(self):
-        df = pd.DataFrame({"col": [[1, 2], None]})
-        result = _serialize_objects(df)
-        assert json.loads(result["col"].iloc[0]) == [1, 2]
-        assert pd.isna(result["col"].iloc[1])
 
 
 # ---------------------------------------------------------------------------
@@ -226,27 +162,74 @@ class TestTransformStoragePipeline:
 
 
 class TestGetTables:
-    def test_returns_table_names(self):
-        conn = duckdb.connect(":memory:")
-        conn.execute("CREATE TABLE test_table AS SELECT 1 AS col")
-        tables = get_tables(conn)
+    def test_returns_table_names(self, memory_con):
+        memory_con.execute("CREATE TABLE test_table AS SELECT 1 AS col")
+        tables = get_tables(memory_con)
         assert "test_table" in tables
-        conn.close()
 
-    def test_returns_empty_set_for_empty_database(self):
-        conn = duckdb.connect(":memory:")
-        tables = get_tables(conn)
+    def test_returns_empty_set_for_empty_database(self, memory_con):
+        tables = get_tables(memory_con)
         assert tables == set()
-        conn.close()
 
-    def test_returns_multiple_tables(self):
-        conn = duckdb.connect(":memory:")
-        conn.execute("CREATE TABLE table1 AS SELECT 1 AS col")
-        conn.execute("CREATE TABLE table2 AS SELECT 2 AS col")
-        tables = get_tables(conn)
+    def test_returns_multiple_tables(self, memory_con):
+        memory_con.execute("CREATE TABLE table1 AS SELECT 1 AS col")
+        memory_con.execute("CREATE TABLE table2 AS SELECT 2 AS col")
+        tables = get_tables(memory_con)
         assert "table1" in tables
         assert "table2" in tables
-        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# warn_if_missing
+# ---------------------------------------------------------------------------
+
+
+class TestWarnIfMissing:
+    def test_returns_false_when_all_required_tables_present(self):
+        from src.logger import get_logger
+
+        logger = get_logger("test.warn_if_missing")
+        result = warn_if_missing(
+            logger,
+            ("table_a", "table_b"),
+            {"table_a", "table_b", "table_c"},
+            "some_target",
+            tier_label="Silver",
+        )
+        assert result is False
+
+    def test_returns_true_and_warns_when_a_required_table_is_missing(self, caplog):
+        import logging
+
+        from src.logger import get_logger
+
+        logger = get_logger("test.warn_if_missing")
+        with caplog.at_level(logging.WARNING):
+            result = warn_if_missing(
+                logger,
+                ("table_a", "table_b"),
+                {"table_a"},
+                "some_target",
+                tier_label="Silver",
+            )
+        assert result is True
+        assert "Missing Silver tables" in caplog.text
+        assert "table_b" in caplog.text
+        assert "some_target" in caplog.text
+
+    def test_lists_every_missing_table_not_just_the_first(self, caplog):
+        import logging
+
+        from src.logger import get_logger
+
+        logger = get_logger("test.warn_if_missing")
+        with caplog.at_level(logging.WARNING):
+            warn_if_missing(
+                logger, ("a", "b", "c"), set(), "some_target", tier_label="Bronze"
+            )
+        assert "'a'" in caplog.text
+        assert "'b'" in caplog.text
+        assert "'c'" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +240,8 @@ class TestGetTables:
 @pytest.fixture
 def mem_con():
     """In-memory DuckDB connection, closed after each test."""
+    # Pre-existing local fixture, functionally identical to conftest.py's memory_con;
+    # not consolidated in this pilot — see Task 13 in the maintainability remediation plan.
     con = duckdb.connect(":memory:")
     yield con
     con.close()
@@ -362,95 +347,93 @@ class TestDuckDBWriter:
         with pytest.raises(StorageWriteError):
             DuckDBWriter(mock_con).append(df, "hist", "id")
 
-
-class TestDuckDBWriterColumnTypes:
-    """Verify that column_types applies SQL CASTs when creating/inserting."""
-
-    def test_full_load_with_column_types_stores_as_map(self, mem_con):
-        df = pd.DataFrame(
-            {"id": ["a"], "meta": [{"commander": "legal", "standard": "banned"}]}
-        )
-        DuckDBWriter(mem_con).full_load(
-            df, "tbl", column_types={"meta": "MAP(VARCHAR, VARCHAR)"}
-        )
-        row = mem_con.execute("SELECT meta FROM tbl").fetchone()
-        assert row is not None and row[0] == {
-            "commander": "legal",
-            "standard": "banned",
-        }
-
-    def test_upsert_creates_with_column_types(self, mem_con):
-        df = pd.DataFrame({"id": ["a"], "meta": [{"commander": "legal"}]})
-        DuckDBWriter(mem_con).upsert(
-            df, "tbl", "id", column_types={"meta": "MAP(VARCHAR, VARCHAR)"}
-        )
-        row = mem_con.execute("SELECT meta FROM tbl").fetchone()
-        assert row is not None and row[0] == {"commander": "legal"}
-
-    def test_upsert_replaces_with_column_types(self, mem_con):
-        w = DuckDBWriter(mem_con)
-        df1 = pd.DataFrame({"id": ["a"], "meta": [{"commander": "legal"}]})
-        df2 = pd.DataFrame({"id": ["a"], "meta": [{"standard": "banned"}]})
-        ct = {"meta": "MAP(VARCHAR, VARCHAR)"}
-        w.upsert(df1, "tbl", "id", column_types=ct)
-        w.upsert(df2, "tbl", "id", column_types=ct)
-        row = mem_con.execute("SELECT meta FROM tbl").fetchone()
-        assert row is not None and row[0] == {"standard": "banned"}
-
-    def test_append_creates_with_column_types(self, mem_con):
-        df = pd.DataFrame(
-            {
-                "id": ["a"],
-                "snapshot_date": ["2026-01-01"],
-                "meta": [{"commander": "legal"}],
-            }
-        )
-        DuckDBWriter(mem_con).append(
-            df, "hist", "id", column_types={"meta": "MAP(VARCHAR, VARCHAR)"}
-        )
-        row = mem_con.execute("SELECT meta FROM hist").fetchone()
-        assert row is not None and row[0] == {"commander": "legal"}
-
-    def test_append_inserts_into_existing_with_column_types(self, mem_con):
+    def test_append_composite_key_deduplicates_on_all_columns(self, mem_con):
         w = DuckDBWriter(mem_con)
         df1 = pd.DataFrame(
-            {
-                "id": ["a"],
-                "snapshot_date": ["2026-01-01"],
-                "meta": [{"commander": "legal"}],
-            }
+            [
+                {
+                    "uuid": "u1",
+                    "snapshot_date": "2026-06-24",
+                    "retailer": "cardmarket",
+                    "tx_type": "retail",
+                    "finish": "normal",
+                    "price": 3.20,
+                }
+            ]
         )
-        df2 = pd.DataFrame(
-            {
-                "id": ["b"],
-                "snapshot_date": ["2026-01-02"],
-                "meta": [{"standard": "banned"}],
-            }
-        )
-        ct = {"meta": "MAP(VARCHAR, VARCHAR)"}
-        w.append(df1, "hist", "id", column_types=ct)
-        w.append(df2, "hist", "id", column_types=ct)
-        rows = mem_con.execute("SELECT id, meta FROM hist ORDER BY id").fetchall()
-        assert rows[0] == ("a", {"commander": "legal"})
-        assert rows[1] == ("b", {"standard": "banned"})
+        w.append(df1, "t", ["uuid", "retailer", "tx_type", "finish"])
+        # Same composite key — must be skipped
+        w.append(df1, "t", ["uuid", "retailer", "tx_type", "finish"])
+        count = mem_con.execute("SELECT count(*) FROM t").fetchone()[0]
+        assert count == 1
 
-    def test_append_skips_duplicate_with_column_types(self, mem_con):
+    def test_append_composite_key_allows_different_finish(self, mem_con):
         w = DuckDBWriter(mem_con)
-        df = pd.DataFrame(
-            {
-                "id": ["a"],
-                "snapshot_date": ["2026-01-01"],
-                "meta": [{"commander": "legal"}],
-            }
+        row_normal = pd.DataFrame(
+            [
+                {
+                    "uuid": "u1",
+                    "snapshot_date": "2026-06-24",
+                    "retailer": "cardmarket",
+                    "tx_type": "retail",
+                    "finish": "normal",
+                    "price": 3.20,
+                }
+            ]
         )
-        ct = {"meta": "MAP(VARCHAR, VARCHAR)"}
-        w.append(df, "hist", "id", column_types=ct)
-        w.append(df, "hist", "id", column_types=ct)
-        count = mem_con.execute("SELECT count(*) FROM hist").fetchone()
-        assert count is not None and count[0] == 1
+        row_foil = pd.DataFrame(
+            [
+                {
+                    "uuid": "u1",
+                    "snapshot_date": "2026-06-24",
+                    "retailer": "cardmarket",
+                    "tx_type": "retail",
+                    "finish": "foil",
+                    "price": 8.50,
+                }
+            ]
+        )
+        w.append(row_normal, "t", ["uuid", "retailer", "tx_type", "finish"])
+        w.append(row_foil, "t", ["uuid", "retailer", "tx_type", "finish"])
+        count = mem_con.execute("SELECT count(*) FROM t").fetchone()[0]
+        assert count == 2
 
-    def test_column_types_none_behaves_identically_to_no_arg(self, mem_con):
-        df = pd.DataFrame({"id": ["a"], "v": [1]})
-        DuckDBWriter(mem_con).full_load(df, "tbl", column_types=None)
-        row = mem_con.execute("SELECT v FROM tbl").fetchone()
-        assert row is not None and row[0] == 1
+    def test_append_composite_key_allows_different_retailer(self, mem_con):
+        w = DuckDBWriter(mem_con)
+        row_cm = pd.DataFrame(
+            [
+                {
+                    "uuid": "u1",
+                    "snapshot_date": "2026-06-24",
+                    "retailer": "cardmarket",
+                    "tx_type": "retail",
+                    "finish": "normal",
+                    "price": 3.20,
+                }
+            ]
+        )
+        row_tcp = pd.DataFrame(
+            [
+                {
+                    "uuid": "u1",
+                    "snapshot_date": "2026-06-24",
+                    "retailer": "tcgplayer",
+                    "tx_type": "retail",
+                    "finish": "normal",
+                    "price": 3.50,
+                }
+            ]
+        )
+        w.append(row_cm, "t", ["uuid", "retailer", "tx_type", "finish"])
+        w.append(row_tcp, "t", ["uuid", "retailer", "tx_type", "finish"])
+        count = mem_con.execute("SELECT count(*) FROM t").fetchone()[0]
+        assert count == 2
+
+    def test_append_str_key_still_works_after_change(self, mem_con):
+        # Regression: existing str callers must not break
+        w = DuckDBWriter(mem_con)
+        df = pd.DataFrame({"id": ["a"], "snapshot_date": ["2026-01-01"], "v": [1]})
+        w.append(df, "hist", "id")
+        w.append(df, "hist", "id")
+        count = mem_con.execute("SELECT count(*) FROM hist").fetchone()[0]
+        assert count == 1

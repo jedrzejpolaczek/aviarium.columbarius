@@ -10,7 +10,10 @@ Expected result: only "Lightning Bolt" is returned (Tier 1, confidence > 1.3).
 
 import math
 
+import pandas as pd
 from fastapi.testclient import TestClient
+
+from app.routers.underpriced import _to_underpriced_cards
 
 
 # ---------------------------------------------------------------------------
@@ -25,6 +28,13 @@ def test_underpriced_returns_200(test_client: TestClient) -> None:
 
 def test_underpriced_no_model_returns_503(test_client_no_model: TestClient) -> None:
     response = test_client_no_model.get("/underpriced/")
+    assert response.status_code == 503
+
+
+def test_underpriced_no_features_returns_503(
+    test_client_no_features: TestClient,
+) -> None:
+    response = test_client_no_features.get("/underpriced/")
     assert response.status_code == 503
 
 
@@ -204,3 +214,34 @@ def test_underpriced_min_confidence_below_1_returns_422(
 def test_underpriced_invalid_tier_returns_422(test_client: TestClient) -> None:
     response = test_client.get("/underpriced/?tier=4")
     assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# _to_underpriced_cards (direct unit test, no TestClient/HTTP layer)
+# ---------------------------------------------------------------------------
+
+
+def test_to_underpriced_cards_maps_fields_correctly() -> None:
+    flagged = pd.DataFrame(
+        {
+            "name": ["Lightning Bolt"],
+            "uuid": ["abc-123"],
+            "eur": [1.5],
+            "predicted_eur": [3.12],
+            "confidence": [2.08],
+            "tier": [1],
+            "reason": ["ML predicts a 108% increase"],
+        }
+    )
+
+    cards = _to_underpriced_cards(flagged)
+
+    assert len(cards) == 1
+    card = cards[0]
+    assert card.name == "Lightning Bolt"
+    assert card.uuid == "abc-123"
+    assert card.actual_price == 1.5
+    assert card.predicted_price == 3.12
+    assert card.confidence == 2.08
+    assert card.tier == 1
+    assert card.reason == "ML predicts a 108% increase"

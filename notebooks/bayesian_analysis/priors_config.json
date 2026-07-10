@@ -1,20 +1,20 @@
 {
   "domain_medians": {
     "common": {
-      "mu_prior": 0.11330000311136246,
-      "sigma_prior": 1.024999976158142
+      "mu_prior": 0.10440000146627426,
+      "sigma_prior": 1.006700038909912
     },
     "uncommon": {
-      "mu_prior": 0.1655000001192093,
-      "sigma_prior": 1.3615000247955322
+      "mu_prior": 0.15700000524520874,
+      "sigma_prior": 1.348099946975708
     },
     "rare": {
-      "mu_prior": 0.5008000135421753,
-      "sigma_prior": 2.2063000202178955
+      "mu_prior": 0.4885999858379364,
+      "sigma_prior": 2.1763999462127686
     },
     "mythic": {
-      "mu_prior": 1.3912999629974365,
-      "sigma_prior": 2.0913000106811523
+      "mu_prior": 1.3761999607086182,
+      "sigma_prior": 2.109600067138672
     }
   },
   "mu_rarity": {
@@ -30,136 +30,46 @@
     "distribution": "HalfNormal",
     "sigma": 0.5
   },
-
-  "_comment_existing_priors": "Priors used in current BA-02 demo run. Sources updated to match standardised notebook citation format.",
-
   "beta_is_reserved": {
     "distribution": "Normal",
     "mu": 2.0,
     "sigma": 0.8,
     "direction": "positive",
-    "source": "CDA NB01 H3: RL 20.3x at rare -> 2.10 log-units in log1p space; BA-04 H1 posterior: +2.562 [+2.390, +2.707]; BA-02 posterior: +1.813 [+1.617, +2.015]"
+    "source": "CDA-01: RL 20.3x at rare -> 2.10 log-units"
   },
   "beta_format_count": {
     "distribution": "Normal",
     "mu": -0.05,
     "sigma": 0.2,
     "direction": "negative",
-    "source": "CDA NB02 H2: partial rho=-0.077 after rarity control; BA-02 posterior: -0.225 [-0.254, -0.196]"
+    "source": "CDA-02: more formats -> lower price (rarity proxy)"
   },
   "beta_log_print": {
     "distribution": "Normal",
     "mu": 0.1,
     "sigma": 0.3,
     "direction": "positive",
-    "source": "CDA NB02 H5: demand-driven reprinting paradox (more reprints -> higher price at <50 prints); BA-02 posterior: +0.139 [+0.119, +0.158]"
+    "source": "demand-driven reprinting"
   },
   "beta_foil_premium": {
     "distribution": "Normal",
     "mu": -0.2,
     "sigma": 0.5,
     "direction": "negative",
-    "note": "Applied to log(foil_premium). Negative: high foil_premium ratio -> lower base price (bulk cards have scarce foils; competitive staples have liquid foil markets). BA-04 H5 measures causal per-card foil effect (+0.362 log-units, 1.44x) which is a different quantity.",
-    "source": "EDA NB04: Spearman -0.334 (raw ratio); BA-02 posterior: -0.195 [-0.231, -0.158]"
+    "source": "EDA-04: Spearman -0.334"
   },
   "beta_is_full_art": {
     "distribution": "Normal",
     "mu": 0.5,
     "sigma": 0.4,
     "direction": "positive",
-    "source": "CDA NB05 H4: 8.1x at rare; confirmed all rarities including common (2.3x); BA-04 H6 rare: +0.888 (2.43x); BA-02 posterior: +0.650 [+0.539, +0.762]"
+    "source": "CDA-05: 8.12x at rare"
   },
   "beta_is_legendary": {
     "distribution": "Normal",
     "mu": 0.2,
     "sigma": 0.3,
     "direction": "positive",
-    "note": "CONDITIONAL on log_print being in the model. Unadjusted effect is NEGATIVE (BA-04 H2: -0.174 at rare, P>0=0%). Once log_print is controlled, legendary label carries a price premium because legendary cards are printed less per set — scarcity absorbed into log_print channel (BA-02: +0.344 [+0.282, +0.399], P>0=100%). Keep positive prior as long as log_print remains a covariate (B-08).",
-    "source": "CDA NB01 H2: unadjusted NEGATIVE; BA-02 log_print-controlled: POSITIVE"
-  },
-
-  "_comment_new_priors": "Priors for confirmed features not yet in BA-02. Add to model before next production run.",
-
-  "beta_edhrec_saltiness": {
-    "distribution": "Normal",
-    "mu": 0.2,
-    "sigma": 0.3,
-    "direction": "positive",
-    "source": "CDA NB02 H6: partial rho=+0.220 after rarity control; near-monotone saltiness-price gradient (D1 EUR0.16 -> D9 EUR1.59); independent from edhrec_rank"
-  },
-  "beta_log_edhrec_rank": {
-    "distribution": "Normal",
-    "mu": -0.1,
-    "sigma": 0.3,
-    "direction": "negative",
-    "note": "Applied to log(edhrec_rank) after sentinel fill (NULL -> 31059). Higher rank number = less popular = lower price. Leakage confirmed SAFE: snapshotted daily in silver_meta_history, joined date-exact (MP-01 P-18).",
-    "source": "EDA NB04: partial Spearman -0.434 after rarity control; MI=0.299 (2nd highest feature)"
-  },
-  "beta_set_type": {
-    "note": "One-hot encoded with 'expansion' as reference category. Tiny categories (spellbook, arsenal) merged into 'other'. Prior mus derived from CDA NB02 H3 median log-unit deltas relative to expansion (EUR 0.18).",
-    "reference_category": "expansion",
-    "categories": {
-      "masterpiece": {"distribution": "Normal", "mu": 1.0, "sigma": 0.4, "source": "CDA NB02 H3: EUR 2.21 vs 0.18 expansion"},
-      "box":         {"distribution": "Normal", "mu": 0.8, "sigma": 0.4, "source": "CDA NB02 H3: EUR 1.67 vs 0.18"},
-      "memorabilia": {"distribution": "Normal", "mu": 0.6, "sigma": 0.5, "source": "CDA NB02 H3: EUR 1.40 vs 0.18"},
-      "promo":       {"distribution": "Normal", "mu": 0.15, "sigma": 0.3, "source": "CDA NB02 H3: EUR 0.78 vs 0.18"},
-      "eternal":     {"distribution": "Normal", "mu": 0.15, "sigma": 0.3, "source": "CDA NB02 H3: EUR 0.74 vs 0.18"},
-      "starter":     {"distribution": "Normal", "mu": 0.1,  "sigma": 0.3, "source": "CDA NB02 H3: EUR 0.52 vs 0.18"},
-      "commander":   {"distribution": "Normal", "mu": 0.05, "sigma": 0.3, "source": "CDA NB02 H3: EUR 0.35 vs 0.18"},
-      "core":        {"distribution": "Normal", "mu": 0.04, "sigma": 0.3, "source": "CDA NB02 H3: EUR 0.26 vs 0.18"},
-      "masters":     {"distribution": "Normal", "mu": 0.03, "sigma": 0.3, "source": "CDA NB02 H3: EUR 0.24 vs 0.18; reprint product — supply increase depresses prices"},
-      "duel_deck":   {"distribution": "Normal", "mu": -0.03, "sigma": 0.3, "source": "CDA NB02 H3: EUR 0.15 vs 0.18"},
-      "other":       {"distribution": "Normal", "mu": 0.0,  "sigma": 0.4, "source": "Catch-all for merged rare categories (spellbook=24, arsenal=17)"}
-    }
-  },
-  "beta_rarity_ord": {
-    "note": "BA-02 uses rarity as a GROUPING VARIABLE in the 3-level hierarchy (card <- set <- rarity), not as a linear covariate. No beta_rarity_ord exists in the BA-02 PyMC model — rarity is encoded in mu_rarity[r] hyperpriors. For gradient boosting (XGBoost/LightGBM), rarity_ord is an explicit input feature with no prior needed. This entry documents the expected direction for reference.",
-    "expected_direction": "positive",
-    "source": "CDA NB01 H1: eps2=0.396 (LARGE); monotonic EUR gradient confirmed; BA-04 H3: rare vs uncommon +0.576 log-units (BF10>1000)"
-  },
-  "beta_in_tournament": {
-    "distribution": "Normal",
-    "mu": 0.3,
-    "sigma": 0.4,
-    "direction": "positive",
-    "note": "Selection bias caveat: in_tournament=True cards are pre-selected to be expensive (MTGGoldfish tracks most-played = most expensive). The 6.9x premium partly reflects scraper design. Within-tournament gradient (top8_appearances_30d) is bias-free.",
-    "source": "EDA NB03: 6.9x premium (r=+0.279, selection-biased); CDA NB03 H1 confirmed"
-  },
-  "beta_log1p_top8_appearances_30d": {
-    "distribution": "Normal",
-    "mu": 0.15,
-    "sigma": 0.2,
-    "direction": "positive",
-    "note": "Applied to log1p(top8_appearances_30d). Zero for non-tournament cards (fill_0). Sparse feature: 0.5% coverage. Within-tournament gradient is bias-free unlike in_tournament binary.",
-    "source": "CDA NB03 H1: 4.5x gradient (0 appearances EUR0.96 -> 16+ appearances EUR7.99); Spearman r=+0.279 within tournament set"
-  },
-  "beta_mana_value": {
-    "distribution": "Normal",
-    "mu": -0.05,
-    "sigma": 0.15,
-    "direction": "negative",
-    "note": "Applied after cap at 16 and median-per-rarity imputation. Raw Spearman ~0 (confounded by rarity). Signal emerges only within rarity: lower CMC = higher price (efficiency premium).",
-    "source": "EDA NB04: partial Spearman -0.259 within rarity (genuine signal after rarity control)"
-  },
-  "beta_color_identity_count": {
-    "distribution": "Normal",
-    "mu": 0.0,
-    "sigma": 0.2,
-    "direction": "non-monotone",
-    "note": "Applied to bucketed feature (0=colorless / 1=mono / 2=two-color / 3+=multi). Gradient is NOT monotone: colorless (0) is highest due to Power Nine and Eldrazi. Wide prior centered at 0 to let data determine shape.",
-    "source": "CDA NB05 H1: eps2=0.0199; colorless EUR0.46 > multi EUR0.43 > two EUR0.30 > mono EUR0.24"
-  },
-  "beta_primary_type": {
-    "note": "One-hot encoded with 'Creature' as reference category. Low-priority feature (eps2=0.0306 < 0.05 threshold; MP-02 P-21). Prior mus derived from CDA NB05 H2 median log-unit deltas relative to Creature (EUR 0.22).",
-    "reference_category": "Creature",
-    "categories": {
-      "Planeswalker": {"distribution": "Normal", "mu": 0.85, "sigma": 0.4, "source": "CDA NB05 H2: EUR 1.94 vs 0.22; clearly distinct"},
-      "Artifact":     {"distribution": "Normal", "mu": 0.1,  "sigma": 0.3, "source": "CDA NB05 H2: EUR 0.38 vs 0.22"},
-      "Enchantment":  {"distribution": "Normal", "mu": 0.1,  "sigma": 0.3, "source": "CDA NB05 H2: EUR 0.37 vs 0.22"},
-      "Land":         {"distribution": "Normal", "mu": 0.05, "sigma": 0.3, "source": "CDA NB05 H2: EUR 0.30 vs 0.22; Basic Lands pull median down"},
-      "Sorcery":      {"distribution": "Normal", "mu": 0.05, "sigma": 0.3, "source": "CDA NB05 H2: EUR 0.28 vs 0.22"},
-      "Kindred":      {"distribution": "Normal", "mu": 0.02, "sigma": 0.3, "source": "CDA NB05 H2: EUR 0.25 vs 0.22"},
-      "Instant":      {"distribution": "Normal", "mu": -0.02, "sigma": 0.3, "source": "CDA NB05 H2: EUR 0.21 vs 0.22 (slightly below Creature)"}
-    }
+    "source": "CDA-05: H2 confirmed"
   }
 }

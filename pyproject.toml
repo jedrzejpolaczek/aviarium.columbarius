@@ -1,6 +1,6 @@
 [project]
 name = "columbarius"
-version = "0.1.0"
+version = "0.1.1"
 description = "Magic: The Gathering card price prediction using a Bronze/Silver/Gold medallion architecture and LightGBM."
 readme = "README.md"
 requires-python = ">=3.13, <3.15"
@@ -24,14 +24,20 @@ dependencies = [
     "mlflow>=3.13",
     "numpy>=2.2.0",
     "optuna>=4.9.0",
-    "pandas==2.3.3",
+    "pandas>=2.3.3",
     "pydantic>=2.13.3",
     "plotly>=6.7.0",
     "scikit-learn>=1.9.0",
-    "shap",
+    # Lower bound intentionally 0.49.1, not 0.52.0: pymc/pytensor/numba transitive
+    # constraints only resolve shap to 0.49.1 on Intel macOS (x86_64+darwin), while
+    # other platforms resolve to 0.52.0. A higher floor (e.g. >=0.52.0) breaks
+    # `uv lock` on Intel macOS. See ADR-011.
+    "shap>=0.49.1",
     "tenacity>=9.1.4",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.34.0",
+    "psutil>=7.2.2",
+    "plyer>=2.1.0",
 ]
 
 [tool.pytest.ini_options]
@@ -70,6 +76,7 @@ dev = [
     "arviz>=1.1.0",
     "pymc>=6.0.1",
     "ruptures>=1.1.10",
+    "types-psutil>=7.2.2.20260518",
 ]
 
 [tool.mypy]
@@ -80,7 +87,16 @@ plugins = ["pydantic.mypy"]
 exclude = ["^_ADDONS/"]
 
 [[tool.mypy.overrides]]
-module = ["shap", "shap.*", "evidently", "evidently.*", "sklearn", "sklearn.*"]
+module = [
+    "shap",
+    "shap.*",
+    "evidently",
+    "evidently.*",
+    "sklearn",
+    "sklearn.*",
+    "plyer",
+    "plyer.*",
+]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -89,11 +105,29 @@ disallow_untyped_defs = false
 disallow_untyped_calls = false
 disallow_any_generics = false
 disallow_untyped_decorators = false
+# mlflow.pyfunc.PythonModel resolves to Any (incomplete upstream stubs), and
+# tests/scripts/test_rollback_model.py subclasses it to build a minimal real
+# model artifact for a real-MLflow-registry test. Paired with the
+# `# type: ignore[name-defined]` at that subclass site — both are needed,
+# since mypy reports two separate errors (name-defined, then misc) for the
+# same unresolved name.
+disallow_subclassing_any = false
 
 
 [project.urls]
 Homepage = "https://github.com/jpolaczek/aviarium.columbarius"
 Repository = "https://github.com/jpolaczek/aviarium.columbarius"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "scripts*"]
+
+[tool.uv]
+package = true
 
 [project.scripts]
 run-pipeline = "scripts.run_pipeline:main"

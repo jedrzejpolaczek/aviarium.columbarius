@@ -80,3 +80,15 @@ def test_health_db_connected_true_even_without_model(
 def test_health_degraded_returns_503(test_client_no_model: TestClient) -> None:
     response = test_client_no_model.get("/health")
     assert response.status_code == 503
+
+
+def test_health_features_loaded_true_by_default(test_client: TestClient) -> None:
+    data = test_client.get("/health").json()
+    assert data["features_loaded"] is True
+
+
+def test_health_features_loaded_false_when_features_unavailable(
+    test_client_no_features: TestClient,
+) -> None:
+    data = test_client_no_features.get("/health").json()
+    assert data["features_loaded"] is False

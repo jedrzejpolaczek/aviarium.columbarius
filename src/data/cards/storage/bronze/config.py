@@ -31,7 +31,7 @@ STORAGE_CONFIG: dict[str, SourceStorageConfig] = {
         table="bronze_scryfall_cards",
         key="id",
         snapshots=[
-            SnapshotConfig("bronze_scryfall_prices_history", fields=["prices"]),
+            # bronze_scryfall_prices_history → handled by _snapshot_scryfall_prices
             SnapshotConfig(
                 "bronze_scryfall_meta_history",
                 fields=[
@@ -51,7 +51,7 @@ STORAGE_CONFIG: dict[str, SourceStorageConfig] = {
     "mtgjson_prices": SourceStorageConfig(
         table=None,
         key="uuid",
-        snapshots=[SnapshotConfig("bronze_mtgjson_prices_history")],
+        snapshots=[],  # handled by _snapshot_mtgjson_prices
     ),
     "format_staples": SourceStorageConfig(
         table=None,
@@ -62,6 +62,5 @@ STORAGE_CONFIG: dict[str, SourceStorageConfig] = {
         table="bronze_tournament_results",
         key="id",
         incremental=True,
-        # No snapshot — each row is already an immutable historical event.
     ),
 }

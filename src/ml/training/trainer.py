@@ -39,9 +39,9 @@ import pandas as pd
 from src.ml.evaluation.metrics import evaluate_per_tier
 from src.ml.features.lag import build_lag_features, build_target
 from src.ml.features.pipeline import (
-    _enrich_card_df,
-    _enrich_lag_df,
     build_feature_pipeline,
+    enrich_card_df,
+    enrich_lag_df,
     get_feature_names,
     prepare_training_data,
 )
@@ -177,17 +177,17 @@ def walk_forward_cv(
 
     For each fold the function:
       1. Finds the last available snapshot in the train and val date windows.
-      2. Builds lag features via lag.py, then enriches them with _enrich_lag_df().
+      2. Builds lag features via lag.py, then enriches them with enrich_lag_df().
       3. Joins static card features from gold_card_features enriched with
-         _enrich_card_df() — same enrichments as build_inference_features(),
+         enrich_card_df() — same enrichments as build_inference_features(),
          eliminating training/serving skew.
       4. Builds log_return_7d targets via lag.py.
       5. Fits a fresh sklearn feature pipeline on train data.
       6. Fits the model on the transformed train features.
       7. Evaluates predictions per price tier using evaluate_per_tier().
 
-    _enrich_card_df() is called once before the fold loop (card attributes are
-    static); _enrich_lag_df() is called per fold (lag features vary by snapshot).
+    enrich_card_df() is called once before the fold loop (card attributes are
+    static); enrich_lag_df() is called per fold (lag features vary by snapshot).
 
     Args:
         conn:  Open DuckDB connection with gold_price_features and
@@ -208,7 +208,7 @@ def walk_forward_cv(
     if folds is None:
         folds = generate_folds(get_available_snapshots(conn))
 
-    card_df = _enrich_card_df(conn.execute("SELECT * FROM gold_card_features").df())
+    card_df = enrich_card_df(conn.execute("SELECT * FROM gold_card_features").df())
     all_results: list[pd.DataFrame] = []
 
     for fold in folds:
@@ -231,11 +231,11 @@ def walk_forward_cv(
         train_snap = str(train_snap)
         val_snap = str(val_snap)
 
-        lag_train = _enrich_lag_df(build_lag_features(conn, train_snap))
+        lag_train = enrich_lag_df(build_lag_features(conn, train_snap))
         target_train = build_target(conn, train_snap)
         X_train_raw, y_train = prepare_training_data(lag_train, card_df, target_train)
 
-        lag_val = _enrich_lag_df(build_lag_features(conn, val_snap))
+        lag_val = enrich_lag_df(build_lag_features(conn, val_snap))
         target_val = build_target(conn, val_snap)
         X_val_raw, y_val = prepare_training_data(lag_val, card_df, target_val)
 

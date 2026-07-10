@@ -1,14 +1,17 @@
 import pandas as pd
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends
 
+from app.dependencies import RequestFeatures, get_request_features
 from app.schemas.responses import CardEntry, CardsResponse
 
 router = APIRouter(prefix="/cards", tags=["cards"])
 
 
 @router.get("", response_model=CardsResponse)
-def list_cards(request: Request) -> CardsResponse:
-    X_all: pd.DataFrame = request.app.state.X_all
+def list_cards(
+    features: RequestFeatures = Depends(get_request_features),
+) -> CardsResponse:
+    X_all = features.X_all
     if X_all.empty:
         return CardsResponse(cards=[])
     cols = (

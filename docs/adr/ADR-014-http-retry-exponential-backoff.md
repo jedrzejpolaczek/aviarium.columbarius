@@ -14,8 +14,8 @@ would abort the entire pipeline, discarding all work done in that run.
 ## Decision
 
 Add exponential backoff retry to both download functions using the `tenacity`
-library, applied at the raw HTTP fetch level (`_fetch_json`, `_fetch_html`)
-before errors are wrapped in `SourceDownloadError`.
+library, applied at the raw HTTP fetch level (`_fetch_with_retry`, shared by
+both download functions) before errors are wrapped in `SourceDownloadError`.
 
 **Parameters:**
 - Maximum 5 attempts
@@ -25,10 +25,12 @@ before errors are wrapped in `SourceDownloadError`.
   wastes time and cannot succeed
 - Each retry attempt is logged at `WARNING` level via `before_sleep_log`
 
-**Architecture:** The retry decorator is applied to the private `_fetch_json`
-and `_fetch_html` helpers, not to the public `download_*` functions. This keeps
-the separation clean: inner functions raise `requests.HTTPError` (which tenacity
-can intercept), outer functions wrap the final failure in `SourceDownloadError`.
+**Architecture:** The retry decorator is applied to the private
+`_fetch_with_retry` helper — a single generic fetch-then-parse function shared
+by both `download_json_from_url` and `download_html_page` — not to the public
+`download_*` functions themselves. This keeps the separation clean: the inner
+helper raises `requests.HTTPError` (which tenacity can intercept), while the
+outer `download_*` functions wrap the final failure in `SourceDownloadError`.
 
 ## Consequences
 

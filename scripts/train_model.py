@@ -1,18 +1,17 @@
 import argparse
-import logging
-import os
 import sys
+from pathlib import Path
 
-import duckdb
+from scripts._common import gold_db_exists
+from src.data.cards.storage.gold.storage import get_latest_trainable_snapshot_date
+from src.data.repository import GOLD_DB_PATH, open_repository
+from src.logger import get_logger, setup_logging
 
-from src.ml.training.tracking import setup_experiment
-
-GOLD_DB_PATH = os.getenv("GOLD_DB_PATH", "data/gold/cards.duckdb")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def main() -> None:
+    setup_logging(log_dir=Path("logs"))
     parser = argparse.ArgumentParser(
         description="Train the MTG price prediction model."
     )
@@ -23,24 +22,22 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not os.path.exists(args.db_path):
+    if not gold_db_exists(args.db_path):
+        sys.exit(1)
+
+    repo = open_repository(args.db_path, read_only=True)
+    conn = repo.connection
+    snapshot_date = get_latest_trainable_snapshot_date(conn)
+
+    if snapshot_date is None:
         logger.error(
-            "Gold DB not found: %s — run the ETL pipeline first.", args.db_path
+            "No snapshot with a t+7 counterpart is available yet in "
+            "gold_price_features — run the ETL pipeline for a few more days "
+            "before training."
         )
         sys.exit(1)
 
-    conn = duckdb.connect(args.db_path, read_only=True)
-    row = conn.execute("SELECT MAX(snapshot_date) FROM gold_price_features").fetchone()
-    snapshot_date = row[0] if row else None
-
-    if snapshot_date is None:
-        logger.error("gold_price_features is empty — run the ETL pipeline first.")
-        sys.exit(1)
-
-    snapshot_date = str(snapshot_date)
     logger.info("Training on snapshot: %s", snapshot_date)
-
-    setup_experiment()
 
     from src.monitoring.retraining import retrain
 

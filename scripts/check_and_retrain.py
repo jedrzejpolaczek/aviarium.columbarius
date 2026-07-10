@@ -1,0 +1,175 @@
+"""Scheduled drift/MAPE check with conditional retraining.
+
+Run on a daily schedule (cron / Windows Task Scheduler) after the ETL
+pipeline (`make pipeline`). Wraps :func:`should_retrain` /
+:func:`retrain` from ``src.monitoring.retraining`` so retraining only
+happens when a real trigger fires (ban/unban event or a 3-day MAPE
+alert), instead of retraining unconditionally like
+``scripts/train_model.py`` does.
+
+Writes a JSON status file to ``logs/last_check_status.json`` on every run
+so an operator (or a future alerting tool) can check the outcome without
+reading log files. See docs/runbooks/model-incidents.md for what to do
+with each result.
+
+Usage:
+    python -m scripts.check_and_retrain
+"""
+
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+import duckdb as duckdb  # explicit re-export: tests patch check_and_retrain.duckdb.connect,
+# which requires this module to explicitly re-export the name under mypy --strict
+# (no_implicit_reexport) — a plain `import duckdb` makes the attribute invisible
+# to importers even though it works fine at runtime.
+
+import httpx as httpx  # explicit re-export: tests patch check_and_retrain.httpx.get,
+# same mypy --strict re-export requirement as the duckdb import above.
+
+from scripts._common import gold_db_exists
+from src.data.cards.storage.gold.storage import get_latest_trainable_snapshot_date
+from src.data.repository import GOLD_DB_PATH, open_repository
+from src.logger import get_logger, setup_logging
+from src.monitoring.alerts import send_alert
+from src.monitoring.retraining import retrain, should_retrain
+
+STATUS_PATH = Path("logs/last_check_status.json")
+
+logger = get_logger(__name__)
+
+
+def _write_status(status: dict[str, object]) -> None:
+    STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STATUS_PATH.write_text(json.dumps(status, indent=2))
+
+
+def _ping_heartbeat(ok: bool) -> None:
+    """Best-effort GET to HEARTBEAT_URL (success) or HEARTBEAT_URL/fail
+    (failure) — a dead-man's-switch: if this stops arriving at all
+    (machine off, task deleted), the external monitoring service pages
+    someone instead of the failure going unnoticed. Skipped entirely if
+    HEARTBEAT_URL is unset. Never raises.
+    """
+    heartbeat_url = os.getenv("HEARTBEAT_URL", "")
+    if not heartbeat_url:
+        return
+    url = heartbeat_url if ok else f"{heartbeat_url}/fail"
+    try:
+        httpx.get(url, timeout=5.0)
+    except httpx.HTTPError as exc:
+        logger.warning("Heartbeat ping failed (non-fatal): %s", exc)
+
+
+def _check_preconditions(
+    conn: duckdb.DuckDBPyConnection,
+) -> tuple[bool, str, str | None]:
+    """Check whether a retrain should run.
+
+    Returns (triggered, reason, snapshot_date). ``snapshot_date`` is None
+    when not applicable (no trigger fired, or no gold snapshot exists).
+    """
+    triggered, reason = should_retrain(conn)
+    if not triggered:
+        return False, reason, None
+    snapshot_date = get_latest_trainable_snapshot_date(conn)
+    return True, reason, snapshot_date
+
+
+def _do_retrain(
+    conn: duckdb.DuckDBPyConnection, snapshot_date: str, reason: str
+) -> tuple[bool, dict[str, object]]:
+    logger.warning(
+        "Retrain triggered (reason=%s) — retraining on snapshot %s.",
+        reason,
+        snapshot_date,
+    )
+    try:
+        run_id = retrain(conn, snapshot_date)
+    except Exception as exc:
+        logger.error("Retrain failed: %s", exc)
+        send_alert("Retrain failed", str(exc))
+        return False, {
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "result": "error",
+            "reason": "retrain_failed",
+            "error": str(exc),
+        }
+
+    logger.info("Retrain complete. New run_id: %s", run_id)
+    return True, {
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "result": "retrained",
+        "reason": reason,
+        "run_id": run_id,
+    }
+
+
+def main() -> int:
+    setup_logging(log_dir=Path("logs"))
+
+    if not gold_db_exists(GOLD_DB_PATH):
+        send_alert(
+            "Monitor: Gold DB missing",
+            f"{GOLD_DB_PATH} not found — run the ETL pipeline first.",
+        )
+        _write_status(
+            {
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "result": "error",
+                "reason": "gold_db_missing",
+            }
+        )
+        _ping_heartbeat(ok=False)
+        return 1
+
+    repo = open_repository(GOLD_DB_PATH, read_only=True)
+    conn = repo.connection
+    try:
+        triggered, reason, snapshot_date = _check_preconditions(conn)
+
+        if not triggered:
+            logger.info("No retrain trigger fired (reason=%s).", reason)
+            _write_status(
+                {
+                    "checked_at": datetime.now(timezone.utc).isoformat(),
+                    "result": "no_retrain",
+                    "reason": reason,
+                }
+            )
+            _ping_heartbeat(ok=True)
+            return 0
+
+        if snapshot_date is None:
+            logger.error(
+                "No trainable snapshot available — gold_price_features is "
+                "either empty or has no snapshot with a t+7 counterpart yet."
+            )
+            send_alert(
+                "Monitor: no trainable snapshot",
+                "No trainable snapshot available — gold_price_features is "
+                "either empty or has no snapshot with a t+7 counterpart yet.",
+            )
+            _write_status(
+                {
+                    "checked_at": datetime.now(timezone.utc).isoformat(),
+                    "result": "error",
+                    "reason": "no_snapshot",
+                }
+            )
+            _ping_heartbeat(ok=False)
+            return 1
+
+        ok, status = _do_retrain(conn, snapshot_date, reason)
+        _write_status(status)
+        _ping_heartbeat(ok=ok)
+        return 0 if ok else 1
+    finally:
+        repo.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -12,9 +12,13 @@ Pre-computation strategy:
     DuckDB queries and sklearn transformations across all requests.
 
 Degraded mode:
-    The server starts and responds to /health and /similar even if MODEL_RUN_ID
-    is unset or the model fails to load. Only /predict and /underpriced return
-    503 in that case.
+    The server always starts and /health always responds — 200 when fully
+    operational, 503 (with per-component flags) otherwise. Degraded mode is
+    entered if the model fails to load, OR if building the feature matrix /
+    similarity index fails at startup (see ``lifespan``). In that state
+    /predict, /underpriced, and /cards return 503 via their
+    ``get_request_features``/``require_model`` dependencies, and /similar
+    returns 503 via its own ``similarity_index is None`` check.
 
 Environment variables:
     GOLD_DB_PATH  -- Path to the DuckDB database file.
@@ -28,97 +32,83 @@ Quick start:
     http://localhost:8000/health (health check)
 """
 
+import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import NamedTuple
 
 import duckdb
-import numpy as np
+import lightgbm as lgb
 import pandas as pd
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sklearn.pipeline import Pipeline
 
-from app.routers import cards, health, predict, similar, underpriced
-from src.ml.features.pipeline import (
-    build_feature_pipeline,
-    build_inference_features,
-    get_feature_names,
-)
+from app.routers import admin, cards, health, predict, similar, underpriced
+from src.data.cards.storage.gold.storage import get_latest_gold_snapshot_date
+from src.data.repository import GOLD_DB_PATH, DuckDBRepository, open_repository
+from src.ml.features.pipeline import build_inference_features, fit_transform_features
 from src.ml.recommendation.similarity import SIMILARITY_FEATURES, CardSimilarityIndex
-from src.logger import get_logger
+from src.logger import get_logger, setup_logging
 from src.ml.training.tracking import load_model_from_mlflow
+from src.monitoring.alerts import send_alert
 
 
-GOLD_DB_PATH = os.getenv("GOLD_DB_PATH", "data/gold/cards.duckdb")
 MODEL_RUN_ID = os.getenv("MODEL_RUN_ID", "")
 
 logger = get_logger(__name__)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # pragma: no cover
-    """Startup and shutdown context manager for the FastAPI application.
+class FeatureMatrices(NamedTuple):
+    """Result of :func:`_build_feature_matrices` — one field per pipeline artifact."""
 
-    Startup (before ``yield``):
-        1. Open a read-only DuckDB connection and store it in ``app.state.db``.
-        2. Determine the latest available price snapshot date.
-        3. Build the full feature matrix ``X_all`` (raw) for all cards at that
-           snapshot by joining lag features with static card attributes.
-        4. Fit the sklearn pipeline once; store the pre-transformed matrix
-           ``X_all_t`` for O(1) per-request inference.
-        5. Load the LightGBM booster from MLflow if ``MODEL_RUN_ID`` is set.
-           On failure the server starts in degraded mode (model=None).
-        6. Build a ``CardSimilarityIndex`` with n_neighbors=50, enabling the
-           /similar endpoint to return up to 50 results without re-fitting.
+    X_all: pd.DataFrame
+    X_all_t: pd.DataFrame
+    pipeline: Pipeline
+    feature_names: list[str]
 
-    Shutdown (after ``yield``):
-        Closes the DuckDB connection.
 
-    Raises:
-        RuntimeError: If ``gold_price_features`` is empty (ETL not yet run).
+def _connect_db() -> DuckDBRepository:
+    """Open a read-only DuckDB repository (API never writes)."""
+    return open_repository(GOLD_DB_PATH, read_only=True)
+
+
+def _build_feature_matrices(
+    db: duckdb.DuckDBPyConnection, snapshot_date: str
+) -> FeatureMatrices:
+    """Build the full feature matrix and fit the sklearn pipeline once.
+
+    Returns the raw feature matrix ``X_all``, the pipeline-transformed matrix
+    ``X_all_t`` (pre-computed for O(1) per-request inference), the fitted
+    pipeline, and the resulting feature names.
     """
-    # 1. Connect DuckDB (read-only — API never writes)
-    app.state.db = duckdb.connect(GOLD_DB_PATH, read_only=True)
+    X_all = build_inference_features(db, snapshot_date)
+    X_all_t, pipeline, feature_names = fit_transform_features(X_all)
+    return FeatureMatrices(X_all, X_all_t, pipeline, feature_names)
 
-    # 2. Latest snapshot available in the database
-    _row = app.state.db.execute(
-        "SELECT MAX(snapshot_date) FROM gold_price_features"
-    ).fetchone()
-    if _row is None or _row[0] is None:
-        raise RuntimeError("gold_price_features is empty — run the ETL pipeline first.")
-    snapshot_date = str(_row[0])
-    app.state.snapshot_date = snapshot_date
 
-    # 3. Build full feature matrix (lag + card features, log transforms, stub cols)
-    X_all = build_inference_features(app.state.db, snapshot_date)
-    app.state.X_all = X_all
+def _load_model_or_degrade(model_run_id: str) -> tuple[lgb.Booster | None, str]:
+    """Load the LightGBM booster from MLflow, or start in degraded mode.
 
-    # 4. Fit sklearn pipeline once; pre-transform for O(1) inference per request
-    pipeline = build_feature_pipeline()
-    X_t = pipeline.fit_transform(X_all)
-    feature_names = get_feature_names(pipeline)
-    app.state.pipeline = pipeline
-    app.state.feature_names = feature_names
-    app.state.X_all_t = pd.DataFrame(
-        np.array(X_t, dtype=np.float64), columns=feature_names
-    )
-
-    # 5. Load LightGBM booster from MLflow (optional — degraded mode on failure)
-    if MODEL_RUN_ID:
-        try:
-            app.state.model = load_model_from_mlflow(MODEL_RUN_ID)
-            app.state.model_run_id = MODEL_RUN_ID
-            logger.info("Model loaded: %s", MODEL_RUN_ID)
-        except Exception as exc:
-            logger.warning("Model load failed (%s): %s", MODEL_RUN_ID, exc)
-            app.state.model = None
-            app.state.model_run_id = ""
-    else:
-        app.state.model = None
-        app.state.model_run_id = ""
+    Degraded mode (model=None) is entered if ``model_run_id`` is empty or the
+    MLflow load raises — /predict and /underpriced return 503 in that case.
+    """
+    if not model_run_id:
         logger.info("No MODEL_RUN_ID set — /predict and /underpriced will return 503.")
+        return None, ""
+    try:
+        model = load_model_from_mlflow(model_run_id)
+        logger.info("Model loaded: %s", model_run_id)
+        return model, model_run_id
+    except Exception as exc:
+        logger.warning("Model load failed (%s): %s", model_run_id, exc)
+        return None, ""
 
-    # 6. Build CardSimilarityIndex with n_neighbors=50 (max returned by /similar)
+
+def _build_similarity_index(X_all: pd.DataFrame) -> CardSimilarityIndex:
+    """Build a CardSimilarityIndex with n_neighbors=50 (max returned by /similar)."""
     sim_df = X_all.copy()
     for feat in SIMILARITY_FEATURES:
         if feat not in sim_df.columns:
@@ -126,11 +116,117 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # pragma: no cover
 
     sim_index = CardSimilarityIndex(n_neighbors=50)
     sim_index.fit(sim_df)
-    app.state.similarity_index = sim_index
+    return sim_index
+
+
+def register_exception_handlers(app: FastAPI) -> None:
+    """Register a catch-all handler for exceptions FastAPI's default
+    `HTTPException` handling doesn't cover.
+
+    Without this, an unhandled exception inside a route (e.g. a bug hit by
+    unexpected input) propagates as a bare 500 with no consistent JSON body
+    and no alert — every other error path in this API (503 via
+    require_model/get_request_features, 404 via require_match) already
+    returns a structured ``{"detail": ...}`` body; this makes truly
+    unexpected errors consistent with that, and durably records them via
+    ``send_alert`` the same way a degraded startup already does.
+    """
+
+    @app.exception_handler(Exception)
+    async def _handle_unexpected_exception(
+        request: Request, exc: Exception
+    ) -> JSONResponse:
+        logger.error(
+            "Unhandled exception on %s %s: %s",
+            request.method,
+            request.url.path,
+            exc,
+            exc_info=True,
+        )
+        send_alert(
+            "Unhandled API exception",
+            f"{request.method} {request.url.path}: {exc}",
+        )
+        return JSONResponse(
+            status_code=500, content={"detail": "Internal server error."}
+        )
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Startup and shutdown context manager for the FastAPI application.
+
+    Startup (before ``yield``):
+        1. Open a read-only DuckDB repository and store it in ``app.state.repo``.
+        2. Determine the latest available price snapshot date.
+        3. Build the full feature matrix ``X_all`` (raw) for all cards at that
+           snapshot by joining lag features with static card attributes.
+        4. Fit the sklearn pipeline once; store the pre-transformed matrix
+           ``X_all_t`` for O(1) per-request inference.
+        5. Load the LightGBM booster from MLflow if ``MODEL_RUN_ID`` is set.
+        6. Build a ``CardSimilarityIndex`` with n_neighbors=50, enabling the
+           /similar endpoint to return up to 50 results without re-fitting.
+
+        Steps 3-6 run in one try/except: a failure anywhere in that block
+        (feature-matrix build, pipeline fit, model load, or similarity-index
+        build) puts the server in degraded mode — X_all, X_all_t, pipeline,
+        similarity_index, and model all become None — rather than crashing
+        startup.
+
+    Shutdown (after ``yield``):
+        Closes the DuckDB connection.
+
+    Raises:
+        RuntimeError: If ``gold_price_features`` is empty (ETL not yet run).
+    """
+    setup_logging(logging.INFO)
+
+    # 1. Connect DuckDB (read-only — API never writes)
+    app.state.repo = _connect_db()
+
+    # 2. Latest snapshot available in the database
+    snapshot_date = get_latest_gold_snapshot_date(app.state.repo.connection)
+    if snapshot_date is None:
+        raise RuntimeError("gold_price_features is empty — run the ETL pipeline first.")
+    app.state.snapshot_date = snapshot_date
+
+    # 3-4. Build full feature matrix and fit sklearn pipeline once.
+    # 5. Load LightGBM booster from MLflow (optional — degraded mode on failure).
+    # 6. Build CardSimilarityIndex with n_neighbors=50 (max returned by /similar).
+    # All four grouped in one try/except: none of them can succeed
+    # meaningfully without the others, and a failure anywhere here should
+    # degrade the whole API the same way a model-load failure already does
+    # (rather than crashing startup and taking /health down with it).
+    try:
+        features = _build_feature_matrices(app.state.repo.connection, snapshot_date)
+        app.state.X_all = features.X_all
+        app.state.X_all_t = features.X_all_t
+        app.state.pipeline = features.pipeline
+        app.state.feature_names = features.feature_names
+        app.state.similarity_index = _build_similarity_index(features.X_all)
+        app.state.model, app.state.model_run_id = _load_model_or_degrade(MODEL_RUN_ID)
+    except Exception as exc:
+        logger.error(
+            "Feature matrix / similarity index build failed — "
+            "starting in degraded mode: %s",
+            exc,
+            exc_info=True,
+        )
+        send_alert(
+            "API startup degraded",
+            f"Feature matrix / similarity index / model setup failed at startup: {exc}",
+        )
+        app.state.X_all = None
+        app.state.X_all_t = None
+        app.state.pipeline = None
+        app.state.feature_names = []
+        app.state.similarity_index = None
+        app.state.model = None
+        app.state.model_run_id = ""
 
     yield
 
-    app.state.db.close()
+    app.state.repo.close()
 
 
 app = FastAPI(
@@ -140,8 +236,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+register_exception_handlers(app)
+
 _cors_origins = [
-    o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+    o.strip()
+    for o in os.getenv(
+        "CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
+    ).split(",")
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -150,6 +251,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(admin.router)
 app.include_router(health.router)
 app.include_router(cards.router)
 app.include_router(predict.router)

@@ -1,11 +1,11 @@
 # C4 — API State & Startup Code
 
-The API state container holds all runtime dependencies initialized during FastAPI startup: database connections, feature matrices, the fitted ML pipeline, the trained model, and a pre-built similarity index for card recommendations. This state is immutable after startup and accessed by all request handlers via dependency injection.
+The API state container holds all runtime dependencies initialized during FastAPI startup: database connections, feature matrices, the fitted ML pipeline, the trained model, and a pre-built similarity index for card recommendations. All fields are immutable after startup **except** `model` and `model_run_id`, which `POST /admin/reload-model` (ADR-032) can swap in place at runtime, without a container restart. Every other field — `repo`, `snapshot_date`, `X_all`, `X_all_t`, `pipeline`, `feature_names`, `similarity_index` — remains startup-only, exactly as ADR-019 originally described.
 
 ```mermaid
 classDiagram
   class AppState {
-    db: DuckDBPyConnection
+    repo: DuckDBRepository
     snapshot_date: str
     X_all: DataFrame
     X_all_t: DataFrame
@@ -33,7 +33,7 @@ classDiagram
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `db` | `DuckDBPyConnection` | Read-only connection to the gold database. Used for schema lookups and validation. |
+| `repo` | `DuckDBRepository` | Read-only repository wrapping the connection to the gold database. Used for schema lookups and validation via `repo.connection`. |
 | `snapshot_date` | `str` | ISO date (YYYY-MM-DD) of the latest price snapshot in the database. Used for metadata in API responses. |
 | `X_all` | `DataFrame` | Raw feature matrix for all cards before pipeline transformation. Dimensions: (n_cards, n_raw_features). |
 | `X_all_t` | `DataFrame` | Pre-transformed feature matrix after fitting the sklearn pipeline. Dimensions: (n_cards, n_pipeline_features). Used for similarity index construction and model inference. |
@@ -47,7 +47,7 @@ classDiagram
 
 The `lifespan(app: FastAPI)` async context manager in `app/main.py` performs the following initialization steps at API startup:
 
-1. **Connect to DuckDB** — Opens a read-only connection to the gold database and stores it in `app.state.db`.
+1. **Connect to DuckDB** — Opens a read-only repository wrapping the connection to the gold database and stores it in `app.state.repo`.
 2. **Determine snapshot date** — Queries the database to find the latest price snapshot date and stores it in `app.state.snapshot_date`.
 3. **Build raw feature matrix** — Calls `build_inference_features()` to construct `X_all` from gold_card_features for all cards in the database.
 4. **Fit the pipeline** — Applies sklearn Pipeline (imputer + scaler) to `X_all`, producing `X_all_t` and storing the fitted `pipeline` and `feature_names` in state.
@@ -63,3 +63,7 @@ If the `MODEL_RUN_ID` environment variable is not set, step 5 skips model loadin
 - `/similar` endpoint continues to function normally using the pre-built `CardSimilarityIndex`.
 
 This allows the API to remain partially operational for similarity-based features while blocking inference-dependent operations.
+
+## Post-Startup Model Reload
+
+`POST /admin/reload-model` (see `app/routers/admin.py`, ADR-032) is the one path that mutates `AppState` outside of `lifespan`. Given a `model_run_id` and a valid `X-Admin-Token`, it calls `load_model_from_mlflow` again — the same function `lifespan` uses at startup — and, only on success, overwrites `app.state.model` and `app.state.model_run_id`. No other field is touched: `X_all`/`X_all_t`/`pipeline`/`similarity_index` are derived from the Gold snapshot, not the model, so they don't need rebuilding. On an MLflow load failure the endpoint returns 502 and `app.state` is left exactly as it was.

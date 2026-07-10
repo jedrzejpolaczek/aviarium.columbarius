@@ -2,19 +2,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.ml.models.lightgbm_model import LightGBMParams
 from src.ml.models.tiered import TIER1_MAX_EUR, TIER2_MAX_EUR, TieredRouter, assign_tier
-
-# Fast params so each LightGBM fit completes in under 100 ms.
-FAST_PARAMS = LightGBMParams(
-    n_estimators=10,
-    num_leaves=4,
-    min_child_samples=5,
-    learning_rate=0.3,
-    subsample=1.0,
-    colsample_bytree=1.0,
-    random_state=0,
-)
+from tests.ml.conftest import FAST_LIGHTGBM_PARAMS as FAST_PARAMS
 
 FEATURE_COLS = ["f1", "f2"]
 

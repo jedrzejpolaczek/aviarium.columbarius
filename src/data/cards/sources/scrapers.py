@@ -1,9 +1,10 @@
 """Async per-source ingestion functions for JSON downloads, format staples, and tournament results."""
 
 import asyncio
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import httpx
 
@@ -27,6 +28,50 @@ from src.data.cards.sources.registry import (
 from src.logger import get_logger
 
 logger = get_logger(__name__)
+
+T = TypeVar("T")
+
+
+def _cleanup_html_files(paths: list[str]) -> None:
+    """Delete temporary HTML files downloaded during a scrape, ignoring failures.
+
+    missing_ok=True handles the file already being gone; the PermissionError
+    guard handles Windows still holding the file open in a concurrent
+    process — both ingestion paths need this, so it lives here once instead
+    of being copied per scraper.
+    """
+    for p in paths:
+        try:
+            Path(p).unlink(missing_ok=True)
+        except PermissionError:
+            pass  # Windows: file still held by a concurrent process; ignore
+
+
+async def _fetch_and_parse(
+    client: httpx.AsyncClient,
+    sem: asyncio.Semaphore,
+    url: str,
+    html_path: str,
+    html_paths: list[str],
+    parse_fn: Callable[[str], T],
+    error_context: str,
+) -> T | None:
+    """Download one HTML page under the shared semaphore, parse it, log+skip on SourceError.
+
+    Registers html_path in html_paths (for later cleanup) before downloading.
+    On success, returns parse_fn applied to the downloaded page's text. On
+    SourceError (download failure), logs the error with error_context prefixed
+    and returns None — callers decide the appropriate empty-result fallback.
+    """
+    html_paths.append(html_path)
+    try:
+        async with sem:
+            await download_html_page(client, url, html_path)
+        html_text = Path(html_path).read_text(encoding="utf-8")
+        return parse_fn(html_text)
+    except SourceError as e:
+        logger.error("%s failed: %s — skipping", error_context, e, exc_info=True)
+        return None
 
 
 async def _ingest_json_sources_async(
@@ -110,29 +155,29 @@ async def _ingest_format_staples_async(
 
     async def _fetch_format(fmt: str) -> list[dict[str, Any]]:
         html_path = f"data/raw/format_staples_{fmt}.html"
-        html_paths.append(html_path)
         logger.progress("format_staples: scraping %r", fmt)
-        try:
-            async with sem:
-                await download_html_page(client, base_url.format(format=fmt), html_path)
-            html_text = Path(html_path).read_text(encoding="utf-8")
-            recs: list[dict[str, Any]] = []
-            for rec in extract_format_staples(html_text, fmt=fmt):
-                rec["snapshot_date"] = today
-                recs.append(rec)
-            return recs
-        except SourceError as e:
-            logger.error(
-                "format_staples %r failed: %s — skipping", fmt, e, exc_info=True
-            )
+        raw = await _fetch_and_parse(
+            client,
+            sem,
+            base_url.format(format=fmt),
+            html_path,
+            html_paths,
+            lambda html_text: extract_format_staples(html_text, fmt=fmt),
+            f"format_staples {fmt!r}",
+        )
+        if raw is None:
             return []
+        recs: list[dict[str, Any]] = []
+        for rec in raw:
+            rec["snapshot_date"] = today
+            recs.append(rec)
+        return recs
 
     results = await asyncio.gather(*[_fetch_format(fmt) for fmt in formats])
     all_raw = [rec for fmt_recs in results for rec in fmt_recs]
 
     _save_to_json(all_raw, json_path)
-    for p in html_paths:
-        Path(p).unlink(missing_ok=True)
+    _cleanup_html_files(html_paths)
 
     return {"format_staples": load_from_json(json_path, model)}
 
@@ -183,32 +228,31 @@ async def _ingest_tournament_results_async(
             logger.warning("No mtgtop8 code for format %r — skipping", fmt)
             return None
         list_path = f"data/raw/tournament_list_{fmt}.html"
-        t_html_paths.append(list_path)
-        try:
-            async with sem:
-                await download_html_page(
-                    client, list_url_tpl.format(code=code), list_path
-                )
-            list_html = Path(list_path).read_text(encoding="utf-8")
-            seen_ids: set[str] = set()
-            unique: list[dict[str, Any]] = []
-            for t in extract_mtgtop8_tournament_list(list_html, fmt):
-                if t["_event_id"] not in seen_ids:
-                    seen_ids.add(t["_event_id"])
-                    unique.append(t)
-            tournaments = unique[:max_n]
-            logger.info(
-                "Found %d tournaments for format %r on %s",
-                len(tournaments),
-                fmt,
-                list_url_tpl.format(code=code),
-            )
-            return fmt, code, tournaments
-        except SourceError as e:
-            logger.error(
-                "Tournament list for %r failed: %s — skipping", fmt, e, exc_info=True
-            )
+        raw = await _fetch_and_parse(
+            client,
+            sem,
+            list_url_tpl.format(code=code),
+            list_path,
+            t_html_paths,
+            lambda list_html: extract_mtgtop8_tournament_list(list_html, fmt),
+            f"Tournament list for {fmt!r}",
+        )
+        if raw is None:
             return None
+        seen_ids: set[str] = set()
+        unique: list[dict[str, Any]] = []
+        for t in raw:
+            if t["_event_id"] not in seen_ids:
+                seen_ids.add(t["_event_id"])
+                unique.append(t)
+        tournaments = unique[:max_n]
+        logger.info(
+            "Found %d tournaments for format %r on %s",
+            len(tournaments),
+            fmt,
+            list_url_tpl.format(code=code),
+        )
+        return fmt, code, tournaments
 
     level1 = await asyncio.gather(*[_fetch_format_list(fmt) for fmt in formats])
     valid_formats = [r for r in level1 if r is not None]
@@ -220,27 +264,25 @@ async def _ingest_tournament_results_async(
         event_id = t["_event_id"]
         logger.progress("[%s] fetching event — %s", fmt, t["event_name"])
         event_path = f"data/raw/tournament_event_{event_id}.html"
-        t_html_paths.append(event_path)
-        try:
-            async with sem:
-                await download_html_page(
-                    client,
-                    f"{deck_url_prefix}/event?e={event_id}&f={code}",
-                    event_path,
-                )
-            event_html = Path(event_path).read_text(encoding="utf-8")
-            decks = extract_mtgtop8_event_decks(event_html)
-            if len(decks) < 4:
-                logger.warning(
-                    "[%s] event %s yielded only %d deck(s) — possible parse failure",
-                    fmt,
-                    event_id,
-                    len(decks),
-                )
-            return fmt, code, t, decks
-        except SourceError as e:
-            logger.error("Event %r failed: %s — skipping", event_id, e, exc_info=True)
+        decks = await _fetch_and_parse(
+            client,
+            sem,
+            f"{deck_url_prefix}/event?e={event_id}&f={code}",
+            event_path,
+            t_html_paths,
+            extract_mtgtop8_event_decks,
+            f"Event {event_id!r}",
+        )
+        if decks is None:
             return None
+        if len(decks) < 4:
+            logger.warning(
+                "[%s] event %s yielded only %d deck(s) — possible parse failure",
+                fmt,
+                event_id,
+                len(decks),
+            )
+        return fmt, code, t, decks
 
     all_event_tasks = [
         _fetch_event(fmt, code, t)
@@ -259,16 +301,13 @@ async def _ingest_tournament_results_async(
             "[%s] event %s — deck: %s", fmt, t["_event_id"], deck_meta["deck_name"]
         )
         deck_path = f"data/raw/tournament_deck_{deck_id}.html"
-        t_html_paths.append(deck_path)
-        try:
-            async with sem:
-                await download_html_page(
-                    client,
-                    f"{deck_url_prefix}/event?e={t['_event_id']}&d={deck_id}&f={code}",
-                    deck_path,
-                )
-            deck_html = Path(deck_path).read_text(encoding="utf-8")
-            return extract_mtgtop8_decklist(
+        result = await _fetch_and_parse(
+            client,
+            sem,
+            f"{deck_url_prefix}/event?e={t['_event_id']}&d={deck_id}&f={code}",
+            deck_path,
+            t_html_paths,
+            lambda deck_html: extract_mtgtop8_decklist(
                 deck_html,
                 t["tournament_id"],
                 t["tournament_date"],
@@ -277,10 +316,10 @@ async def _ingest_tournament_results_async(
                 deck_meta["placement"],
                 deck_meta["player"],
                 deck_meta["deck_name"],
-            )
-        except SourceError as e:
-            logger.error("Deck %r failed: %s — skipping", deck_id, e, exc_info=True)
-            return []
+            ),
+            f"Deck {deck_id!r}",
+        )
+        return result if result is not None else []
 
     all_deck_tasks = [
         _fetch_deck(fmt, code, t, deck_meta)
@@ -291,8 +330,7 @@ async def _ingest_tournament_results_async(
     new_raw = [rec for deck_recs in level3 for rec in deck_recs]
 
     _save_to_json(new_raw, t_json_path)
-    for p in t_html_paths:
-        Path(p).unlink(missing_ok=True)
+    _cleanup_html_files(t_html_paths)
 
     result = load_from_json(t_json_path, t_model)
     logger.info(

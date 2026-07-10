@@ -1,4 +1,5 @@
 import datetime
+import json
 import logging
 from pathlib import Path
 
@@ -8,7 +9,7 @@ import pytest
 
 from src.data.cards.storage.gold import GoldStorage
 from src.data.cards.storage.gold.ml_dataset import GoldMLDatasetBuilder
-from src.data.cards.storage.gold.writers import GoldWriter
+from src.data.cards.storage.base.writers import DuckDBWriter as GoldWriter
 
 
 def _make_gold_storage(
@@ -23,9 +24,7 @@ def _make_gold_storage(
         con.unregister("_df")
     con.close()
 
-    config_path = tmp_path / "gold_config.json"
-    config_path.write_text("{}")
-    return GoldStorage(silver_path, ":memory:", str(config_path))
+    return GoldStorage(silver_path, ":memory:")
 
 
 @pytest.fixture
@@ -309,6 +308,37 @@ class TestBuildPriceFeatures:
         assert result.loc[1, "price_rank_global"] == 2
         assert result.loc[2, "price_rank_global"] == 3
 
+    def test_partitioned_by_uuid_so_two_cards_do_not_mix_windows(self, tmp_path):
+        # Mirrors TestBuildFormatStaples::test_partitioned_by_id_so_two_cards_do_not_mix_windows
+        # — two cards sharing one snapshot_date. If price_7d_avg's rolling
+        # window were ever partitioned by the wrong column (e.g. snapshot_date
+        # instead of uuid), these two single-row windows would blend into one
+        # averaged value instead of staying separate.
+        df = _make_full_prices(
+            [
+                {
+                    "uuid": "u1",
+                    "scryfall_id": "s1",
+                    "snapshot_date": "2026-05-01",
+                    "eur": 50.0,
+                },
+                {
+                    "uuid": "u2",
+                    "scryfall_id": "s2",
+                    "snapshot_date": "2026-05-01",
+                    "eur": 10.0,
+                },
+            ]
+        )
+        with _make_gold_storage(tmp_path, {"silver_prices_history": df}) as g:
+            result = g._features.build_price_features()
+
+        u1_row = result[result["uuid"] == "u1"].iloc[0]
+        u2_row = result[result["uuid"] == "u2"].iloc[0]
+        # Each card's single-row window must equal its own eur, not a mix
+        assert u1_row["price_7d_avg"] == pytest.approx(50.0)
+        assert u2_row["price_7d_avg"] == pytest.approx(10.0)
+
     def test_rank_resets_per_snapshot_date(self, tmp_path):
         df = _make_full_prices(
             [
@@ -580,19 +610,51 @@ class TestPipelineFormatStaples:
             g.populate()  # should complete without error
 
 
+class TestPruneOrphanedTables:
+    def test_drops_gold_table_not_produced_by_any_builder(self, tmp_path):
+        with _make_gold_storage(tmp_path, {}) as g:
+            g._gold_con.execute("CREATE TABLE gold_old_removed_feature (x INT)")
+            g.populate()
+            tables = {r[0] for r in g._gold_con.execute("SHOW TABLES").fetchall()}
+
+        assert "gold_old_removed_feature" not in tables
+
+    def test_keeps_known_gold_table_when_its_silver_source_is_absent(self, tmp_path):
+        with _make_gold_storage(tmp_path, {}) as g:
+            g._gold_con.execute(
+                "CREATE TABLE gold_format_staples (id VARCHAR, deck_pct DOUBLE)"
+            )
+            g.populate()
+            tables = {r[0] for r in g._gold_con.execute("SHOW TABLES").fetchall()}
+
+        assert "gold_format_staples" in tables
+
+    def test_leaves_non_gold_tables_untouched(self, tmp_path):
+        with _make_gold_storage(tmp_path, {}) as g:
+            g._gold_con.execute("CREATE TABLE unrelated_table (x INT)")
+            g.populate()
+            tables = {r[0] for r in g._gold_con.execute("SHOW TABLES").fetchall()}
+
+        assert "unrelated_table" in tables
+
+
 # ---------------------------------------------------------------------------
 # Helpers for GoldSignalBuilders.build_ban_price_impact tests
 # ---------------------------------------------------------------------------
 
 
 def _make_meta_history(rows: list[dict]) -> pd.DataFrame:
-    """Build a silver_meta_history DataFrame from minimal row dicts."""
+    """Build a silver_meta_history DataFrame from minimal row dicts.
+
+    legalities is serialised as a JSON string to match how Silver stores it
+    (DuckDB serialises Python dicts back to VARCHAR when writing to the table).
+    """
     return pd.DataFrame(
         [
             {
                 "id": r["id"],
                 "snapshot_date": r["snapshot_date"],
-                "legalities": r.get("legalities", {}),
+                "legalities": json.dumps(r.get("legalities", {})),
                 "edhrec_rank": r.get("edhrec_rank", None),
             }
             for r in rows
@@ -1552,6 +1614,11 @@ class TestBuildDemandSignals:
         # Day 02: 80 - 100 = -20
         assert result.loc[1, "edhrec_rank_change"] == pytest.approx(-20)
 
+    def test_returns_empty_when_meta_history_table_absent(self, tmp_path):
+        with _make_gold_storage(tmp_path, {}) as g:  # no silver tables at all
+            result = g._signals.build_demand_signals()
+        assert result.empty
+
 
 # ---------------------------------------------------------------------------
 # Helpers for GoldSignalBuilders.build_tournament_signals tests
@@ -2063,6 +2130,41 @@ def _gcf(rows: list[dict]) -> pd.DataFrame:
     )
 
 
+def _gds(rows: list[dict]) -> pd.DataFrame:
+    """Minimal gold_demand_signals rows."""
+    return pd.DataFrame(
+        [
+            {
+                "id": r["id"],
+                "snapshot_date": r["snapshot_date"],
+                "commander_banned": r.get("commander_banned", False),
+                "modern_banned": r.get("modern_banned", False),
+                "legacy_banned": r.get("legacy_banned", False),
+                "standard_banned": r.get("standard_banned", False),
+                "commander_unbanned": r.get("commander_unbanned", False),
+                "modern_unbanned": r.get("modern_unbanned", False),
+                "edhrec_rank_change": r.get("edhrec_rank_change", None),
+            }
+            for r in rows
+        ]
+    )
+
+
+def _gts(rows: list[dict]) -> pd.DataFrame:
+    """Minimal gold_tournament_signals rows."""
+    return pd.DataFrame(
+        [
+            {
+                "oracle_id": r["oracle_id"],
+                "top8_appearances_30d": r.get("top8_appearances_30d", 0),
+                "top8_appearances_90d": r.get("top8_appearances_90d", 0),
+                "top8_copies_avg": r.get("top8_copies_avg", 0.0),
+            }
+            for r in rows
+        ]
+    )
+
+
 def _gfs(rows: list[dict]) -> pd.DataFrame:
     """Minimal gold_format_staples rows."""
     return pd.DataFrame(
@@ -2304,3 +2406,59 @@ class TestBuildMLDataset:
         for col in ("rarity", "mana_value", "is_reserved", "set_type"):
             assert col in result.columns, f"Column {col} missing"
             assert pd.isna(result.iloc[0][col]), f"{col} should be NULL"
+
+    def test_demand_and_tournament_columns_populated_when_present(self):
+        """Regression test for the has_signals=True/has_tournament=True combination.
+
+        Every other test in this class leaves gold_demand_signals and
+        gold_tournament_signals absent, so this is the only committed coverage
+        of build_ml_dataset's data-driven cols_sql/joins_sql assembly actually
+        joining real (non-NULL) demand and tournament values together.
+        """
+        pf = _gpf(
+            [
+                {
+                    "uuid": "u1",
+                    "scryfall_id": "s1",
+                    "snapshot_date": "2026-05-01",
+                    "eur": 5.0,
+                }
+            ]
+        )
+        cf = _gcf(
+            [{"uuid": "u1", "scryfall_id": "s1", "oracle_id": "o1", "name": "Sol Ring"}]
+        )
+        ds = _gds(
+            [
+                {
+                    "id": "s1",
+                    "snapshot_date": "2026-05-01",
+                    "commander_banned": False,
+                    "edhrec_rank_change": -5.0,
+                }
+            ]
+        )
+        ts = _gts(
+            [
+                {
+                    "oracle_id": "o1",
+                    "top8_appearances_30d": 3,
+                    "top8_appearances_90d": 9,
+                    "top8_copies_avg": 1.5,
+                }
+            ]
+        )
+        result = _build_ml(
+            {
+                "gold_price_features": pf,
+                "gold_card_features": cf,
+                "gold_demand_signals": ds,
+                "gold_tournament_signals": ts,
+            }
+        )
+        row = result.iloc[0]
+        assert row["commander_banned"] == False  # noqa: E712
+        assert row["edhrec_rank_change"] == pytest.approx(-5.0)
+        assert row["top8_30d_total"] == pytest.approx(3.0)
+        assert row["top8_90d_total"] == pytest.approx(9.0)
+        assert row["top8_copies_avg"] == pytest.approx(1.5)

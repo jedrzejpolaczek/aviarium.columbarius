@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 from unittest.mock import MagicMock
 
-from app.routers.predict import inverse_log_return
+from app.pricing import inverse_log_return
 from app.schemas.responses import PredictionResponse
 
 

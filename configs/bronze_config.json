@@ -4,19 +4,19 @@
             "type": "scryfall",
             "url": "https://api.scryfall.com/bulk-data/all-cards",
             "path": "data/raw/scryfall_cards.json",
-            "flag": false
+            "flag": true
         },
         {
             "type": "mtgjson_cards",
             "url": "https://mtgjson.com/api/v5/AllPrintings.json",
             "path": "data/raw/mtgjson_cards.json",
-            "flag": false
+            "flag": true
         },
         {
             "type": "mtgjson_prices",
             "url": "https://mtgjson.com/api/v5/AllPricesToday.json",
             "path": "data/raw/mtgjson_prices.json",
-            "flag": false
+            "flag": true
         }
     ],
 

@@ -9,14 +9,17 @@ Provides two entry points that cover the full lifecycle of the data pipeline:
 
 Both functions read storage paths from a YAML file (configs/data_sources.yaml).
 Each tier loads its own JSON config: Bronze from configs/bronze_config.json,
-Silver from configs/silver_config.json, Gold from configs/gold_config.json.
+Silver from configs/silver_config.json.
 """
 
 import asyncio
-import json
-from src.logger import get_logger
+import datetime
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+from src.logger import get_logger
 
 import yaml
 
@@ -24,9 +27,78 @@ from src.data.cards.sources import ingesting_pipeline
 from src.data.cards.storage.bronze import BronzeStorage
 from src.data.cards.storage.silver import SilverStorage
 from src.data.cards.storage.gold import GoldStorage
+from src.data.cards.storage.health import run_health_checks
+from src.data.json_files import load_json_file
 
 
 logger = get_logger(__name__)
+
+_StageResult = tuple[str, float, str]  # (name, elapsed_s, "ok" | "error")
+
+
+def _load_json_config(config_path: str) -> dict[str, Any]:
+    """Load and parse a JSON config file, raising with a clear message on failure.
+
+    Shared by initial_bronze_pipeline and daily_bronze_pipeline.
+    """
+    result: dict[str, Any] = load_json_file(
+        config_path,
+        not_found_error=FileNotFoundError,
+        not_found_message=f"Bronze config not found: {config_path}",
+        invalid_json_error=ValueError,
+        invalid_json_message=f"Invalid JSON in {config_path}",
+    )
+    return result
+
+
+def _run_timed(
+    name: str,
+    fn: Callable[[], None],
+    results: list[_StageResult],
+) -> None:
+    """Execute *fn* and append a timing result to *results*.
+
+    Appends ``(name, elapsed_seconds, "ok")`` on success or
+    ``(name, elapsed_seconds, "error")`` on failure, then re-raises the
+    exception so the caller can decide whether to abort the pipeline.
+
+    Args:
+        name: Human-readable stage label used in the summary table.
+        fn: Zero-argument callable that runs one pipeline stage.
+        results: Accumulator list; one tuple is appended per call.
+
+    Raises:
+        Exception: Whatever *fn* raises, propagated unchanged after recording.
+    """
+    t0 = time.perf_counter()
+    try:
+        fn()
+        results.append((name, time.perf_counter() - t0, "ok"))
+    except Exception:
+        results.append((name, time.perf_counter() - t0, "error"))
+        raise
+
+
+def _log_pipeline_summary(results: list[_StageResult], total: float) -> None:
+    """Log a pytest-style summary table of all completed pipeline stages.
+
+    Emits a single INFO record containing a bordered table with one row per
+    stage (name, elapsed time, ✓/✗ status) and a total duration footer.
+    The record is written by the module-level logger so it appears in both
+    the console and the file handler when file logging is enabled.
+
+    Args:
+        results: Stage results produced by :func:`_run_timed`.
+        total: Wall-clock seconds for the entire pipeline run.
+    """
+    width = 48
+    sep = "═" * width
+    lines = ["", sep, f"{'Pipeline Summary':^{width}}", sep]
+    for name, elapsed, status in results:
+        icon = "✓" if status == "ok" else "✗"
+        lines.append(f"  {icon}  {name:<8}  {elapsed:>6.1f}s")
+    lines += [sep, f"  Total: {total:>6.1f}s", sep, ""]
+    logger.info("\n".join(lines))
 
 
 def load_config(config_path: str) -> dict[str, Any]:
@@ -65,10 +137,14 @@ def initial_pipeline(config_path: str) -> None:
         config_path: Path to the YAML config file (e.g. "configs/data_sources.yaml").
     """
     config = load_config(config_path)
+    pipeline_start = time.perf_counter()
+    results: list[_StageResult] = []
 
-    initial_bronze_pipeline(config)
-    initial_silver_pipeline(config)
-    initial_gold_pipeline(config)
+    _run_timed("Bronze", lambda: initial_bronze_pipeline(config), results)
+    _run_timed("Silver", lambda: initial_silver_pipeline(config), results)
+    _run_timed("Gold", lambda: initial_gold_pipeline(config), results)
+
+    _log_pipeline_summary(results, time.perf_counter() - pipeline_start)
 
 
 def initial_bronze_pipeline(config: dict[str, Any]) -> None:
@@ -84,15 +160,7 @@ def initial_bronze_pipeline(config: dict[str, Any]) -> None:
     """
     logger.info("Starting bronze initial pipeline")
 
-    bronze_config_path = config["storage"]["bronze_config_seed_path"]
-    try:
-        bronze_config = json.loads(Path(bronze_config_path).read_text())
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f"Bronze config not found: {bronze_config_path}"
-        ) from None
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in {bronze_config_path}: {e}") from e
+    bronze_config = _load_json_config(config["storage"]["bronze_config_seed_path"])
     results = asyncio.run(ingesting_pipeline(bronze_config))
 
     bronze_db_path = config["storage"]["bronze_duckdb_path"]
@@ -139,9 +207,8 @@ def initial_gold_pipeline(config: dict[str, Any]) -> None:
 
     silver_duckdb_path = config["storage"]["silver_duckdb_path"]
     gold_duckdb_path = config["storage"]["gold_duckdb_path"]
-    gold_config_path = config["storage"]["gold_config_path"]
 
-    with GoldStorage(silver_duckdb_path, gold_duckdb_path, gold_config_path) as storage:
+    with GoldStorage(silver_duckdb_path, gold_duckdb_path) as storage:
         storage.populate()
 
     logger.info("Gold initial pipeline finished")
@@ -157,10 +224,21 @@ def daily_pipeline(config_path: str) -> None:
         config_path: Path to the YAML config file (e.g. "configs/data_sources.yaml").
     """
     config = load_config(config_path)
+    pipeline_start = time.perf_counter()
+    results: list[_StageResult] = []
 
-    daily_bronze_pipeline(config)
-    daily_silver_pipeline(config)
-    daily_gold_pipeline(config)
+    _run_timed("Bronze", lambda: daily_bronze_pipeline(config), results)
+    _run_timed("Silver", lambda: daily_silver_pipeline(config), results)
+    _run_timed("Gold", lambda: daily_gold_pipeline(config), results)
+
+    _log_pipeline_summary(results, time.perf_counter() - pipeline_start)
+
+    run_health_checks(
+        bronze_path=config["storage"]["bronze_duckdb_path"],
+        silver_path=config["storage"]["silver_duckdb_path"],
+        gold_path=config["storage"]["gold_duckdb_path"],
+        today=datetime.date.today(),
+    )
 
 
 def daily_bronze_pipeline(config: dict[str, Any]) -> None:
@@ -179,15 +257,7 @@ def daily_bronze_pipeline(config: dict[str, Any]) -> None:
     """
     logger.info("Starting daily bronze data update pipeline")
 
-    bronze_config_path = config["storage"]["bronze_config_path"]
-    try:
-        bronze_config = json.loads(Path(bronze_config_path).read_text())
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f"Bronze config not found: {bronze_config_path}"
-        ) from None
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in {bronze_config_path}: {e}") from e
+    bronze_config = _load_json_config(config["storage"]["bronze_config_path"])
     results = asyncio.run(ingesting_pipeline(bronze_config))
 
     total_records = sum(len(records) for records, _ in results.values())
@@ -251,9 +321,8 @@ def daily_gold_pipeline(config: dict[str, Any]) -> None:
 
     silver_duckdb_path = config["storage"]["silver_duckdb_path"]
     gold_duckdb_path = config["storage"]["gold_duckdb_path"]
-    gold_config_path = config["storage"]["gold_config_path"]
 
-    with GoldStorage(silver_duckdb_path, gold_duckdb_path, gold_config_path) as storage:
+    with GoldStorage(silver_duckdb_path, gold_duckdb_path) as storage:
         storage.update()
 
     logger.info("Daily gold pipeline finished")

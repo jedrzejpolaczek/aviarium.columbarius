@@ -17,24 +17,20 @@ URL encoding:
     ``GET /predict/Lightning%20Bolt``.
 """
 
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends
 
-from app.dependencies import get_model
+from app.dependencies import (
+    RequestFeatures,
+    get_request_features,
+    require_match,
+    require_model,
+)
+from app.pricing import inverse_log_return
 from app.schemas.responses import PredictionResponse
 from src.ml.models.tiered import assign_tier
-
-
-def inverse_log_return(eur: np.ndarray, log_returns: np.ndarray) -> np.ndarray:
-    """Convert predicted log_return_7d values to absolute EUR prices.
-
-    Applies the inverse of log1p: expm1(log1p(eur) + log_return).
-    Returns NaN for elements where eur is NaN.
-    """
-    not_null = pd.notna(eur)
-    log_eur = np.where(not_null, np.log1p(np.where(not_null, eur, 0.0)), np.nan)
-    return np.where(not_null, np.expm1(log_eur + log_returns), np.nan)
 
 
 def _predict_from_index(
@@ -62,7 +58,7 @@ def _predict_from_index(
 
     log_return = float(model.predict(X_all_t.iloc[[idx]])[0])  # type: ignore[attr-defined]
     predicted_price = (
-        float(np.expm1(np.log1p(current_eur) + log_return))
+        float(inverse_log_return(np.array([current_eur]), np.array([log_return]))[0])
         if current_eur is not None
         else None
     )
@@ -82,8 +78,8 @@ router = APIRouter(prefix="/predict", tags=["prediction"])
 @router.get("/uuid/{uuid}", response_model=PredictionResponse)
 def predict_price_by_uuid(
     uuid: str,
-    request: Request,
-    model: object | None = Depends(get_model),
+    features: RequestFeatures = Depends(get_request_features),
+    model: lgb.Booster = Depends(require_model),
 ) -> PredictionResponse:
     """Predict the EUR price of a card identified by its MTGJson UUID.
 
@@ -92,8 +88,9 @@ def predict_price_by_uuid(
 
     Args:
         uuid: MTGJson UUID of the specific card printing.
-        request: FastAPI request object for accessing ``app.state``.
-        model: LightGBM booster injected via ``get_model`` dependency.
+        features: Pre-computed feature matrices and model_run_id, injected
+            via ``get_request_features`` dependency.
+        model: LightGBM booster injected via ``require_model`` dependency.
 
     Returns:
         PredictionResponse identical in shape to the name-based endpoint.
@@ -102,18 +99,11 @@ def predict_price_by_uuid(
         HTTPException 404: UUID not found in the feature matrix.
         HTTPException 503: Model not loaded.
     """
-    if model is None:
-        raise HTTPException(
-            503, detail="Model not loaded. Set MODEL_RUN_ID env variable."
-        )
+    X_all = features.X_all
+    X_all_t = features.X_all_t
+    model_run_id = features.model_run_id
 
-    X_all: pd.DataFrame = request.app.state.X_all
-    X_all_t: pd.DataFrame = request.app.state.X_all_t
-    model_run_id: str = getattr(request.app.state, "model_run_id", "")
-
-    matches = X_all[X_all["uuid"] == uuid]
-    if matches.empty:
-        raise HTTPException(404, detail=f"UUID '{uuid}' not found.")
+    matches = require_match(X_all, "uuid", uuid, "UUID")
 
     idx = int(matches.index[0])
     card_name = str(X_all.at[idx, "name"])
@@ -123,8 +113,8 @@ def predict_price_by_uuid(
 @router.get("/{card_name}", response_model=PredictionResponse)
 def predict_price(
     card_name: str,
-    request: Request,
-    model: object | None = Depends(get_model),
+    features: RequestFeatures = Depends(get_request_features),
+    model: lgb.Booster = Depends(require_model),
 ) -> PredictionResponse:
     """Predict the EUR price of a single card seven days from now.
 
@@ -137,8 +127,9 @@ def predict_price(
 
     Args:
         card_name: Exact card name, URL-decoded by FastAPI (e.g. "Force of Will").
-        request:   FastAPI request object for accessing ``app.state``.
-        model:     LightGBM booster injected via ``get_model`` dependency.
+        features:  Pre-computed feature matrices and model_run_id, injected
+                   via ``get_request_features`` dependency.
+        model:     LightGBM booster injected via ``require_model`` dependency.
                    Sourced from ``app.state.model``.
 
     Returns:
@@ -151,18 +142,11 @@ def predict_price(
         HTTPException 404: Card not found in the feature matrix.
         HTTPException 503: Model not loaded (MODEL_RUN_ID not set or load failed).
     """
-    if model is None:
-        raise HTTPException(
-            503, detail="Model not loaded. Set MODEL_RUN_ID env variable."
-        )
+    X_all = features.X_all
+    X_all_t = features.X_all_t
+    model_run_id = features.model_run_id
 
-    X_all: pd.DataFrame = request.app.state.X_all
-    X_all_t: pd.DataFrame = request.app.state.X_all_t
-    model_run_id: str = getattr(request.app.state, "model_run_id", "")
-
-    matches = X_all[X_all["name"] == card_name]
-    if matches.empty:
-        raise HTTPException(404, detail=f"Card '{card_name}' not found.")
+    matches = require_match(X_all, "name", card_name, "Card")
 
     idx = int(matches.index[0])
     return _predict_from_index(idx, card_name, X_all, X_all_t, model, model_run_id)

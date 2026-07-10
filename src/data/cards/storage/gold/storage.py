@@ -12,7 +12,6 @@ Typical usage:
     with GoldStorage(
         "data/silver/cards.duckdb",
         "data/gold/cards.duckdb",
-        "configs/gold_config.json",
     ) as storage:
         storage.populate()   # initial load
         # or
@@ -26,10 +25,16 @@ Composition:
     _writer    (DuckDBWriter)         — DROP-AND-REPLACE write helper
 """
 
-from src.data.cards.storage.base import TransformStorage, get_tables
+from collections.abc import Callable
+
+import duckdb
+import pandas as pd
+
+from src.data.cards.storage.base.storage import get_tables, warn_if_missing
+from src.data.cards.storage.base.transformer import TransformStorage
 from src.data.cards.storage.gold.features import GoldFeatureBuilders
 from src.data.cards.storage.gold.signals import GoldSignalBuilders
-from src.data.cards.storage.gold.writers import GoldWriter
+from src.data.cards.storage.base.writers import DuckDBWriter as GoldWriter
 from src.data.cards.storage.gold.ml_dataset import GoldMLDatasetBuilder
 from src.logger import get_logger
 
@@ -41,6 +46,51 @@ logger = get_logger(__name__)
 # the training frame has zero usable rows. Matches validation_config.json
 # min_train_days intent; the hard floor is the prediction horizon itself.
 _MIN_ML_HORIZON_DAYS = 7
+
+
+def get_latest_gold_snapshot_date(con: duckdb.DuckDBPyConnection) -> str | None:
+    """Return the latest snapshot_date in gold_price_features, or None if empty/absent.
+
+    Shared by app/main.py (inference always wants the freshest snapshot) and
+    previously ran inline in scripts/train_model.py and scripts/check_and_retrain.py.
+    check_and_retrain.py now uses :func:`get_latest_trainable_snapshot_date`
+    instead (train_model.py should follow suit) — training
+    needs a snapshot whose t+7 target is already available, which the plain latest
+    snapshot generally isn't (see that function's docstring).
+    """
+    if "gold_price_features" not in get_tables(con):
+        return None
+    row = con.execute("SELECT MAX(snapshot_date) FROM gold_price_features").fetchone()
+    if row is None or row[0] is None:
+        return None
+    return str(row[0])
+
+
+def get_latest_trainable_snapshot_date(con: duckdb.DuckDBPyConnection) -> str | None:
+    """Return the latest snapshot_date that has a t+7 counterpart, or None.
+
+    ``src.monitoring.retraining.retrain`` builds its target as
+    ``log_return_7d = log1p(eur_t+7) - log1p(eur_t)``, requiring an exact
+    snapshot at ``snapshot_date + 7 days``. The plain latest snapshot (see
+    :func:`get_latest_gold_snapshot_date`) is today's collection run and by
+    definition has no data 7 days in its future yet, so passing it to
+    ``retrain()`` always raises ``RuntimeError: ... produced an empty
+    training dataset``. This picks the newest date that actually has its
+    t+7 pair already collected, tolerating gaps in the snapshot history.
+    """
+    if "gold_price_features" not in get_tables(con):
+        return None
+    row = con.execute(
+        """
+        SELECT MAX(t0.snapshot_date)
+        FROM (SELECT DISTINCT snapshot_date FROM gold_price_features) t0
+        JOIN (SELECT DISTINCT snapshot_date FROM gold_price_features) t7
+            ON t7.snapshot_date = CAST(t0.snapshot_date AS DATE) + INTERVAL 7 DAY
+        """
+    ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    return str(row[0])
 
 
 class GoldStorage(TransformStorage):
@@ -57,7 +107,6 @@ class GoldStorage(TransformStorage):
         with GoldStorage(
             "data/silver/cards.duckdb",
             "data/gold/cards.duckdb",
-            "configs/gold_config.json",
         ) as storage:
             storage.populate()
 
@@ -65,15 +114,30 @@ class GoldStorage(TransformStorage):
         StorageConnectionError: If either DuckDB connection cannot be opened.
     """
 
-    def __init__(
-        self, silver_db_path: str, gold_db_path: str, config_path: str
-    ) -> None:
+    # Every Gold table name any builder in this class can currently produce.
+    # _prune_orphaned_tables uses this to distinguish "no builder makes this
+    # anymore" (safe to drop) from "this run's Silver tier is partial" (must
+    # stay untouched — see _pipeline's docstring on partial-tier tolerance).
+    _KNOWN_GOLD_TABLES = frozenset(
+        {
+            "gold_card_features",
+            "gold_price_features",
+            "gold_language_premiums",
+            "gold_demand_signals",
+            "gold_events",
+            "gold_format_staples",
+            "gold_ban_price_impact",
+            "gold_tournament_signals",
+            "gold_ml_dataset",
+        }
+    )
+
+    def __init__(self, silver_db_path: str, gold_db_path: str) -> None:
         """Open Silver (read-only) and Gold (read-write) DuckDB connections.
 
         Args:
             silver_db_path: Path to the Silver DuckDB file.
             gold_db_path: Path to the Gold DuckDB file (created if it does not exist).
-            config_path: Path to the gold_config.json file (reserved for future use).
 
         Raises:
             StorageConnectionError: If either connection cannot be established.
@@ -96,6 +160,25 @@ class GoldStorage(TransformStorage):
     # Pipeline
     # ------------------------------------------------------------------
 
+    def _build_if_present(
+        self,
+        required: tuple[str, ...],
+        silver_tables: set[str],
+        build_fn: Callable[[], pd.DataFrame],
+        gold_table: str,
+    ) -> None:
+        """Build and write `gold_table` iff every table in `required` exists.
+
+        Otherwise logs which of `required` is missing and skips the build —
+        the shared shape behind the guard clauses in _pipeline.
+        """
+        if warn_if_missing(
+            logger, required, silver_tables, gold_table, tier_label="Silver"
+        ):
+            return
+        logger.progress("Building %s", gold_table)
+        self._writer.full_load(build_fn(), gold_table)
+
     def _pipeline(self, update: bool) -> None:
         """Run the full Silver → Gold transformation pipeline.
 
@@ -117,91 +200,60 @@ class GoldStorage(TransformStorage):
         """
         silver_tables = get_tables(self._silver_con)
 
-        if "silver_cards" in silver_tables:
-            logger.progress("Building gold_card_features")
-            self._writer.full_load(
-                self._features.build_card_features(), "gold_card_features"
-            )
-        else:
-            logger.warning("silver_cards not found — skipping gold_card_features")
+        self._build_if_present(
+            ("silver_cards",),
+            silver_tables,
+            self._features.build_card_features,
+            "gold_card_features",
+        )
+        self._build_if_present(
+            ("silver_prices_history",),
+            silver_tables,
+            self._features.build_price_features,
+            "gold_price_features",
+        )
+        self._build_if_present(
+            ("silver_language_prices_history", "silver_prices_history"),
+            silver_tables,
+            self._features.build_language_premiums,
+            "gold_language_premiums",
+        )
 
-        if "silver_prices_history" in silver_tables:
-            logger.progress("Building gold_price_features")
-            self._writer.full_load(
-                self._features.build_price_features(), "gold_price_features"
-            )
-        else:
-            logger.warning(
-                "silver_prices_history not found — skipping gold_price_features"
-            )
-
-        if (
-            "silver_language_prices_history" in silver_tables
-            and "silver_prices_history" in silver_tables
+        # gold_demand_signals and gold_events share a single Silver dependency
+        # (silver_meta_history) — kept as a pair with one combined warning so
+        # a missing-table log line doesn't repeat itself twice for one cause.
+        if not warn_if_missing(
+            logger,
+            ("silver_meta_history",),
+            silver_tables,
+            "gold_demand_signals, gold_events",
+            tier_label="Silver",
         ):
-            logger.progress("Building gold_language_premiums")
-            self._writer.full_load(
-                self._features.build_language_premiums(), "gold_language_premiums"
-            )
-        else:
-            missing = [
-                t
-                for t in ("silver_language_prices_history", "silver_prices_history")
-                if t not in silver_tables
-            ]
-            logger.warning(
-                "Missing Silver tables %s — skipping gold_language_premiums", missing
-            )
-
-        if "silver_meta_history" in silver_tables:
             logger.progress("Building gold_demand_signals")
             self._writer.full_load(
                 self._signals.build_demand_signals(), "gold_demand_signals"
             )
             logger.progress("Building gold_events")
             self._writer.full_load(self._signals.build_events(), "gold_events")
-        else:
-            logger.warning(
-                "silver_meta_history not found — skipping gold_demand_signals, gold_events"
-            )
 
-        if "silver_format_staples_history" in silver_tables:
-            logger.progress("Building gold_format_staples")
-            self._writer.full_load(
-                self._signals.build_format_staples(), "gold_format_staples"
-            )
-        else:
-            logger.warning(
-                "silver_format_staples_history not found — skipping gold_format_staples"
-            )
-
-        if (
-            "silver_meta_history" in silver_tables
-            and "silver_prices_history" in silver_tables
-        ):
-            logger.progress("Building gold_ban_price_impact")
-            self._writer.full_load(
-                self._signals.build_ban_price_impact(), "gold_ban_price_impact"
-            )
-        else:
-            missing = [
-                t
-                for t in ("silver_meta_history", "silver_prices_history")
-                if t not in silver_tables
-            ]
-            logger.warning(
-                "Missing Silver tables %s — skipping gold_ban_price_impact", missing
-            )
-
-        if "silver_tournament_results_history" in silver_tables:
-            logger.progress("Building gold_tournament_signals")
-            self._writer.full_load(
-                self._signals.build_tournament_signals(), "gold_tournament_signals"
-            )
-        else:
-            logger.warning(
-                "silver_tournament_results_history not found — skipping gold_tournament_signals"
-            )
+        self._build_if_present(
+            ("silver_format_staples_history",),
+            silver_tables,
+            self._signals.build_format_staples,
+            "gold_format_staples",
+        )
+        self._build_if_present(
+            ("silver_meta_history", "silver_prices_history"),
+            silver_tables,
+            self._signals.build_ban_price_impact,
+            "gold_ban_price_impact",
+        )
+        self._build_if_present(
+            ("silver_tournament_results_history",),
+            silver_tables,
+            self._signals.build_tournament_signals,
+            "gold_tournament_signals",
+        )
 
         gold_tables = get_tables(self._gold_con)
         if "gold_price_features" in gold_tables:
@@ -224,3 +276,25 @@ class GoldStorage(TransformStorage):
                 self._writer.full_load(self._ml.build_ml_dataset(), "gold_ml_dataset")
         else:
             logger.warning("gold_price_features not found — skipping gold_ml_dataset")
+
+        self._prune_orphaned_tables()
+
+    def _prune_orphaned_tables(self) -> None:
+        """Drop any gold_* table that no builder in this class can produce.
+
+        A table only reaches here if the code that used to build it was
+        removed. A table whose Silver source is merely absent on this run
+        stays in _KNOWN_GOLD_TABLES and is left untouched.
+        """
+        gold_tables = get_tables(self._gold_con)
+        orphaned = {
+            t
+            for t in gold_tables
+            if t.startswith("gold_") and t not in self._KNOWN_GOLD_TABLES
+        }
+        for table_name in sorted(orphaned):
+            logger.warning(
+                "Dropping orphaned Gold table %r — no builder produces it anymore",
+                table_name,
+            )
+            self._gold_con.execute(f"DROP TABLE {table_name}")
