@@ -15,6 +15,8 @@ Exposes:
 """
 
 import logging
+import logging.handlers
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -160,9 +162,32 @@ def get_logger(name: str) -> ProgressLogger:
 # ── Public setup ──────────────────────────────────────────────────────────────
 
 
+_LOG_FILE_NAME_RE = re.compile(r"^pipeline_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.log$")
+
+
+def _prune_old_log_files(log_dir: Path, keep_last: int) -> None:
+    """Delete all but the *keep_last* most recent timestamped log files.
+
+    Mirrors scripts/backup_data.py's `_prune_old_snapshots` pattern: only
+    files matching the exact `pipeline_<timestamp>.log` name are
+    considered prunable, so an unrelated file placed in `log_dir` is never
+    touched. Needed in addition to RotatingFileHandler's own maxBytes/
+    backupCount rotation, since setup_logging() creates a *new* timestamped
+    file on every call rather than appending to one rotating file.
+    """
+    if keep_last <= 0:
+        return
+    log_files = sorted(
+        p for p in log_dir.iterdir() if p.is_file() and _LOG_FILE_NAME_RE.match(p.name)
+    )
+    for old in log_files[:-keep_last]:
+        old.unlink()
+
+
 def setup_logging(
     level: int = PROGRESS,
     log_dir: Path | str | None = None,
+    keep_last_logs: int = 30,
 ) -> Path | None:
     """Configure root logging with colour console output and optional file output.
 
@@ -170,9 +195,13 @@ def setup_logging(
     persistent INFO/WARNING/ERROR messages are shown.  Pass logging.INFO to
     suppress progress lines entirely (e.g. in automated tests).
 
-    When *log_dir* is given a timestamped log file is created there at DEBUG
-    level using plain-text formatting (no ANSI codes).  The path to that file
-    is returned so callers can display it to the user.
+    When *log_dir* is given a timestamped log file is created there via a
+    ``RotatingFileHandler`` (10 MB per file, 5 backups) at DEBUG level using
+    plain-text formatting (no ANSI codes). Since each call creates a new
+    timestamped file, *keep_last_logs* additionally prunes older timestamped
+    files beyond that count so ``log_dir`` doesn't grow without bound across
+    repeated invocations (e.g. one per day via cron). The path to the new
+    log file is returned so callers can display it to the user.
     """
     console_handler = ProgressStreamHandler()
     console_handler.setFormatter(ColorFormatter())
@@ -186,10 +215,13 @@ def setup_logging(
         log_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         log_file = log_dir / f"pipeline_{timestamp}.log"
-        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file, maxBytes=10_000_000, backupCount=5, encoding="utf-8"
+        )
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(PlainFormatter())
         handlers.append(file_handler)
+        _prune_old_log_files(log_dir, keep_last_logs)
 
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)

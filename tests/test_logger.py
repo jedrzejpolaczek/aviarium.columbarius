@@ -293,6 +293,43 @@ class TestSetupLogging:
         ]
         assert isinstance(file_handlers[0].formatter, PlainFormatter)
 
+    def test_file_handler_is_rotating_with_expected_limits(
+        self, isolated_root_logger: logging.Logger, tmp_path: pathlib.Path
+    ) -> None:
+        import logging.handlers
+
+        setup_logging(log_dir=tmp_path)
+        file_handlers = [
+            h
+            for h in isolated_root_logger.handlers
+            if isinstance(h, logging.handlers.RotatingFileHandler)
+        ]
+        assert len(file_handlers) == 1
+        assert file_handlers[0].maxBytes == 10_000_000
+        assert file_handlers[0].backupCount == 5
+
+    def test_prunes_old_log_files_beyond_keep_last(
+        self, isolated_root_logger: logging.Logger, tmp_path: pathlib.Path
+    ) -> None:
+        for i in range(12):
+            (tmp_path / f"pipeline_2026-01-{i + 1:02d}_00-00-00.log").write_text("x")
+
+        setup_logging(log_dir=tmp_path, keep_last_logs=10)
+
+        remaining = sorted(tmp_path.glob("pipeline_*.log"))
+        # 12 pre-existing + 1 new file created by this call = 13; pruned to 10.
+        assert len(remaining) == 10
+
+    def test_keeps_all_log_files_when_under_the_limit(
+        self, isolated_root_logger: logging.Logger, tmp_path: pathlib.Path
+    ) -> None:
+        (tmp_path / "pipeline_2026-01-01_00-00-00.log").write_text("x")
+
+        setup_logging(log_dir=tmp_path, keep_last_logs=10)
+
+        remaining = list(tmp_path.glob("pipeline_*.log"))
+        assert len(remaining) == 2  # the pre-existing file + the new one
+
     def test_root_level_set_to_debug(
         self, isolated_root_logger: logging.Logger
     ) -> None:
