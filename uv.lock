@@ -609,7 +609,7 @@ dev = [
     { name = "beautifulsoup4", specifier = ">=4.12.0" },
     { name = "jupyterlab", specifier = ">=4.5.6" },
     { name = "jupyterlab-code-formatter", specifier = ">=3.0.3" },
-    { name = "jupyterlab-git", specifier = ">=0.52.0" },
+    { name = "jupyterlab-git", specifier = ">=0.54.0" },
     { name = "jupyterlab-lsp", specifier = ">=5.3.0" },
     { name = "lxml", specifier = ">=5.0.0" },
     { name = "mypy", specifier = ">=1.11.0" },
@@ -1804,19 +1804,37 @@ wheels = [
 
 [[package]]
 name = "jupyterlab-git"
-version = "0.52.0"
+version = "0.54.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jupyter-server" },
-    { name = "nbdime" },
+    { name = "jupyterlab-git-core", extra = ["nbdime"] },
+    { name = "traitlets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c9/fd/7f674383567128ebbda0b91750cb49df082cd14cf0e099ab007f5daea67b/jupyterlab_git-0.54.0.tar.gz", hash = "sha256:4d0b46d3d17376a5c610633a2191868f577f46341e112dc9dece1f501cd46b65", size = 20158, upload-time = "2026-06-17T07:26:59.527Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f6/81/58a8bc9528bc3355b5e2e630fb7e238cad65e2e2391eac8c308d9a9e8679/jupyterlab_git-0.54.0-py3-none-any.whl", hash = "sha256:b33f96aef13d814a6c023d74d843f0d7d2e9d1fd8a283bc91f69921a68936d7d", size = 11397, upload-time = "2026-06-17T07:26:57.798Z" },
+]
+
+[[package]]
+name = "jupyterlab-git-core"
+version = "0.54.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
     { name = "nbformat" },
     { name = "packaging" },
     { name = "pexpect" },
     { name = "traitlets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b5/9e/46de433b6d5a04451f15972e695f71e126a3f98b0102b4f8c77928b4bc0a/jupyterlab_git-0.52.0.tar.gz", hash = "sha256:0a21b78b1b0c5d57d69fd66ce7027360f16781a19d933b9788544b384e1d9583", size = 14477347, upload-time = "2026-03-02T13:27:14.604Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/84/76/53411bedeeba5d339fb197384a9a3f9ddd9de2adef76df97aeca0da2ed78/jupyterlab_git_core-0.54.0.tar.gz", hash = "sha256:5ce935fc0ac42d908f57def7e74df506c3a8049e1365d158721bd5ec2076fe87", size = 315241, upload-time = "2026-06-17T07:27:03.088Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fe/1f/d9928d5137e5ef6b099592b402457fbb77f4e17721465d6258fdb8b06ec3/jupyterlab_git-0.52.0-py3-none-any.whl", hash = "sha256:bb3f516b1ebce2fd0726f93c52567e2d8d462e49263c59009f1b7bb41232a9a1", size = 370350, upload-time = "2026-03-02T13:27:12.205Z" },
+    { url = "https://files.pythonhosted.org/packages/3f/fd/70246be863a774d48146877541055ddd495cfadfa0bad76b0c8b33f3dcbf/jupyterlab_git_core-0.54.0-py3-none-any.whl", hash = "sha256:a163c7b3748292a7e83f514ae9cd838aa4c538ceb6224530626b56771a55053e", size = 613258, upload-time = "2026-06-17T07:27:01.087Z" },
+]
+
+[package.optional-dependencies]
+nbdime = [
+    { name = "nbdime" },
 ]
 
 [[package]]
