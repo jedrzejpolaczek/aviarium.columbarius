@@ -618,7 +618,7 @@ dev = [
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "pandas-stubs", specifier = ">=3.0.3.260530" },
     { name = "pydantic", specifier = ">=2.13.3" },
-    { name = "pymc", specifier = ">=6.0.1" },
+    { name = "pymc", specifier = ">=6.1.0" },
     { name = "pytest", specifier = ">=8.3.0" },
     { name = "pytest-asyncio", specifier = ">=0.26.0" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
@@ -3423,7 +3423,7 @@ wheels = [
 
 [[package]]
 name = "pymc"
-version = "6.0.1"
+version = "6.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "arviz" },
@@ -3437,9 +3437,9 @@ dependencies = [
     { name = "threadpoolctl" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3d/ee/0340f92961de7e2f7a4a877d8715e43ec58061650bd613b64073a085624d/pymc-6.0.1.tar.gz", hash = "sha256:faa38320a2e034fb153cd0ba2f08e204f14ab68938131bfefa94a2fa8b9f99e2", size = 531456, upload-time = "2026-05-20T21:15:11.979Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4c/d0/3c2dd3c886f944efb57858b29d162e48b4bc79cccda4b84ac90fd64338ef/pymc-6.1.0.tar.gz", hash = "sha256:46b373387e4dc18d2df4be4ca48794effe3f8348a912d34c0f5955700d92a66b", size = 536267, upload-time = "2026-07-07T10:19:15.082Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/77/38/e86045374f31679798e0a09ab5cc9cbb22d2b18f8af6e249cb39a6a64110/pymc-6.0.1-py3-none-any.whl", hash = "sha256:b58bfa2b7abeed5a15281fd937c03affce57377c88efdcbb71a988f31301d22f", size = 584172, upload-time = "2026-05-20T21:15:09.815Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/c1/43fdb63f30b762224abc3d774fcb15cacac3fa871277061dddc86c466879/pymc-6.1.0-py3-none-any.whl", hash = "sha256:f6982d46ca37abd81de0ca39345bcf3e2200fa0871acee5d1961dd21f192f097", size = 590901, upload-time = "2026-07-07T10:19:13.115Z" },
 ]
 
 [[package]]
@@ -3453,7 +3453,7 @@ wheels = [
 
 [[package]]
 name = "pytensor"
-version = "3.0.3"
+version = "3.1.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cons" },
@@ -3466,17 +3466,17 @@ dependencies = [
     { name = "scipy" },
     { name = "setuptools" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f2/0d/a6d2bd9604c714da6de191e364c11f61ab2ba4b2b98209794dc6c07a21d0/pytensor-3.0.3.tar.gz", hash = "sha256:8f6fa875a0b5be2bd3239662d620ce9ef9b052b4bf9bfa26498fb0cdda5dcf18", size = 4931397, upload-time = "2026-05-20T23:33:06.711Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5c/ae/61f36d8ffa05d0eb1ca7a6c18bec83eef1f8e43d5d307531bdab51dac8be/pytensor-3.1.3.tar.gz", hash = "sha256:76dcc74417edfe24fbbe0b5687b8be7bc069c53e9ee93e08cb245f3b3d2c612f", size = 5187664, upload-time = "2026-07-10T22:00:26.03Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f7/bf/3376fcb349e50133d0b9303f6cff329c4293439174420981e48bc2740c15/pytensor-3.0.3-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:37076cd9561c8d90d57fc206439a252f6082edac3bc76f728285bed5259cc804", size = 1806478, upload-time = "2026-05-20T23:32:49.162Z" },
-    { url = "https://files.pythonhosted.org/packages/71/04/91649209c9b11373b0ae27fbcc5e47527ec2775f79ad7827ce5930cc822f/pytensor-3.0.3-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:fc628feedfd9a7de1a7ce860fba7b69fb8899c61a1d03873c98ecffb0b42d5d6", size = 2305457, upload-time = "2026-05-20T23:32:51.342Z" },
-    { url = "https://files.pythonhosted.org/packages/c8/50/9b0477fdcbb937da8d225ce1ce559fb3f73d570309d8494948c0cfb245ec/pytensor-3.0.3-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:8b6827cb594a1d9efaa862429db3cfa89ec6eee33f16eebb901627a229262d9b", size = 2304752, upload-time = "2026-05-20T23:32:53.088Z" },
-    { url = "https://files.pythonhosted.org/packages/cd/75/0b4e7f78ce478e5f1b5a7b8d621833b307d679afb7bb54483755dd1f737e/pytensor-3.0.3-cp313-cp313-win_amd64.whl", hash = "sha256:daf2d406af4811f2d038b533fae29d26f58399481c483684695838c511987504", size = 1799035, upload-time = "2026-05-20T23:32:54.656Z" },
-    { url = "https://files.pythonhosted.org/packages/79/3d/16740e09a559a0e6ca947a075c87eb427d6a2a822790a6f8bd37653eda1c/pytensor-3.0.3-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:92b9abb143b031a3b04fe8ca6ae78914dda9bfb6b9cd8f4d75dc522f882376ab", size = 1807667, upload-time = "2026-05-20T23:32:56.627Z" },
-    { url = "https://files.pythonhosted.org/packages/6e/d9/ed3087c71e9ff790148bda5b07714c9b3be94e3afba66621348526560dbc/pytensor-3.0.3-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6e57b015c09ac639100034a9051ef2ddc5f7bc01a82382e6f95dd8a7f5b7f1cf", size = 2298703, upload-time = "2026-05-20T23:32:58.86Z" },
-    { url = "https://files.pythonhosted.org/packages/ee/de/dd4286723761289908e6160abba4702472e1e22b6ded5709c194d4d1ef5e/pytensor-3.0.3-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:c035550b5e71c2beab4276420f14bb6a4daac56214d1bb14b5a1de2dff97f91d", size = 2299948, upload-time = "2026-05-20T23:33:00.88Z" },
-    { url = "https://files.pythonhosted.org/packages/e5/84/68aa3598fa422027f8264fd4efa1a157bc7839ccb22f24d6def733d06cb8/pytensor-3.0.3-cp314-cp314-win_amd64.whl", hash = "sha256:acd6d7efd4a7b299e4fa859ab07476a05c3295d9cb98740c77d89054036ebe2b", size = 1801356, upload-time = "2026-05-20T23:33:02.898Z" },
-    { url = "https://files.pythonhosted.org/packages/33/3e/32fdc4a8597f3c115287bbaf96485e9ac5d57b6bebf14447e89b8967a066/pytensor-3.0.3-py2.py3-none-any.whl", hash = "sha256:2bb7f04d4396d8f97d2e759b36957b65c6bcb216c313cf5a79fb4469841d49b9", size = 1505698, upload-time = "2026-05-20T23:33:04.946Z" },
+    { url = "https://files.pythonhosted.org/packages/40/3b/0f79959021a293577533942c3154e1ff7eb550b2a2c13d1b5defda7c231b/pytensor-3.1.3-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:5ac02c0e62d7b8d517bbb2534bfff52744b8352b7e8ba128bed05cbe96090446", size = 1858736, upload-time = "2026-07-10T22:00:10.901Z" },
+    { url = "https://files.pythonhosted.org/packages/af/65/fd00742c0f578ec2c3d50c75366ef3a96ecf9461255eb34913032b6a3261/pytensor-3.1.3-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:2e9e796b7b6ad186a32d900df5c596c54cb6727f2226993ff2c48e7af1580062", size = 2361909, upload-time = "2026-07-10T22:00:12.513Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/6a/766389d77fce15528a663b42a0ebb83a687970d6b61f64e358823c8968a5/pytensor-3.1.3-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:76ed66b9da94233ccc35fc517c5c6666e7b6fffd605c37fce351d804ce7d8424", size = 2361556, upload-time = "2026-07-10T22:00:14.204Z" },
+    { url = "https://files.pythonhosted.org/packages/72/e4/6458c2ae93857cc6228b867c5ea4e2018a170222d164c53b6126994104d0/pytensor-3.1.3-cp313-cp313-win_amd64.whl", hash = "sha256:fe44159d5f8961ae423ccdf900b39f167c8c52d9f841318f05c06a2992ba1706", size = 1851222, upload-time = "2026-07-10T22:00:16.121Z" },
+    { url = "https://files.pythonhosted.org/packages/97/b5/7f27b95359f880da71e8670744e275cb2828014888e31f3dd1fa8cd8bbd3/pytensor-3.1.3-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:b755f5d09a6eeacf2819e2dbc62cb4a697f869730160f9ffe22f2a115e917a98", size = 1859579, upload-time = "2026-07-10T22:00:17.855Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/70/6567ba609d26dd31e0399d9d628c81f61daab3c4e2ec509da5d8ba8bf1be/pytensor-3.1.3-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:697f0634d908b2a4350c9651d9fa26a9d229fc8ed10662bf82e8fea0d61d7181", size = 2355076, upload-time = "2026-07-10T22:00:19.544Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/6a/dbe35867916b7f1ace7e1cbd26b5b0d511bd1556fae1513a82d25e288389/pytensor-3.1.3-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:37fda3ecdc32078922e2e7eb8d5e3c125ca43622086eacf55f466b21f396f997", size = 2356795, upload-time = "2026-07-10T22:00:21.188Z" },
+    { url = "https://files.pythonhosted.org/packages/f4/bf/cd275e16900cb79eba9fa26c230661ac7440094cd63040b692cebe8fd21b/pytensor-3.1.3-cp314-cp314-win_amd64.whl", hash = "sha256:17d290ef2d03582135ca3389510aa7f786742cc9612d23715fe1162af918fbaf", size = 1853655, upload-time = "2026-07-10T22:00:22.913Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/5a/671304f945d1d32d8ed39af7d66da49df18a6d0287dce88d81e345ec50be/pytensor-3.1.3-py2.py3-none-any.whl", hash = "sha256:9f2337cedf135b2710aebf51fd03533c1211b386b9742f2b4578951fd013d4c9", size = 1556080, upload-time = "2026-07-10T22:00:24.411Z" },
 ]
 
 [[package]]
