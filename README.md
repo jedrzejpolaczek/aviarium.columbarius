@@ -4,6 +4,10 @@
 
 **aviarium.columbarius** is a Magic: The Gathering card price prediction system. It ingests and stores raw card and pricing data from Scryfall and MTGJson, cleans and joins them in a Silver tier, and will grow to include feature engineering and an ML model for predicting card prices.
 
+<img src="https://upload.wikimedia.org/wikipedia/commons/3/3f/Dvergfalk_-_Merlin_%28Falco_columbarius%29_Lista%2C_Norway.JPG" alt="Falco columbarius — merlin" width="480">
+
+*Photo: Marton Berntsen, [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Dvergfalk_-_Merlin_(Falco_columbarius)_Lista,_Norway.JPG), [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)*
+
 ---
 
 ## Table of Contents
@@ -516,4 +520,4 @@ Please read the [Code of Conduct](CODE_OF_CONDUCT.md) before contributing.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [GNU Affero General Public License v3.0](LICENSE).
