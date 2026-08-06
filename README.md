@@ -520,4 +520,4 @@ Please read the [Code of Conduct](CODE_OF_CONDUCT.md) before contributing.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [GNU Affero General Public License v3.0](LICENSE).
