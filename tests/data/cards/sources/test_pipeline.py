@@ -222,6 +222,33 @@ class TestIngestingPipeline:
         assert mock_dl.call_args[0][1] == "http://cdn.scryfall.com/cards.json"
 
     @pytest.mark.asyncio
+    async def test_scryfall_falls_back_to_jsonl_download_uri(self):
+        meta_response = MagicMock()
+        meta_response.raise_for_status.return_value = None
+        meta_response.json.return_value = {
+            "jsonl_download_uri": "http://cdn.scryfall.com/cards.jsonl"
+        }
+        mock_client = _mock_httpx_client()
+        mock_client.get.return_value = meta_response
+
+        with (
+            patch(
+                "src.data.cards.sources.pipeline.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+            patch("src.data.cards.sources.scrapers.download_jsonl_from_url") as mock_dl,
+            patch(
+                "src.data.cards.sources.scrapers.load_from_json", return_value=([], [])
+            ),
+        ):
+            await ingesting_pipeline(
+                self._config(self._source(source_type="scryfall", flag=True))
+            )
+
+        # args: (client, url, path) — check the resolved JSONL URI is used
+        assert mock_dl.call_args[0][1] == "http://cdn.scryfall.com/cards.jsonl"
+
+    @pytest.mark.asyncio
     async def test_unknown_source_type_is_skipped(self):
         with patch(
             "src.data.cards.sources.pipeline.httpx.AsyncClient",
