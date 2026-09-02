@@ -106,7 +106,9 @@ async def _ingest_json_sources_async(
                     meta = await fetch_json_with_retry(client, url)
                     if not isinstance(meta, dict) or meta.get("object") == "error":
                         detail = (
-                            meta.get("details", meta) if isinstance(meta, dict) else meta
+                            meta.get("details", meta)
+                            if isinstance(meta, dict)
+                            else meta
                         )
                         raise SourceDownloadError(
                             f"Scryfall bulk meta at {url} returned an error: {detail}"
