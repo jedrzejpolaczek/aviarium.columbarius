@@ -129,6 +129,38 @@ async def download_json_from_url(
     logger.progress("Saved JSON to %s", output_path)
 
 
+async def download_jsonl_from_url(
+    client: httpx.AsyncClient, url: str, output_path: str
+) -> None:
+    """Download a newline-delimited JSON (JSONL) file from *url* and save it as a JSON array.
+
+    Scryfall serves some bulk-data types (e.g. all_cards) only as JSONL —
+    one JSON object per line — instead of a single JSON array. Each line is
+    parsed independently and the collected records are written to
+    output_path as a plain JSON array, so downstream loaders can keep
+    treating every source uniformly.
+
+    Same retry policy as download_json_from_url.
+
+    Args:
+        client:      Shared httpx.AsyncClient for the pipeline run.
+        url:         The URL to download from.
+        output_path: Local file path where the JSON array will be saved.
+    """
+    logger.progress("Downloading JSONL %s → %s", url, output_path)
+
+    def _parse_jsonl(r: httpx.Response) -> list[object]:
+        return [json.loads(line) for line in r.text.splitlines() if line.strip()]
+
+    try:
+        records = await _fetch_with_retry(client, url, _parse_jsonl)
+    except (httpx.HTTPStatusError, httpx.TransportError) as e:
+        raise SourceDownloadError(f"HTTP error downloading {url}: {e}") from e
+    with open(Path(output_path), "w", encoding="utf-8") as f:
+        json.dump(records, f, indent=2, ensure_ascii=False)
+    logger.progress("Saved %d JSONL records to %s", len(records), output_path)
+
+
 async def download_html_page(
     client: httpx.AsyncClient, url: str, output_path: str
 ) -> None:

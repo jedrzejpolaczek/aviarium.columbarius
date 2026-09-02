@@ -38,6 +38,8 @@ from src.data.cards.sources.http import (
     _is_retryable_http_error,
     download_html_page,
     download_json_from_url,
+    download_jsonl_from_url,
+    fetch_json_with_retry,
 )
 from src.data.cards.sources.pipeline import ingesting_pipeline
 from src.data.cards.sources.registry import (
@@ -63,6 +65,8 @@ __all__ = [
     "extract_mtgtop8_decklist",
     "_is_retryable_http_error",
     "download_json_from_url",
+    "download_jsonl_from_url",
+    "fetch_json_with_retry",
     "download_html_page",
     "SOURCE_REGISTRY",
     "_ingest_format_staples_async",
