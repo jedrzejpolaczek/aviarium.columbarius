@@ -88,6 +88,22 @@ async def log_response(response: httpx.Response) -> None:
     )
 
 
+async def fetch_json_with_retry(
+    client: httpx.AsyncClient, url: str, headers: dict[str, str] | None = None
+) -> object:
+    """Fetch and parse JSON from *url* without saving it to disk.
+
+    Same retry policy as download_json_from_url (5 attempts, exponential
+    backoff on transient errors). Use this for small metadata/API responses
+    that are consumed directly rather than persisted.
+    """
+    logger.progress("Fetching JSON %s", url)
+    try:
+        return await _fetch_with_retry(client, url, lambda r: r.json(), headers)
+    except (httpx.HTTPStatusError, httpx.TransportError) as e:
+        raise SourceDownloadError(f"HTTP error fetching {url}: {e}") from e
+
+
 async def download_json_from_url(
     client: httpx.AsyncClient, url: str, output_path: str
 ) -> None:

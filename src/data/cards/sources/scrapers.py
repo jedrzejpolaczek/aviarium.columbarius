@@ -19,7 +19,11 @@ from src.data.cards.sources.extractors import (
     extract_mtgtop8_event_decks,
     extract_mtgtop8_tournament_list,
 )
-from src.data.cards.sources.http import download_html_page, download_json_from_url
+from src.data.cards.sources.http import (
+    download_html_page,
+    download_json_from_url,
+    fetch_json_with_retry,
+)
 from src.data.cards.sources.registry import (
     SOURCE_REGISTRY,
     _save_to_json,
@@ -99,13 +103,20 @@ async def _ingest_json_sources_async(
             if download_flag:
                 if source_type == "scryfall":
                     logger.progress("Scryfall: resolving download URI from bulk meta")
-                    try:
-                        r = await client.get(url)
-                        r.raise_for_status()
-                        url = r.json()["download_uri"]
-                    except (httpx.HTTPStatusError, KeyError) as e:
+                    meta = await fetch_json_with_retry(client, url)
+                    if not isinstance(meta, dict) or meta.get("object") == "error":
+                        detail = (
+                            meta.get("details", meta) if isinstance(meta, dict) else meta
+                        )
                         raise SourceDownloadError(
-                            f"Failed to resolve Scryfall bulk meta from {url}: {e}"
+                            f"Scryfall bulk meta at {url} returned an error: {detail}"
+                        )
+                    try:
+                        url = meta["download_uri"]
+                    except KeyError as e:
+                        raise SourceDownloadError(
+                            f"Scryfall bulk meta at {url} is missing 'download_uri'; "
+                            f"got keys: {sorted(meta)}"
                         ) from e
                 await download_json_from_url(client, url, path)
 
