@@ -22,6 +22,7 @@ from src.data.cards.sources.extractors import (
 from src.data.cards.sources.http import (
     download_html_page,
     download_json_from_url,
+    download_jsonl_from_url,
     fetch_json_with_retry,
 )
 from src.data.cards.sources.registry import (
@@ -113,14 +114,21 @@ async def _ingest_json_sources_async(
                         raise SourceDownloadError(
                             f"Scryfall bulk meta at {url} returned an error: {detail}"
                         )
-                    try:
-                        url = meta["download_uri"]
-                    except KeyError as e:
+                    # Some bulk-data types (e.g. all_cards) are served only as
+                    # JSONL now; prefer the plain-JSON download when offered.
+                    if "download_uri" in meta:
+                        await download_json_from_url(client, meta["download_uri"], path)
+                    elif "jsonl_download_uri" in meta:
+                        await download_jsonl_from_url(
+                            client, meta["jsonl_download_uri"], path
+                        )
+                    else:
                         raise SourceDownloadError(
-                            f"Scryfall bulk meta at {url} is missing 'download_uri'; "
-                            f"got keys: {sorted(meta)}"
-                        ) from e
-                await download_json_from_url(client, url, path)
+                            f"Scryfall bulk meta at {url} has neither 'download_uri' "
+                            f"nor 'jsonl_download_uri'; got keys: {sorted(meta)}"
+                        )
+                else:
+                    await download_json_from_url(client, url, path)
 
             return source_type, load_from_json(path, model, extractor)
 
