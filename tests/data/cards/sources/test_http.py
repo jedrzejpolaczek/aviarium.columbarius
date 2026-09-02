@@ -11,6 +11,8 @@ from src.data.cards.sources import (
     _is_retryable_http_error,
     download_html_page,
     download_json_from_url,
+    download_jsonl_from_url,
+    fetch_json_with_retry,
 )
 
 
@@ -82,6 +84,58 @@ class TestDownloadJsonFromUrl:
             await download_json_from_url(
                 client, "http://example.com/data.json", str(out)
             )
+
+
+class TestDownloadJsonlFromUrl:
+    @pytest.mark.asyncio
+    async def test_successful_download_writes_json_array(self, tmp_path):
+        out = tmp_path / "out.json"
+        mock_response = MagicMock()
+        mock_response.text = '{"id": 1}\n{"id": 2}\n\n{"id": 3}\n'
+        mock_response.raise_for_status.return_value = None
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.return_value = mock_response
+
+        await download_jsonl_from_url(client, "http://example.com/data.jsonl", str(out))
+
+        assert json.loads(out.read_text()) == [{"id": 1}, {"id": 2}, {"id": 3}]
+
+    @pytest.mark.asyncio
+    async def test_http_error_raises_source_download_error(self, tmp_path):
+        out = tmp_path / "out.json"
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.return_value = MagicMock(
+            raise_for_status=MagicMock(side_effect=_http_error(404))
+        )
+
+        with pytest.raises(SourceDownloadError, match="HTTP error"):
+            await download_jsonl_from_url(
+                client, "http://example.com/data.jsonl", str(out)
+            )
+
+
+class TestFetchJsonWithRetry:
+    @pytest.mark.asyncio
+    async def test_returns_parsed_json(self):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"download_uri": "http://example.com/x"}
+        mock_response.raise_for_status.return_value = None
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.return_value = mock_response
+
+        result = await fetch_json_with_retry(client, "http://example.com/meta")
+
+        assert result == {"download_uri": "http://example.com/x"}
+
+    @pytest.mark.asyncio
+    async def test_http_error_raises_source_download_error(self):
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.return_value = MagicMock(
+            raise_for_status=MagicMock(side_effect=_http_error(404))
+        )
+
+        with pytest.raises(SourceDownloadError, match="HTTP error"):
+            await fetch_json_with_retry(client, "http://example.com/meta")
 
 
 class TestDownloadRetry:
