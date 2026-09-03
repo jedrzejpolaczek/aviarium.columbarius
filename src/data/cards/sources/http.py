@@ -11,6 +11,7 @@ Retry policy:
     A WARNING is logged before each retry.
 """
 
+import gzip
 import json
 import logging
 from collections.abc import Callable
@@ -140,6 +141,12 @@ async def download_jsonl_from_url(
     output_path as a plain JSON array, so downstream loaders can keep
     treating every source uniformly.
 
+    Scryfall's JSONL download is a raw gzip file (Content-Type:
+    application/gzip) served *without* a Content-Encoding header, so httpx
+    does not auto-decompress it — gzip magic bytes are sniffed and the body
+    is decompressed manually before parsing; a plain (non-gzip) JSONL body
+    is also supported.
+
     Same retry policy as download_json_from_url.
 
     Args:
@@ -150,7 +157,11 @@ async def download_jsonl_from_url(
     logger.progress("Downloading JSONL %s → %s", url, output_path)
 
     def _parse_jsonl(r: httpx.Response) -> list[object]:
-        return [json.loads(line) for line in r.text.splitlines() if line.strip()]
+        content = r.content
+        if content[:2] == b"\x1f\x8b":
+            content = gzip.decompress(content)
+        text = content.decode("utf-8")
+        return [json.loads(line) for line in text.splitlines() if line.strip()]
 
     try:
         records = await _fetch_with_retry(client, url, _parse_jsonl)
