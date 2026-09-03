@@ -1,5 +1,6 @@
 """Unit tests for src/data/cards/sources/http.py."""
 
+import gzip
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -91,7 +92,7 @@ class TestDownloadJsonlFromUrl:
     async def test_successful_download_writes_json_array(self, tmp_path):
         out = tmp_path / "out.json"
         mock_response = MagicMock()
-        mock_response.text = '{"id": 1}\n{"id": 2}\n\n{"id": 3}\n'
+        mock_response.content = b'{"id": 1}\n{"id": 2}\n\n{"id": 3}\n'
         mock_response.raise_for_status.return_value = None
         client = AsyncMock(spec=httpx.AsyncClient)
         client.get.return_value = mock_response
@@ -99,6 +100,22 @@ class TestDownloadJsonlFromUrl:
         await download_jsonl_from_url(client, "http://example.com/data.jsonl", str(out))
 
         assert json.loads(out.read_text()) == [{"id": 1}, {"id": 2}, {"id": 3}]
+
+    @pytest.mark.asyncio
+    async def test_gzip_content_is_decompressed_before_parsing(self, tmp_path):
+        out = tmp_path / "out.json"
+        raw = '{"id": 1}\n{"id": 2}\n'.encode("utf-8")
+        mock_response = MagicMock()
+        mock_response.content = gzip.compress(raw)
+        mock_response.raise_for_status.return_value = None
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.return_value = mock_response
+
+        await download_jsonl_from_url(
+            client, "http://example.com/data.jsonl.gz", str(out)
+        )
+
+        assert json.loads(out.read_text()) == [{"id": 1}, {"id": 2}]
 
     @pytest.mark.asyncio
     async def test_http_error_raises_source_download_error(self, tmp_path):
