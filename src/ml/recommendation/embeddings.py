@@ -42,7 +42,9 @@ def build_tfidf_embeddings(
     Returns:
         Tuple of (embeddings_array, fitted_vectorizer):
           embeddings_array -- dense np.ndarray of shape (n_cards, max_features)
-          vectorizer       -- fitted TfidfVectorizer for transforming new cards
+          vectorizer       -- fitted TfidfVectorizer; reuse with vectorizer.transform(new_texts)
+             to embed new cards in the same 500-feature space without refitting.
+             Refitting would produce a different vocabulary and break comparisons.
     """
     texts = oracle_texts.fillna("").tolist()
 
