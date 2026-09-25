@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `.env.example` — annotated template for every environment variable the application reads (`MODEL_RUN_ID`, `GOLD_DB_PATH`, `MLFLOW_TRACKING_URI`, `ADMIN_TOKEN`, `CORS_ORIGINS`, `ALERT_WEBHOOK_URL`, `HEARTBEAT_URL`), documenting the degraded behaviour when each is left unset.
+- `docker/docker-compose.staging.yml` — full standalone staging environment (API 8100, frontend 3100, own `data-staging/` Gold copy and `logs-staging/`), runnable alongside production. Staging deliberately copies the Gold database rather than sharing the production file, so a staging failure cannot take production down; MLflow stores are shared read-only since artifacts are immutable.
+- README "Measured results" section with the per-tier MAE comparison (LightGBM wins Tier 1, loses Tier 2 by ~7%, ties Tier 3) and an explicit note that walk-forward CV has produced no metrics yet — it needs ≥50 daily snapshots and only 36 exist.
+- README explanation of *why* AGPL-3.0 was chosen and what its network clause means for anyone hosting this as a service.
+- `ML_FINDINGS.md` T8 section filled with the Optuna hyperparameters actually logged in MLflow (`tuned_lightgbm_nb04`, 2026-07-10), including why its 85% MAPE is expected and why it is not directly comparable to the per-tier test MAE in T6.
 - `DuckDBRepository` (ADR-029) — shared connection creation plus `get_tables`/`query_df`; migrated `app/main.py`, `app/dependencies.py`, `health.py`, `train_model.py`, and `check_and_retrain.py` off ad-hoc connection handling.
 - ADR-027 (TF-IDF card embeddings), ADR-028 (SHAP interpretability), ADR-030 (shared idiom conventions — indexes intentional cross-module repetition so future audits don't re-flag it).
 - Vitest test infrastructure for the frontend (smoke tests for `App.tsx`, `api.ts`).
@@ -28,6 +33,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `docs/architecture/c3/monitoring.md` corrected to match ADR-020: drift detection is logged but not wired into `should_retrain` (was previously described as one of "three independent signals" feeding the decision equally); fixed broken `ADR-020` links (`020-model-retraining-strategy.md` → `ADR-020-monitoring-and-retraining-architecture.md`).
 
 ### Fixed
+- README's stale "Known gap" warning claiming the latest MLflow runs showed suspicious `mae_test = 0.0`. That degenerate result belonged to the 32-snapshot runs of 2026-07-05/06; the 36-snapshot re-runs of 2026-07-09/10 report real metrics (LightGBM test MAE 0.0539 vs naive 0.0559). The warning had outlived the problem and was understating the project's actual results.
+- `.gitignore` not covering per-environment secret files or the staging directories: `.env.*` is now ignored (with `.env.example` explicitly re-included), along with `data-staging/` and `logs-staging/` — the latter would otherwise have made a multi-GB Gold copy committable.
+- README now documents that the MLflow tracking database and its artifacts live in different trees: `mlflow.db` at the repo root is authoritative, but artifact paths are relative and resolve against the working directory, so notebook-trained models land in `notebooks/ml_models/mlruns/` while script-trained ones land in `./mlruns/`. `docker-compose.yml` mounts the former, so a model trained from the repo root is invisible to the container until the mount is repointed.
 - `health.py`'s `/health` endpoint reading `app.state.db`, which no longer existed after the repository migration.
 - mypy strict-mode errors from a missing explicit `duckdb` re-export.
 - `daily_update` not catching `StorageWriteError` on price snapshots the way `populate` does.

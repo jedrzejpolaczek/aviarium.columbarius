@@ -1,0 +1,81 @@
+# docker-compose.staging.yml — full standalone staging environment.
+#
+# Usage (from the project root, not docker/):
+#   docker compose -f docker/docker-compose.staging.yml up --build
+#
+# This is a complete second environment, not an override of docker-compose.yml:
+# it can run at the same time as production on the same host. Everything that
+# could collide is separated.
+#
+#   |                  | production            | staging                   |
+#   |------------------|-----------------------|---------------------------|
+#   | project name     | docker (default)      | columbarius-staging       |
+#   | API port         | 8000                  | 8100                      |
+#   | frontend port    | 3000                  | 3100                      |
+#   | env file         | docker/.env           | docker/.env.staging       |
+#   | Gold DB          | ../data               | ../data-staging           |
+#   | logs             | ../logs               | ../logs-staging           |
+#
+# Before the first run:
+#   cp .env.example docker/.env.staging     # then fill in MODEL_RUN_ID
+#   mkdir -p data-staging/gold logs-staging
+#   cp data/gold/cards.duckdb data-staging/gold/    # or point at a smaller sample
+#
+# Why a separate Gold copy rather than sharing ../data read-only:
+#   staging exists to rehearse changes that may touch the data layer. Sharing
+#   the production file would mean a staging run that corrupts or locks it
+#   takes production down with it — which is the one thing staging must not do.
+#
+# The MLflow stores ARE shared read-only (mlflow.db + mlruns): models are
+# immutable artifacts, and the point of staging is to validate the same model
+# binary that production will serve.
+
+name: columbarius-staging
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8100:8000"
+    env_file:
+      - .env.staging
+    volumes:
+      # Staging's own Gold copy — deliberately NOT the production file.
+      - ../data-staging:/app/data:ro
+      # MLflow tracking + artifacts, shared read-only with production.
+      # See README "Tracking DB and artifacts live in different places" for why
+      # this mounts notebooks/ml_models/mlruns and not ./mlruns.
+      - ../mlflow.db:/app/mlflow.db:ro
+      - ../notebooks/ml_models/mlruns:/app/mlruns:ro
+      # Writable, staging-local: send_alert writes logs/alerts.jsonl here.
+      - ../logs-staging:/app/logs
+    environment:
+      - GOLD_DB_PATH=/app/data/gold/cards.duckdb
+      - MLFLOW_TRACKING_URI=sqlite:////app/mlflow.db
+      # Staging frontend runs on 3100, so production's CORS default would
+      # reject it.
+      - CORS_ORIGINS=http://localhost:3100,http://127.0.0.1:3100
+    restart: unless-stopped
+    mem_limit: 2g
+    cpus: 2.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        # Baked in at build time by Vite — must point at staging's API port.
+        - VITE_API_URL=http://localhost:8100
+    ports:
+      - "3100:80"
+    depends_on:
+      - api
+    mem_limit: 256m
+    cpus: 0.5
