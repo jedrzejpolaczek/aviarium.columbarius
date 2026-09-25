@@ -112,6 +112,10 @@ celerybeat.pid
 
 # Environments
 .env
+# Per-environment secret files (docker/.env, docker/.env.staging, ...).
+# .env.example is the committed template and is re-included below.
+.env.*
+!.env.example
 .venv
 env/
 venv/
@@ -154,6 +158,11 @@ data/raw/*
 data/bronze/*
 data/silver/*
 data/gold/*
+
+# Staging environment's own data and log dirs (docker-compose.staging.yml).
+# data-staging/ holds a full copy of the Gold DuckDB file — multiple GB.
+data-staging/
+logs-staging/
 
 # Specifics
 mlruns/*
