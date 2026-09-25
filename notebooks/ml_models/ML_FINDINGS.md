@@ -59,10 +59,15 @@ Przy 32 snapshotach i pierwszym uruchomieniu, `log_return_7d` był idealnie pła
 ## T7 — Time Series (data-gated)
 
 **Notebook:** `03_time_series.ipynb`
-**Status:** [ ] Data-gated (wymaga >= 20 snapshotow ~2026-07-03)
+**Status:** [ ] Odblokowany — próg 20 snapshotów minął (jest 36, stan na 2026-07-02), do uruchomienia.
 
-UWAGA: Zamien kolejnosc z T8 — zrob T8 najpierw na dostepnych danych,
-wróc do T7 gdy beda >= 20 snapshoty.
+UWAGA: Pierwotna kolejnosc zakladala zrobienie T8 przed T7 (T7 czekal na dane).
+Ten warunek juz nie obowiazuje — oba notebooki mozna uruchomic.
+
+Osobne ograniczenie, ktore *nadal* obowiazuje: walk-forward CV
+(`walk_forward_cv_nb03`) wymaga >= 50 snapshotow i przy 36 konczy sie
+`InsufficientDataError`. To nie blokuje T7, ale oznacza, ze wszystkie
+dotychczasowe metryki pochodza z pojedynczego podzialu chronologicznego.
 
 Kluczowe pytania:
 - Prophet vs LightGBM: ktory model jest lepszy dla plynnych kart?
@@ -75,12 +80,32 @@ _(wypelnij po uruchomieniu notebooka)_
 ## T8 — Optuna + SHAP
 
 **Notebook:** `04_shap_optuna.ipynb`
-**Status:** [ ] Do uruchomienia (nie wymaga pelnego CV, mozna na crosssectional)
+**Status:** [~] Część Optuna uruchomiona (MLflow run `tuned_lightgbm_nb04`, 2026-07-10). Część SHAP — do uzupełnienia.
 
-Kluczowe pytania:
-- Najlepsze parametry z Optuna (num_leaves, learning_rate, min_child_samples)?
+### Optuna — najlepsze parametry
+
+Run z 2026-07-10 (`9c1ec7de65c7476aa75a199b7189d6f2` — ten sam, który jest obecnie wdrożony w `docker/.env`):
+
+| parametr | wartość | zakres przeszukiwania |
+|---|---:|---|
+| `num_leaves` | 203 | 32–256 |
+| `learning_rate` | 0.0308 | 0.01–0.3 (log) |
+| `min_child_samples` | 37 | 20–200 |
+| `subsample` | 0.7539 | 0.6–1.0 |
+| `colsample_bytree` | 0.8 | stałe |
+| `n_estimators` | 1000 | stałe (early stopping) |
+
+Metryki tego runu: `train_mae = 0.0500`, `train_mape = 85.23%`.
+
+**Uwaga o MAPE:** 85% nie jest alarmujące — `log_return_7d` jest bliskie zeru dla większości kart, więc mianownik w MAPE jest bardzo mały nawet po clipie `MAPE_CLIP_MIN = 0.01` (`src/ml/evaluation/metrics.py`). MAE pozostaje właściwą metryką do porównywania modeli; MAPE służy tylko jako niezależna od skali kontrola.
+
+**Uwaga o porównywalności:** zalogowano tylko metryki *treningowe* (`train_mae`), nie testowe — tego runu nie da się bezpośrednio porównać z tabelą per-tier z T6, która raportuje MAE na zbiorze testowym. Przy kolejnym uruchomieniu warto zalogować `mae_test` per tier, żeby odpowiedzieć na pytanie, czy tuning faktycznie poprawił Tier 2 (jedyny tier, w którym LightGBM przegrywa z baseline).
+
+**Porównanie z poprzednim tuningiem (2026-07-06, 32 snapshoty):** `train_mae = 0.0`, `train_mape = 0.0` — degeneratywny wynik z tego samego powodu co opisany w T6 (płaski target). Przy 36 snapshotach już nie występuje.
+
+### SHAP — do uzupełnienia
+
+Pytania bez odpowiedzi (wymagają uruchomienia części SHAP notebooka):
 - Kolejnosc waznosci SHAP: czy edhrec_saltiness > is_reserved?
 - SHAP print_count: czy spada do zera gdy saltiness jest w modelu? (weryfikacja BA-02)
 - Waterfall dla 3 kart: taniej common, Reserved List, tournament staple
-
-_(wypelnij po uruchomieniu notebooka)_

@@ -315,6 +315,8 @@ uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
 
 Always pass `--backend-store-uri` explicitly (run from the project root). Without it, `mlflow ui` ignores `mlflow.db` entirely and falls back to a plain local `./mlruns` folder in whatever directory you launched it from — a different, untracked store from the one the training scripts and the API actually use.
 
+> **Tracking DB and artifacts live in different places.** `mlflow.db` at the project root is the only authoritative tracking database (a stale copy at `notebooks/ml_models/mlflow.db` holds two runs from 2026-06-12 and is not used by anything — ignore it). Run **artifacts**, however, are addressed by the *relative* path `mlruns/1/models/<model_id>/artifacts`, which MLflow resolves against the current working directory. Training launched from a notebook under `notebooks/ml_models/` therefore writes artifacts to `notebooks/ml_models/mlruns/`, while training launched from the repo root writes them to `./mlruns/`. `docker/docker-compose.yml` mounts `notebooks/ml_models/mlruns` (that is where the currently deployed model lives), so **a model trained from the repo root will not be visible to the container** until the mount is pointed at the matching tree. Keep training in one location, or update the mount to follow it.
+
 **Optional — custom Gold DB path:**
 
 ```bash
@@ -339,7 +341,23 @@ Exploratory and confirmatory analysis behind the feature set and modelling choic
 
 **Model status:** the LightGBM pipeline trains, logs to MLflow, and serves predictions through the [API](#api--ui) using the tiered pricing strategy from [ADR-018](docs/adr/ADR-018-tier-based-model-selection.md).
 
-> **Known gap:** [`notebooks/ml_models/ML_FINDINGS.md`](notebooks/ml_models/ML_FINDINGS.md) (baseline-vs-LightGBM comparison, SHAP importance) has not been filled in yet, and the most recently logged MLflow runs show suspicious `mae_test = 0.0` metrics that need triage before being quoted anywhere. Treat any specific accuracy number as unverified until that investigation happens — this is flagged here for follow-up investigation, not covered by this section.
+### Measured results
+
+Latest run: `gold_snapshot_date = 2026-07-02`, 36 daily snapshots, 78 692 training rows × 17 features. MAE is on the `log1p` scale — comparable between models, not a percentage. Reported per tier, because the aggregate hides the interesting part:
+
+| Tier | Cards (test) | Naive | MA7d | LightGBM | LightGBM wins? |
+|---|---:|---:|---:|---:|---|
+| 1 (< €100) | 15 606 | 0.056128 | 0.056128 | **0.054001** | Yes |
+| 2 (€100–1000) | 111 | **0.031356** | 0.031356 | 0.033488 | **No — 7% worse** |
+| 3 (> €1000) | 22 | 0.053028 | 0.053028 | **0.052530** | Marginally |
+
+**The honest summary: LightGBM wins Tier 1, loses Tier 2, and ties Tier 3 within noise.** Seven-day card price movement is close to a random walk, and a gradient-boosted model on 17 features only modestly outperforms assuming no change at all. Tier 2 is the hardest to beat — the naive baseline already sits at the lowest MAE of any tier (0.031), and LightGBM does not catch it despite having the most features available. AR1 is the weakest baseline overall (0.0569).
+
+This is exactly why metrics are reported per tier rather than aggregated: a single global MAE would have shown LightGBM ahead and concealed the Tier 2 regression.
+
+> **Walk-forward CV has not produced metrics yet.** `walk_forward_cv_nb03` fails on the current dataset: CV needs at least 50 daily snapshots (3 folds of 30-day train + 7-day validation) and only 36 exist. Every number above therefore comes from a single chronological train/test split, not from cross-validation. More daily snapshots are the prerequisite for a stronger claim — Tier 3 in particular rests on 22 test cards.
+
+Full write-up, including the earlier degenerate `MAE ≈ 0` result at 32 snapshots and why it resolved: [`notebooks/ml_models/ML_FINDINGS.md`](notebooks/ml_models/ML_FINDINGS.md).
 
 ---
 
@@ -378,14 +396,15 @@ The price prediction API and its web UI run as Docker containers.
 
 **Prerequisites:** Docker, a trained MLflow model run ID (from `mlflow ui`), and a populated Gold DuckDB (`data/gold/cards.duckdb`).
 
-`docker-compose.yml` reads `MODEL_RUN_ID` from `docker/.env` (via `env_file`) — not from the host shell's environment. Set it there, then start both containers:
+`docker-compose.yml` reads `MODEL_RUN_ID` from `docker/.env` (via `env_file`) — not from the host shell's environment. [`.env.example`](.env.example) is the annotated template listing every variable the application reads and what happens when each is left unset:
 
 ```bash
-# docker/.env
-echo "MODEL_RUN_ID=<run_id_from_mlflow>" > docker/.env
+cp .env.example docker/.env        # then fill in MODEL_RUN_ID
 
 docker compose -f docker/docker-compose.yml up --build
 ```
+
+`.env.*` files are gitignored (only `.env.example` is committed), so secrets stay out of the repository.
 
 To switch models after retraining, edit `docker/.env` and restart the container — a shell `export` has no effect since it isn't wired into `environment:`. Alternatively, if `ADMIN_TOKEN` is set in `docker/.env`, call `POST /admin/reload-model` with `{"model_run_id": "<run_id>"}` and header `X-Admin-Token: <ADMIN_TOKEN>` to hot-swap the model in the running container without a restart — see [docs/runbooks/model-incidents.md](docs/runbooks/model-incidents.md) for the full rollback flow. The endpoint returns 503 if `ADMIN_TOKEN` isn't configured.
 
@@ -401,6 +420,30 @@ To switch models after retraining, edit `docker/.env` and restart the container 
 The `api` container is capped at 2 GB memory / 2 CPUs and `frontend` at 256 MB / 0.5 CPU (`docker/docker-compose.yml`) — a runaway process is killed by Docker rather than exhausting the host. Only `api` has `restart: unless-stopped`, so it comes back up automatically after being killed; `frontend` (static nginx, no restart policy) would need a manual restart.
 
 The API starts in degraded mode if `MODEL_RUN_ID` is not set — `/health` and `/cards` still work, but `/predict` returns 503.
+
+### Staging environment
+
+[`docker/docker-compose.staging.yml`](docker/docker-compose.staging.yml) is a complete second environment for rehearsing a change before it reaches production. It is a standalone compose file, not an override, so both can run simultaneously on one host:
+
+| | production | staging |
+|---|---|---|
+| API port | 8000 | **8100** |
+| Frontend port | 3000 | **3100** |
+| Env file | `docker/.env` | `docker/.env.staging` |
+| Gold DuckDB | `data/` | `data-staging/` |
+| Logs | `logs/` | `logs-staging/` |
+
+```bash
+cp .env.example docker/.env.staging      # then fill in MODEL_RUN_ID
+mkdir -p data-staging/gold logs-staging
+cp data/gold/cards.duckdb data-staging/gold/
+
+docker compose -f docker/docker-compose.staging.yml up --build
+```
+
+Staging gets its **own copy** of the Gold database rather than a read-only mount of the production file. Staging exists to exercise changes that may touch the data layer, and a shared file means a staging run that corrupts or locks it takes production down too — the one outcome staging must never cause. The Gold file is large (multiple GB), so point `data-staging/gold/` at a smaller sampled database if disk space matters.
+
+The MLflow tracking database and artifact store *are* shared read-only: model artifacts are immutable, and the purpose of staging is to validate the exact binary production will serve. `data-staging/` and `logs-staging/` are gitignored.
 
 ---
 
@@ -521,3 +564,7 @@ Please read the [Code of Conduct](CODE_OF_CONDUCT.md) before contributing.
 ## License
 
 This project is licensed under the [GNU Affero General Public License v3.0](LICENSE).
+
+**What AGPL-3.0 means here, and why it was chosen.** AGPL is a strong copyleft licence: you may use, modify and redistribute this code, but derivative works must be released under the same licence. Its distinguishing clause is the network one — running a modified version as a network service counts as distribution, so anyone offering this as a hosted price-prediction service must publish their modifications too. A permissive licence (MIT, Apache-2.0) would have allowed a closed-source commercial service built on this work without contributing anything back; that is the specific outcome the choice of AGPL is meant to prevent.
+
+If you intend to build on this code, check that AGPL is compatible with your plans before you start — it is deliberately more restrictive than the licences commonly found on similar projects.
