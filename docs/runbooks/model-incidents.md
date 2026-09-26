@@ -79,6 +79,39 @@ regressions that only show up on live traffic.
    fall back to updating `MODEL_RUN_ID` in `docker/.env` to that version's
    `run_id` and restarting the API container.
 
+## 2b. Alert: "Serving/registry mismatch"
+
+**Cause:** `MODEL_RUN_ID` (what the API actually loads, from `docker/.env`) and
+the `production` alias in the MLflow Registry point at different runs. Raised
+by `src/monitoring/serving_check.py` at the start of every
+`scripts/check_and_retrain.py` run.
+
+**Why it matters:** the alias is what decides things. `_compare_and_promote`
+measures every retrained candidate against the alias's run, and
+`scripts/rollback_model.py` moves the alias. While the two disagree, automatic
+promotion is comparing against a model nobody is serving, and a "rollback"
+could roll forward onto something already live.
+
+**Known instance:** on 2026-09-26 the API served run
+`9c1ec7de65c7476aa75a199b7189d6f2` (version 3, the Optuna run from
+`04_shap_optuna.ipynb`) while the alias sat on version 2, run `c46d4787…`.
+Neither run has a `cv_mape_tier1` metric, so neither was ever CV-measured.
+
+**Fix — decide which pointer is right, then align the other:**
+1. List the versions and their aliases (same command as §2 step 1).
+2. If the served run is the one you want live:
+   `uv run python -m scripts.rollback_model --version <version of that run>`
+   moves the alias onto it. Despite the script's name this is just an alias
+   set — it works in either direction.
+3. If the alias is right instead, set `MODEL_RUN_ID` in `docker/.env` to the
+   alias's `run_id` and call `POST /admin/reload-model` (see §2 step 3).
+4. Re-run `uv run python -m scripts.check_and_retrain` and confirm the alert
+   does not reappear.
+
+**Never fatal:** the check only reports. Choosing which model should be live is
+a judgement call, so it is left to an operator rather than resolved
+automatically.
+
 ## 3. `logs/last_check_status.json` shows `"result": "error"`
 
 **Cause:** one of three reasons in the `"reason"` field:

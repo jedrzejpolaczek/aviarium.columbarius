@@ -25,6 +25,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Log rotation and grouped pruning in `src/logger.py` — `RotatingFileHandler` (10MB/5 backups) plus count-based pruning of old timestamped log groups (base file + `.log.N` rotation siblings pruned together, `keep_last_logs=90`).
   - `mem_limit`/`cpus` caps on both `docker-compose.yml` services (api: 2g/2.0, frontend: 256m/0.5).
 
+- `src/monitoring/serving_check.py` — compares `MODEL_RUN_ID` (what the API loads) against the MLflow Registry's `production` alias (what promotion comparisons and rollbacks act on) at the start of every `check_and_retrain.py` run, alerting on a mismatch. The two had diverged: the API was serving run `9c1ec7de…` (version 3) while the alias sat on version 2, run `c46d4787…`, so every automatic promotion decision was being measured against a model nobody was serving. The check only reports — which pointer is correct is an operator decision, documented as §2b in `docs/runbooks/model-incidents.md`.
+
 ### Changed
 - Large cross-module deduplication pass: extracted shared helpers for JSON config loading, Bronze/Silver/Gold guard clauses, HTTP fetch-with-retry, EUR/percent formatting (`formatEur`, `formatPercent`), rolling-window CTE fragments, legality-transition LAG CTEs, and router guards (`require_model`/`require_match`), removing dozens of duplicated implementations.
 - Consolidated frontend formatting/label logic (`cardMeta`, `fmtReturn` → `formatPercent`) into single sources of truth.

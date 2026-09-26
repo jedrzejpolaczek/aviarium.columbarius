@@ -36,6 +36,7 @@ from src.data.repository import GOLD_DB_PATH, open_repository
 from src.logger import get_logger, setup_logging
 from src.monitoring.alerts import send_alert
 from src.monitoring.retraining import retrain, should_retrain
+from src.monitoring.serving_check import log_serving_alias_check
 
 STATUS_PATH = Path("logs/last_check_status.json")
 
@@ -108,8 +109,23 @@ def _do_retrain(
     }
 
 
+def _warn_on_serving_alias_mismatch() -> None:
+    """Alert if the served model and the registry's production alias disagree.
+
+    Checked here because this is the job that acts on the alias: should_retrain
+    → retrain → _compare_and_promote all reason about "production" via the
+    alias, so a mismatch silently makes those comparisons about a model that is
+    not being served. Never fatal — the divergence needs an operator decision,
+    not an aborted monitoring run.
+    """
+    ok, detail = log_serving_alias_check()
+    if not ok:
+        send_alert("Serving/registry mismatch", detail, severity="warning")
+
+
 def main() -> int:
     setup_logging(log_dir=Path("logs"))
+    _warn_on_serving_alias_mismatch()
 
     if not gold_db_exists(GOLD_DB_PATH):
         send_alert(
