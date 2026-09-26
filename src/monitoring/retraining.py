@@ -23,6 +23,8 @@ Versioning:
     version can be traced back to the exact data slice it was trained on.
 """
 
+import math
+
 import duckdb
 import pandas as pd
 
@@ -179,12 +181,31 @@ def retrain(conn: duckdb.DuckDBPyConnection, snapshot_date: str) -> str:
 
 
 def _compare_and_promote(cv_results: pd.DataFrame, new_run_id: str) -> None:
-    """Compare the new model against Production and promote if better.
+    """Compare the new model against Production and promote if strictly better.
 
     Uses CV MAPE on Tier 1 as the primary comparison metric (Tier 1 covers
-    99.15% of the catalogue).  If no Production model exists yet, promotes
-    unconditionally.  On any MLflow error, promotes conservatively to ensure
-    the service always has a model.
+    99.15% of the catalogue).
+
+    Promotion requires *both* sides of the comparison to be real numbers.
+    A missing or non-finite value on either side means "unknown", and unknown
+    never promotes:
+
+    - ``new_mape`` is non-finite when CV produced no Tier 1 rows (empty
+      cv_results after an InsufficientDataError) or when the metric itself is
+      NaN. Promoting on NaN is how an untested model reaches production.
+    - ``prod_mape`` comes from the incumbent run's ``cv_mape_tier1`` metric,
+      which is written only by :func:`log_cv_results`. Runs trained before CV
+      was wired up (or by scripts/train_model.py, which does not run CV) carry
+      no such metric. Treating that absence as +inf would make *every*
+      candidate look better and promote unconditionally, which is the opposite
+      of a safety check — so the absence blocks promotion and asks for a
+      manual decision instead.
+
+    The one case that still promotes unconditionally is a registry with no
+    ``production`` alias at all: there is no incumbent to regress from, so the
+    service is better off with a model than without one. That check therefore
+    runs *before* the metric guards — otherwise a first-ever retrain on data
+    too small for CV would refuse to seed the registry at all.
 
     Args:
         cv_results:  DataFrame from :func:`walk_forward_cv` (may be empty when
@@ -200,20 +221,49 @@ def _compare_and_promote(cv_results: pd.DataFrame, new_run_id: str) -> None:
     tier1_cv = (
         cv_results[cv_results["tier"] == 1] if not cv_results.empty else pd.DataFrame()
     )
-    new_mape = float(tier1_cv["mape"].mean()) if not tier1_cv.empty else float("inf")
+    new_mape = float(tier1_cv["mape"].mean()) if not tier1_cv.empty else float("nan")
 
     try:
-        # Look up current Production model by alias (MLflow 2.x+)
+        # Look up current Production model by alias (MLflow 2.x+).
+        # Checked before the metric guards below on purpose: with no incumbent
+        # there is nothing to regress from, so a model with unknown quality
+        # still beats no model (the API returns 503 on /predict without one).
         prod_version = client.get_model_version_by_alias(model_name, "production")
         prod_run_id = prod_version.run_id
         if prod_run_id is None:
-            logger.warning(
-                "Production model version has no run_id — promoting new model."
+            logger.error(
+                "Production model version has no run_id — cannot compare, "
+                "refusing to promote run %s. Promote manually if intended.",
+                new_run_id,
             )
-            promote_to_production(new_run_id, model_name)
             return
+
+        # An incumbent exists: from here on, both sides of the comparison must
+        # be real numbers or nothing gets promoted.
+        if not math.isfinite(new_mape):
+            logger.error(
+                "New model has no usable Tier 1 CV MAPE (got %s) — refusing to "
+                "promote run %s over Production run %s. Check that walk-forward "
+                "CV produced Tier 1 rows.",
+                new_mape,
+                new_run_id,
+                prod_run_id,
+            )
+            return
+
         prod_metrics = client.get_run(prod_run_id).data.metrics
-        prod_mape = prod_metrics.get("cv_mape_tier1", float("inf"))
+        prod_mape = prod_metrics.get("cv_mape_tier1", float("nan"))
+
+        if not math.isfinite(prod_mape):
+            logger.error(
+                "Production run %s has no 'cv_mape_tier1' metric — cannot "
+                "compare, refusing to promote run %s (new CV MAPE %.4f). "
+                "Promote manually if intended.",
+                prod_run_id,
+                new_run_id,
+                new_mape,
+            )
+            return
 
         if new_mape <= prod_mape:
             logger.info(
