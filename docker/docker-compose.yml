@@ -24,7 +24,13 @@ services:
       # MLflow tracking database (SQLite) at project root
       - ../mlflow.db:/app/mlflow.db:ro
       # MLflow artifact store: model weights, pipelines, etc.
-      - ../notebooks/ml_models/mlruns:/app/mlruns:ro
+      # Must be the project-root mlruns/, matching the relative
+      # artifact_location ('mlruns/<id>') stored in mlflow.db: the container's
+      # WORKDIR is /app, so 'mlruns/<id>' resolves to /app/mlruns/<id>.
+      # This used to mount notebooks/ml_models/mlruns because that is where
+      # notebook training happened to write; scripts run from the project root
+      # wrote to ./mlruns instead and were invisible here.
+      - ../mlruns:/app/mlruns:ro
       # Writable: src.monitoring.alerts.send_alert writes logs/alerts.jsonl
       # here on a degraded startup (see app/main.py lifespan). Without this
       # mount the file is container-local and lost on every restart.

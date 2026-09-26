@@ -11,17 +11,32 @@ import mlflow
 
 
 @pytest.fixture(autouse=True)
-def mlflow_tmp(tmp_path):
-    """Redirect all MLflow I/O to an isolated SQLite database for each test.
+def mlflow_tmp(tmp_path, monkeypatch):
+    """Redirect all MLflow I/O — tracking *and* artifacts — into tmp_path.
 
     mlflow >= 3.13 dropped the file-based tracking store. sqlite:// is the
     lightweight local alternative that still works without a running server.
 
+    Redirecting the tracking URI alone is not enough, and that was the gap:
+    a new experiment in a fresh sqlite store gets a *relative*
+    artifact_location ('mlruns/<id>'), which MLflow resolves against the
+    working directory. With cwd left at the project root, every test that
+    logged a model wrote into the real ./mlruns — the tree grew by 21
+    directories during one suite run. chdir moves that resolution into
+    tmp_path; _PROJECT_ROOT is patched to match so setup_experiment's
+    project-root guard still passes.
+
     autouse=True means every test in this file gets its own isolated store
     without having to request the fixture explicitly.
     """
+    from src.ml.training import tracking
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(tracking, "_PROJECT_ROOT", tmp_path)
     db_path = tmp_path / "mlflow.db"
     uri = f"sqlite:///{db_path}"
+    # set_tracking_uri also exports MLFLOW_TRACKING_URI, which is what stops
+    # setup_experiment() from pointing back at the real project-root mlflow.db.
     mlflow.set_tracking_uri(uri)
     yield uri
     # End any accidentally open run so later tests start clean.
@@ -297,3 +312,44 @@ def test_log_cv_results_saves_csv_artifact(cv_df, tmp_path):
         run_id = run.info.run_id
     artifacts = mlflow.MlflowClient().list_artifacts(run_id, "cv_results")
     assert len(artifacts) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Project-root guard — keeps the relative artifact_location resolving to one place
+# ---------------------------------------------------------------------------
+
+
+def test_setup_experiment_rejects_wrong_cwd(tmp_path, monkeypatch):
+    """Running from anywhere but the project root must fail loudly.
+
+    artifact_location is stored as the relative 'mlruns/<id>' and resolved
+    against the cwd, so a wrong cwd silently creates a second artifact tree
+    that the same mlflow.db still describes as 'mlruns/<id>'. That is how the
+    six real logged models ended up under notebooks/ml_models/mlruns/ while
+    mlflow.db sat at the project root.
+    """
+    from src.ml.training import tracking
+
+    elsewhere = tmp_path / "somewhere_else"
+    elsewhere.mkdir()
+    monkeypatch.setattr(tracking, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.chdir(elsewhere)
+
+    with pytest.raises(RuntimeError) as exc:
+        tracking.setup_experiment()
+
+    message = str(exc.value)
+    assert "project root" in message
+    assert str(tmp_path) in message
+    assert str(elsewhere) in message
+
+
+def test_setup_experiment_accepts_project_root_cwd(tmp_path, monkeypatch):
+    from src.ml.training import tracking
+
+    monkeypatch.setattr(tracking, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    tracking.setup_experiment()  # must not raise
+
+    assert mlflow.get_experiment_by_name(tracking.EXPERIMENT_NAME) is not None

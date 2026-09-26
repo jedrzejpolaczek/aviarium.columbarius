@@ -37,6 +37,43 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_TRACKING_URI = f"sqlite:///{_PROJECT_ROOT / 'mlflow.db'}"
 
 
+def _assert_artifact_root_is_project_root() -> None:
+    """Fail fast when the current working directory would fork the artifact tree.
+
+    Experiment ``artifact_location`` is stored in the tracking DB as the
+    relative path ``mlruns/1``, and MLflow resolves it against the process's
+    working directory. That relativeness is deliberate and must stay: the DB
+    holds a single value, while the host (project root) and the container
+    (WORKDIR ``/app``, with the tree bind-mounted at ``/app/mlruns``) need it
+    to point at two different absolute locations. An absolute path cannot
+    satisfy both, which is why anchoring the *cwd* is the fix and rewriting
+    the stored path is not.
+
+    What the unanchored cwd cost: training from ``notebooks/ml_models/`` wrote
+    every artifact to ``notebooks/ml_models/mlruns/`` while ``mlflow.db`` at
+    the project root recorded it as ``mlruns/…``, so the same DB described a
+    tree that only existed one directory down. A ``make train`` from the root
+    would have written to ``./mlruns`` instead and been invisible to both the
+    container and the earlier runs.
+
+    Raises:
+        RuntimeError: cwd is not the project root, naming both paths.
+    """
+    cwd = Path.cwd().resolve()
+    if cwd != _PROJECT_ROOT:
+        raise RuntimeError(
+            f"MLflow artifacts must be written from the project root.\n"
+            f"  expected cwd: {_PROJECT_ROOT}\n"
+            f"  actual cwd:   {cwd}\n"
+            f"Experiment artifact_location is the relative path 'mlruns/<id>', "
+            f"resolved against the cwd, so running from here would create a "
+            f"second artifact tree at {cwd / 'mlruns'} that mlflow.db still "
+            f"describes as 'mlruns/<id>'. Run via the Makefile targets (make "
+            f"train / make monitor), or os.chdir() to the project root first — "
+            f"the notebooks under notebooks/ml_models/ do this in their setup cell."
+        )
+
+
 def setup_experiment(name: str = EXPERIMENT_NAME) -> None:
     """Create the MLflow experiment if it does not exist yet.
 
@@ -44,9 +81,17 @@ def setup_experiment(name: str = EXPERIMENT_NAME) -> None:
     ``MLFLOW_TRACKING_URI`` is already set in the environment.
     Call once at the start of a training script before opening any run.
 
+    Also asserts that the working directory is the project root — see
+    :func:`_assert_artifact_root_is_project_root` for why that matters and
+    why the stored artifact path stays relative.
+
     Args:
         name: Experiment name (defaults to EXPERIMENT_NAME).
+
+    Raises:
+        RuntimeError: cwd is not the project root.
     """
+    _assert_artifact_root_is_project_root()
     if not os.environ.get("MLFLOW_TRACKING_URI"):
         mlflow.set_tracking_uri(_DEFAULT_TRACKING_URI)
     mlflow.set_experiment(name)
