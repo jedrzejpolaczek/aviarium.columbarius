@@ -4,6 +4,7 @@ import json
 
 import duckdb
 import pandas as pd
+from pandas.api.types import is_datetime64_any_dtype
 
 from src.data.cards.storage.errors import StorageWriteError
 
@@ -29,13 +30,34 @@ class DuckDBWriter:
     def __init__(self, con: duckdb.DuckDBPyConnection) -> None:
         self._con = con
 
-    @staticmethod
-    def _serialize(df: pd.DataFrame) -> pd.DataFrame:
-        """Return a copy of df with dict and list cells serialized to JSON strings.
+    DATE_COLUMNS = ("snapshot_date", "tournament_date")
+    """Columns that must land as DATE, never VARCHAR.
 
-        DuckDB cannot infer a consistent type for dict/list columns when rows
-        have different key sets or contain None. Serializing to JSON VARCHAR
-        gives every row a consistent type before conn.register().
+    Every one of these was VARCHAR in all three tiers until the 2026-09-26
+    migration, because the ingestion side hands DuckDB ISO strings and
+    ``CREATE TABLE … AS SELECT * FROM _staging`` adopts whatever type the
+    staging frame has. Inserts into the migrated tables would keep working
+    without this (DuckDB casts the string on the way in), but a table created
+    from scratch — a fresh install, or initial_pipeline on a new machine —
+    would silently go back to VARCHAR and need migrating all over again.
+    """
+
+    @classmethod
+    def _serialize(cls, df: pd.DataFrame) -> pd.DataFrame:
+        """Return a copy of df ready for conn.register().
+
+        Two normalisations:
+
+        1. dict and list cells become JSON strings. DuckDB cannot infer a
+           consistent type for such columns when rows have different key sets
+           or contain None; JSON VARCHAR gives every row the same type.
+        2. DATE_COLUMNS are parsed to real dates, so a newly created table gets
+           a DATE column rather than VARCHAR.
+
+        Date parsing deliberately raises rather than coercing: an unparseable
+        snapshot_date means the ingestion side produced something unexpected,
+        and writing NULL into a history table's dedup key would be far worse
+        than failing the run.
         """
         df = df.copy()
 
@@ -44,6 +66,10 @@ class DuckDBWriter:
             df[col] = df[col].map(
                 lambda x: json.dumps(x) if isinstance(x, (dict, list)) else x
             )
+
+        for col in cls.DATE_COLUMNS:
+            if col in df.columns and not is_datetime64_any_dtype(df[col]):
+                df[col] = pd.to_datetime(df[col], errors="raise").dt.date
 
         return df
 

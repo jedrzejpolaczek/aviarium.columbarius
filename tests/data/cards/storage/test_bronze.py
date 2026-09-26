@@ -492,7 +492,9 @@ class TestSnapshot:
             ).fetchone()
         assert row is not None
         assert row[0] == "42"
-        assert row[1] == "2026-01-01"
+        # DATE, not VARCHAR: DuckDBWriter._serialize parses the date columns
+        # so a freshly created history table gets a real DATE column.
+        assert row[1] == date_cls.fromisoformat("2026-01-01")
 
     def test_key_and_snapshot_date_always_present(self):
         with _bronze() as b:
@@ -1227,6 +1229,8 @@ class TestSeedHistoricalPrices:
         assert row is not None and row[0] == 4
 
     def test_row_contains_uuid_and_snapshot_date(self):
+        from datetime import date as date_cls
+
         with _bronze() as b:
             record = _PriceRecord(uuid="uuid-1", paper=_PAPER_PRICES)
             b.seed_historical_prices([record])
@@ -1236,7 +1240,10 @@ class TestSeedHistoricalPrices:
                     f"SELECT uuid, snapshot_date FROM {self.HISTORY_TABLE}"
                 ).fetchall()
             }
-        assert dates == {"2026-04-01", "2026-04-02"}
+        assert dates == {
+            date_cls.fromisoformat("2026-04-01"),
+            date_cls.fromisoformat("2026-04-02"),
+        }
 
     def test_idempotent_second_call_does_not_duplicate(self):
         with _bronze() as b:
