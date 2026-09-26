@@ -12,8 +12,19 @@ deeper check (_check_bronze_prices_schema_drift) does not follow this
 gate-on-structure-PASS pattern — it runs unconditionally and instead guards
 itself with its own try/except, since it can tolerate a missing EAV table.
 
-FAIL on any check causes run_health_checks to raise SystemExit(1) (used by
-scripts/check_health.py as a pipeline gate); WARN is logged but does not fail.
+run_health_checks returns its results and decides nothing: FAIL is logged at
+ERROR, WARN at WARNING, and both come back in the list for the caller to act
+on. scripts/check_health.py turns any FAIL into exit code 1 (the pipeline
+gate); daily_pipeline() records a degraded run instead, because by the time
+checks run the day's data is already written and tearing the process down
+would skip the alert and the status file (which is exactly what the previous
+``raise SystemExit(1)`` here did — SystemExit is a BaseException and slipped
+through run_pipeline.py's ``except Exception``).
+
+Freshness is checked per source in Bronze as well as in Silver. The Bronze
+structure checks only count rows in cumulative tables, so they keep passing
+once populated — during the 36-day Scryfall outage of 2026-07-29 → 2026-09-02
+they reported half a million healthy rows every day.
 """
 
 import datetime
@@ -52,18 +63,30 @@ def _check_table_has_rows(
 
 
 def _check_snapshot_date_today(
-    con: duckdb.DuckDBPyConnection, table: str, today: datetime.date
+    con: duckdb.DuckDBPyConnection, table: str, today: datetime.date, layer: str
 ) -> CheckResult:
-    count: int = con.execute(
-        f"SELECT COUNT(*) FROM {table} WHERE snapshot_date = ?", [today]
-    ).fetchone()[0]  # type: ignore[index]
-    if count == 0:
+    """Assert that *table* gained rows for *today*.
+
+    Bronze stores snapshot_date as VARCHAR and Silver as DATE; DuckDB casts
+    either against the bound date parameter, so one query form serves both.
+    """
+    if table not in get_tables(con):
         return CheckResult(
-            f"{table} freshness", "silver", "FAIL", f"no rows for {today}"
+            f"{table} freshness", layer, "FAIL", f"table {table!r} not found"
         )
-    return CheckResult(
-        f"{table} freshness", "silver", "PASS", f"{count} rows for {today}"
-    )
+    try:
+        count: int = con.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE snapshot_date = ?", [today]
+        ).fetchone()[0]  # type: ignore[index]
+    except duckdb.Error as exc:
+        # Missing/renamed snapshot_date column: report it as a failed check
+        # rather than letting the exception abort the whole health run.
+        return CheckResult(
+            f"{table} freshness", layer, "FAIL", f"cannot read snapshot_date: {exc}"
+        )
+    if count == 0:
+        return CheckResult(f"{table} freshness", layer, "FAIL", f"no rows for {today}")
+    return CheckResult(f"{table} freshness", layer, "PASS", f"{count} rows for {today}")
 
 
 def _check_no_nulls(
@@ -154,23 +177,66 @@ def _check_silver_prices_no_negative_eur(
     )
 
 
-def _check_gold_ml_dataset_has_target(con: duckdb.DuckDBPyConnection) -> CheckResult:
-    count: int = con.execute(
-        "SELECT COUNT(*) FROM gold_ml_dataset WHERE target_price_7d IS NOT NULL"
-    ).fetchone()[0]  # type: ignore[index]
-    if count == 0:
+_MAX_TARGET_STALENESS_DAYS = 14
+"""How old the newest target-bearing snapshot may be before it counts as a failure.
+
+Twice the 7-day prediction horizon: the newest snapshot can never have a target
+(its t+7 partner does not exist yet), so roughly one horizon of lag is normal.
+Beyond two, targets have stopped materialising.
+"""
+
+
+def _check_gold_ml_dataset_has_target(
+    con: duckdb.DuckDBPyConnection, today: datetime.date
+) -> CheckResult:
+    """Check that usable training targets exist *and are recent*.
+
+    target_price_7d is NULL by construction for any snapshot whose t+7 partner
+    is missing — always the newest week, plus every snapshot bordering a gap.
+    So the share of NULLs is not a defect signal and a threshold on it would
+    fire constantly; what matters is whether *fresh* targets keep appearing.
+
+    This used to test `COUNT(*) WHERE target_price_7d IS NOT NULL > 0`, which is
+    the same blind spot the Bronze row-count checks had: one usable row from any
+    date in history kept it passing forever, so a Gold layer that had stopped
+    producing targets months ago still reported PASS.
+    """
+    name = "gold_ml_dataset target_price_7d"
+    try:
+        row = con.execute(
+            "SELECT COUNT(*), MAX(snapshot_date) FROM gold_ml_dataset "
+            "WHERE target_price_7d IS NOT NULL"
+        ).fetchone()
+    except duckdb.Error as exc:
+        # Same rationale as the freshness check: a schema surprise becomes one
+        # reported FAIL, not an exception that aborts every remaining check.
+        return CheckResult(name, "gold", "FAIL", f"cannot read gold_ml_dataset: {exc}")
+    count = int(row[0]) if row else 0
+    newest = row[1] if row else None
+    if count == 0 or newest is None:
         return CheckResult(
-            "gold_ml_dataset target_price_7d",
+            name,
             "gold",
             "FAIL",
             "target_price_7d is 100% NULL — no usable training rows",
         )
-    return CheckResult(
-        "gold_ml_dataset target_price_7d",
-        "gold",
-        "PASS",
-        f"{count} rows with non-NULL target_price_7d",
+
+    newest_date = (
+        newest
+        if isinstance(newest, datetime.date)
+        else datetime.date.fromisoformat(str(newest))
     )
+    age = (today - newest_date).days
+    detail = f"{count} rows with a target, newest {newest_date} ({age}d old)"
+    if age > _MAX_TARGET_STALENESS_DAYS:
+        return CheckResult(
+            name,
+            "gold",
+            "FAIL",
+            f"{detail} — no target newer than {_MAX_TARGET_STALENESS_DAYS}d; "
+            "the t+7 joins have stopped producing rows",
+        )
+    return CheckResult(name, "gold", "PASS", detail)
 
 
 def _check_bronze_prices_schema_drift(
@@ -245,6 +311,20 @@ _BRONZE_TABLES = [
     "bronze_scryfall_cards",
     "bronze_mtgjson_cards",
     "bronze_mtgjson_prices_history",
+    "bronze_scryfall_prices_history",
+]
+
+# Freshness, not just existence. _check_table_has_rows counts the whole
+# cumulative table, so it keeps passing forever once a tier has been populated
+# once — that is how a 36-day Scryfall ingestion outage (2026-07-29 →
+# 2026-09-02) produced "[PASS] bronze | bronze_scryfall_cards rows — 535655
+# rows" on every single day it was down. The only FAIL came from Silver, and
+# only because Silver happens to be gated on a same-day Scryfall snapshot; a
+# Silver that could build without Scryfall would have hidden the outage
+# entirely. Detect the gap where it occurs, per source.
+_BRONZE_FRESHNESS_TABLES = [
+    "bronze_scryfall_prices_history",
+    "bronze_mtgjson_prices_history",
 ]
 
 _SILVER_TABLES = [
@@ -281,6 +361,26 @@ def run_health_checks(
     gold_path: str,
     today: datetime.date,
 ) -> list[CheckResult]:
+    """Run every check across the three tiers and return the results.
+
+    Logs each result (PASS=info, WARN=warning, FAIL=error) plus a summary line,
+    then returns. It does *not* decide what a FAIL means — that belongs to the
+    caller, because the two callers need opposite things:
+
+    - scripts/check_health.py is a CLI and turns any FAIL into exit code 1;
+    - daily_pipeline() must keep going and report a degraded run, since the
+      ETL has already written the day's data by the time checks run.
+
+    This used to end with ``raise SystemExit(1)`` on any FAIL. SystemExit
+    derives from BaseException, so it slipped straight through
+    run_pipeline.py's ``except Exception`` — skipping send_alert() *and*
+    _write_status(), which left the previous run's ``"result": "success"`` in
+    logs/last_pipeline_status.json untouched. A failing day was therefore
+    indistinguishable from a healthy one for anything reading that file.
+
+    Returns:
+        One CheckResult per check, in execution order.
+    """
     results: list[CheckResult] = []
 
     bronze_repo = open_repository(str(bronze_path), read_only=True)
@@ -295,6 +395,8 @@ def run_health_checks(
             _check_table_has_rows(bronze_con, "bronze", t) for t in _BRONZE_TABLES
         ]
         results.extend(bronze_structure)
+        for t in _BRONZE_FRESHNESS_TABLES:
+            results.append(_check_snapshot_date_today(bronze_con, t, today, "bronze"))
         results.extend(_check_bronze_prices_schema_drift(bronze_con, today))
 
         silver_structure = [
@@ -310,7 +412,9 @@ def run_health_checks(
         # Gated on full Silver structure PASS — see module docstring for why.
         if all(r.status == "PASS" for r in silver_structure):
             for t in _SILVER_FRESHNESS_TABLES:
-                results.append(_check_snapshot_date_today(silver_con, t, today))
+                results.append(
+                    _check_snapshot_date_today(silver_con, t, today, "silver")
+                )
             for col in _SILVER_QUALITY_NULL_COLUMNS:
                 results.append(
                     _check_no_nulls(silver_con, "silver", "silver_cards", col)
@@ -322,7 +426,7 @@ def run_health_checks(
         # Same rationale as the Silver gate above — gold_ml_dataset's target
         # column check assumes the table exists.
         if all(r.status == "PASS" for r in gold_structure):
-            results.append(_check_gold_ml_dataset_has_target(gold_con))
+            results.append(_check_gold_ml_dataset_has_target(gold_con, today))
 
     finally:
         bronze_repo.close()
@@ -344,8 +448,5 @@ def run_health_checks(
     logger.info(
         "Health check complete: %d passed, %d warned, %d failed", passed, warned, failed
     )
-
-    if failed:
-        raise SystemExit(1)
 
     return results

@@ -10,6 +10,7 @@ from src.ml.features.pipeline import enrich_card_df, enrich_lag_df
 from src.ml.training.trainer import (
     CVFold,
     InsufficientDataError,
+    fold_is_usable,
     generate_folds,
     get_available_snapshots,
     load_validation_config,
@@ -125,39 +126,41 @@ def _make_dates(start_iso: str, n_days: int) -> list[str]:
 
 
 def test_generate_folds_returns_list():
-    # 55 daily dates → enough for 3 folds with defaults (threshold = 51 days).
-    dates = _make_dates("2026-01-01", 55)
+    # 65 daily dates → enough for 3 USABLE folds with defaults: the gate needs
+    # the calendar span (51 days) plus 7 more so the last fold's validation
+    # snapshot has a t+7 partner for build_target.
+    dates = _make_dates("2026-01-01", 65)
     result = generate_folds(dates)
     assert isinstance(result, list)
 
 
 def test_generate_folds_returns_cvfold_objects():
-    dates = _make_dates("2026-01-01", 55)
+    dates = _make_dates("2026-01-01", 65)
     folds = generate_folds(dates)
     assert all(isinstance(f, CVFold) for f in folds)
 
 
 def test_generate_folds_at_least_3_folds():
-    dates = _make_dates("2026-01-01", 55)
+    dates = _make_dates("2026-01-01", 65)
     folds = generate_folds(dates)
     assert len(folds) >= 3
 
 
 def test_generate_folds_fold_idx_sequential():
-    dates = _make_dates("2026-01-01", 55)
+    dates = _make_dates("2026-01-01", 65)
     folds = generate_folds(dates)
     assert [f.fold_idx for f in folds] == list(range(len(folds)))
 
 
 def test_generate_folds_train_start_constant():
     # All folds must share the same train_start (expanding window).
-    dates = _make_dates("2026-01-01", 55)
+    dates = _make_dates("2026-01-01", 65)
     folds = generate_folds(dates)
     assert all(f.train_start == folds[0].train_start for f in folds)
 
 
 def test_generate_folds_train_end_advances_by_step_days():
-    dates = _make_dates("2026-01-01", 55)
+    dates = _make_dates("2026-01-01", 65)
     folds = generate_folds(dates, step_days=7)
     diffs = [
         (
@@ -171,7 +174,7 @@ def test_generate_folds_train_end_advances_by_step_days():
 
 def test_generate_folds_val_follows_train():
     # val_start must be exactly 1 day after train_end.
-    dates = _make_dates("2026-01-01", 55)
+    dates = _make_dates("2026-01-01", 65)
     folds = generate_folds(dates)
     for f in folds:
         train_end = date.fromisoformat(f.train_end)
@@ -181,7 +184,7 @@ def test_generate_folds_val_follows_train():
 
 def test_generate_folds_val_window_correct_length():
     # val_end - val_start + 1 == val_days (inclusive calendar days).
-    dates = _make_dates("2026-01-01", 55)
+    dates = _make_dates("2026-01-01", 65)
     folds = generate_folds(dates, val_days=7)
     for f in folds:
         span = (
@@ -191,7 +194,7 @@ def test_generate_folds_val_window_correct_length():
 
 
 def test_generate_folds_first_train_window_at_least_min_train_days():
-    dates = _make_dates("2026-01-01", 55)
+    dates = _make_dates("2026-01-01", 65)
     folds = generate_folds(dates, min_train_days=30)
     f0 = folds[0]
     span = (
@@ -215,7 +218,7 @@ def test_generate_folds_error_message_contains_unlock_date():
 
 def test_generate_folds_custom_params_create_more_folds():
     # With smaller windows, more folds fit into the same date range.
-    dates = _make_dates("2026-01-01", 55)
+    dates = _make_dates("2026-01-01", 65)
     folds_default = generate_folds(dates, min_train_days=30, val_days=7, step_days=7)
     folds_small = generate_folds(dates, min_train_days=10, val_days=3, step_days=2)
     assert len(folds_small) > len(folds_default)
@@ -405,3 +408,103 @@ def test_walk_forward_cv_calls_enrich_lag_df_per_fold(
     walk_forward_cv(wfcv_conn, _ZeroModel(), simple_folds)
     # 3 folds × 2 calls each (lag_train + lag_val) = 6 total.
     assert enriched_calls.count("lag") == len(simple_folds) * 2
+
+
+# ---------------------------------------------------------------------------
+# fold_is_usable() / the usable-fold gate
+# ---------------------------------------------------------------------------
+
+
+def _fold(train_end: str, val_start: str, val_end: str) -> CVFold:
+    return CVFold(
+        fold_idx=0,
+        train_start="2026-01-01",
+        train_end=train_end,
+        val_start=val_start,
+        val_end=val_end,
+    )
+
+
+def test_fold_is_usable_when_both_ends_have_t_plus_7():
+    available = {date.fromisoformat(d) for d in _make_dates("2026-01-01", 65)}
+    assert fold_is_usable(_fold("2026-01-30", "2026-01-31", "2026-02-06"), available)
+
+
+def test_fold_not_usable_when_validation_window_has_no_snapshot():
+    """walk_forward_cv's `val_snap is None` branch — folds 5-9 on the real Gold layer."""
+    available = {date.fromisoformat(d) for d in _make_dates("2026-01-01", 30)}
+    # Validation window sits entirely past the last snapshot.
+    assert not fold_is_usable(
+        _fold("2026-01-30", "2026-02-10", "2026-02-16"), available
+    )
+
+
+def test_fold_not_usable_when_validation_snapshot_lacks_t_plus_7():
+    """walk_forward_cv's `X_val_raw.empty` branch: build_target needs t and t+7."""
+    available = {date.fromisoformat(d) for d in _make_dates("2026-01-01", 37)}
+    # val_snap = 2026-02-06 (the last date); 2026-02-13 does not exist.
+    assert not fold_is_usable(
+        _fold("2026-01-30", "2026-01-31", "2026-02-06"), available
+    )
+
+
+def test_fold_not_usable_when_training_snapshot_lacks_t_plus_7():
+    """The validation end is fine; the training end has no t+7 partner.
+
+    train_snap = 2026-01-30, so build_target would need 2026-02-06, which is
+    absent. val_snap = 2026-02-05 and its partner 2026-02-12 does exist, so the
+    fold fails on the training side alone.
+    """
+    available = {
+        date.fromisoformat(d)
+        for d in ["2026-01-01", "2026-01-30", "2026-02-05", "2026-02-12"]
+    }
+    assert not fold_is_usable(
+        _fold("2026-01-30", "2026-01-31", "2026-02-06"), available
+    )
+
+
+def test_generate_folds_returns_only_usable_folds():
+    """Folds that span the range but would be skipped must not be returned."""
+    dates = _make_dates("2026-01-01", 65)
+    available = {date.fromisoformat(d) for d in dates}
+
+    folds = generate_folds(dates)
+
+    assert folds
+    assert all(fold_is_usable(f, available) for f in folds)
+
+
+def test_generate_folds_reindexes_after_filtering():
+    folds = generate_folds(_make_dates("2026-01-01", 65))
+    assert [f.fold_idx for f in folds] == list(range(len(folds)))
+
+
+def test_generate_folds_error_reports_usable_and_generated_counts():
+    """The whole point of the change: 2-of-13 must never read as 13.
+
+    A sparse calendar — one snapshot every 3 days — spans enough days to
+    generate folds, but almost none of them have the exact t+7 partner
+    build_target requires.
+    """
+    start = date.fromisoformat("2026-01-01")
+    dates = [(start + timedelta(days=3 * i)).isoformat() for i in range(30)]
+
+    with pytest.raises(InsufficientDataError) as exc:
+        generate_folds(dates)
+
+    message = str(exc.value)
+    assert "usable fold(s) out of" in message
+    assert "generated" in message
+    assert "snapshots" in message
+
+
+def test_generate_folds_unlock_date_accounts_for_target_horizon():
+    """The honest gate is 7 days later than the span-only one it replaced."""
+    dates = _make_dates("2026-01-01", 36)
+
+    with pytest.raises(InsufficientDataError) as exc:
+        generate_folds(dates, min_train_days=30, val_days=7, step_days=7)
+
+    # 2026-01-01 + (30-1 + 2*7 + 7 + 7) = 2026-02-27
+    assert "2026-02-27" in str(exc.value)

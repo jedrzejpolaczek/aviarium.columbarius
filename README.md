@@ -315,8 +315,6 @@ uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
 
 Always pass `--backend-store-uri` explicitly (run from the project root). Without it, `mlflow ui` ignores `mlflow.db` entirely and falls back to a plain local `./mlruns` folder in whatever directory you launched it from — a different, untracked store from the one the training scripts and the API actually use.
 
-> **Tracking DB and artifacts live in different places.** `mlflow.db` at the project root is the only authoritative tracking database (a stale copy at `notebooks/ml_models/mlflow.db` holds two runs from 2026-06-12 and is not used by anything — ignore it). Run **artifacts**, however, are addressed by the *relative* path `mlruns/1/models/<model_id>/artifacts`, which MLflow resolves against the current working directory. Training launched from a notebook under `notebooks/ml_models/` therefore writes artifacts to `notebooks/ml_models/mlruns/`, while training launched from the repo root writes them to `./mlruns/`. `docker/docker-compose.yml` mounts `notebooks/ml_models/mlruns` (that is where the currently deployed model lives), so **a model trained from the repo root will not be visible to the container** until the mount is pointed at the matching tree. Keep training in one location, or update the mount to follow it.
-
 **Optional — custom Gold DB path:**
 
 ```bash
@@ -343,7 +341,7 @@ Exploratory and confirmatory analysis behind the feature set and modelling choic
 
 ### Measured results
 
-Latest run: `gold_snapshot_date = 2026-07-02`, 36 daily snapshots, 78 692 training rows × 17 features. MAE is on the `log1p` scale — comparable between models, not a percentage. Reported per tier, because the aggregate hides the interesting part:
+Most recent *measured* run — not the most recent data. Taken at `gold_snapshot_date = 2026-07-02` over 36 daily snapshots, 78 692 training rows × 17 features; see the note below the table. MAE is on the `log1p` scale — comparable between models, not a percentage. Reported per tier, because the aggregate hides the interesting part:
 
 | Tier | Cards (test) | Naive | MA7d | LightGBM | LightGBM wins? |
 |---|---:|---:|---:|---:|---|
@@ -355,7 +353,7 @@ Latest run: `gold_snapshot_date = 2026-07-02`, 36 daily snapshots, 78 692 traini
 
 This is exactly why metrics are reported per tier rather than aggregated: a single global MAE would have shown LightGBM ahead and concealed the Tier 2 regression.
 
-> **Walk-forward CV has not produced metrics yet.** `walk_forward_cv_nb03` fails on the current dataset: CV needs at least 50 daily snapshots (3 folds of 30-day train + 7-day validation) and only 36 exist. Every number above therefore comes from a single chronological train/test split, not from cross-validation. More daily snapshots are the prerequisite for a stronger claim — Tier 3 in particular rests on 22 test cards.
+> **These numbers predate walk-forward cross-validation and should be re-measured.** They come from a single chronological train/test split taken at `gold_snapshot_date = 2026-07-02`, when the dataset spanned too few days for CV to run. That constraint has since lifted: the Gold layer now holds 67 snapshots spanning 2026-05-26 to 2026-09-24, which generates 13 folds. Re-running `walk_forward_cv_nb03` is the outstanding work needed to replace a single-split estimate with a cross-validated one — Tier 3 in particular rests on just 22 test cards in the split above.
 
 Full write-up, including the earlier degenerate `MAE ≈ 0` result at 32 snapshots and why it resolved: [`notebooks/ml_models/ML_FINDINGS.md`](notebooks/ml_models/ML_FINDINGS.md).
 
@@ -385,6 +383,8 @@ uv run python -m scripts.run_pipeline; if ($?) { uv run python -m scripts.check_
 `make backup` (or `python -m scripts.backup_data`) copies the Gold/Silver/Bronze DuckDB files, `mlflow.db`, and `mlruns/` into timestamped, auto-pruned snapshots under `backups/` — point `--backup-dir` at an external drive or cloud-synced folder for off-host protection. Each copied DuckDB file is opened read-only and checked for at least one table immediately after copying — a corrupt or truncated copy raises `BackupVerificationError` and the whole snapshot is discarded rather than silently kept.
 
 (Set the task's "Start in (optional)" field to the project root — relative paths like `logs/` and `data/gold/cards.duckdb` won't resolve otherwise.)
+
+> **`ALERT_WEBHOOK_URL` and `HEARTBEAT_URL` must be set in the *host* environment, not just `docker/.env`.** These scheduled commands are plain host processes; `docker/.env` is read by docker-compose and reaches only the API container. Setting the webhook there alone gives you alerts for a degraded API startup and none for a failed or degraded ETL run — the failure mode that went unnoticed for 36 days. See `.env.example` for the per-platform commands.
 
 Every run writes `logs/last_check_status.json` with one of `no_retrain` / `retrained` / `error`, so the outcome can be checked without reading log files. See [docs/runbooks/model-incidents.md](docs/runbooks/model-incidents.md) for what to do with each result.
 

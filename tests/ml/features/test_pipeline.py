@@ -281,6 +281,50 @@ def test_prepare_training_data_y_values_correct(three_source_dfs):
     assert set(y.values) == {0.05, -0.03}
 
 
+def test_prepare_training_data_drops_nan_targets(three_source_dfs):
+    """A uuid present in target_df but with a NULL target must not survive.
+
+    build_target emits such rows whenever `eur` is NULL on either end of the
+    7-day window. They used to reach walk_forward_cv, where evaluate_per_tier's
+    np.mean turned Tier 1's MAE and MAPE into NaN for every fold.
+    """
+    lag_df, card_df, target_df = three_source_dfs
+    target_df = target_df.copy()
+    target_df.loc[target_df["uuid"] == "uuid_b", "log_return_7d"] = np.nan
+
+    X, y = prepare_training_data(lag_df, card_df, target_df)
+
+    assert len(X) == 1
+    assert len(y) == 1
+    assert y.isna().sum() == 0
+    assert y.iloc[0] == 0.05
+
+
+def test_prepare_training_data_all_nan_targets_yields_empty(three_source_dfs):
+    lag_df, card_df, target_df = three_source_dfs
+    target_df = target_df.copy()
+    target_df["log_return_7d"] = np.nan
+
+    X, y = prepare_training_data(lag_df, card_df, target_df)
+
+    assert X.empty
+    assert y.empty
+
+
+def test_prepare_training_data_X_and_y_share_index(three_source_dfs):
+    """Index must be reset after filtering — walk_forward_cv aligns y against
+    a positionally-built prediction Series, so a gapped index misaligns them.
+    """
+    lag_df, card_df, target_df = three_source_dfs
+    target_df = target_df.copy()
+    target_df.loc[target_df["uuid"] == "uuid_a", "log_return_7d"] = np.nan
+
+    X, y = prepare_training_data(lag_df, card_df, target_df)
+
+    assert list(X.index) == list(range(len(X)))
+    assert list(y.index) == list(range(len(y)))
+
+
 # ---------------------------------------------------------------------------
 # build_inference_features()
 # ---------------------------------------------------------------------------

@@ -437,3 +437,69 @@ class TestDuckDBWriter:
         w.append(df, "hist", "id")
         count = mem_con.execute("SELECT count(*) FROM hist").fetchone()[0]
         assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# DuckDBWriter — date columns land as DATE, never VARCHAR
+# ---------------------------------------------------------------------------
+
+
+class TestDuckDBWriterDateColumns:
+    """Guards the invariant behind the 2026-09-26 VARCHAR → DATE migration.
+
+    Inserts into an already-migrated table would work without this (DuckDB
+    casts the ISO string on the way in). The gap is table *creation*:
+    `CREATE TABLE … AS SELECT * FROM _staging` adopts the staging dtype, so a
+    fresh install would silently rebuild every history table as VARCHAR.
+    """
+
+    @staticmethod
+    def _type_of(con: duckdb.DuckDBPyConnection, table: str, column: str) -> str:
+        types = {r[0]: r[1] for r in con.execute(f"DESCRIBE {table}").fetchall()}
+        return str(types[column])
+
+    def test_full_load_creates_date_column_from_iso_strings(self, mem_con):
+        df = pd.DataFrame({"id": ["a"], "snapshot_date": ["2026-04-01"]})
+        DuckDBWriter(mem_con).full_load(df, "tbl")
+        assert self._type_of(mem_con, "tbl", "snapshot_date") == "DATE"
+
+    def test_append_creates_date_column_from_iso_strings(self, mem_con):
+        df = pd.DataFrame({"id": ["a"], "snapshot_date": ["2026-04-01"]})
+        DuckDBWriter(mem_con).append(df, "hist", "id")
+        assert self._type_of(mem_con, "hist", "snapshot_date") == "DATE"
+
+    def test_tournament_date_also_becomes_date(self, mem_con):
+        df = pd.DataFrame({"id": ["a"], "tournament_date": ["2026-04-01"]})
+        DuckDBWriter(mem_con).full_load(df, "tbl")
+        assert self._type_of(mem_con, "tbl", "tournament_date") == "DATE"
+
+    def test_values_survive_the_conversion(self, mem_con):
+        from datetime import date
+
+        df = pd.DataFrame(
+            {"id": ["a", "b"], "snapshot_date": ["2026-04-01", "2026-04-02"]}
+        )
+        DuckDBWriter(mem_con).full_load(df, "tbl")
+        got = {
+            r[0] for r in mem_con.execute("SELECT snapshot_date FROM tbl").fetchall()
+        }
+        assert got == {date(2026, 4, 1), date(2026, 4, 2)}
+
+    def test_append_dedup_still_works_across_calls(self, mem_con):
+        """The dedup key is (id, snapshot_date) — it must survive retyping."""
+        df = pd.DataFrame({"id": ["a"], "snapshot_date": ["2026-04-01"]})
+        w = DuckDBWriter(mem_con)
+        w.append(df, "hist", "id")
+        w.append(df, "hist", "id")
+        assert mem_con.execute("SELECT COUNT(*) FROM hist").fetchone()[0] == 1
+
+    def test_unparseable_date_raises_rather_than_nulling(self, mem_con):
+        """A NULL in a history table's dedup key is worse than a failed run."""
+        df = pd.DataFrame({"id": ["a"], "snapshot_date": ["not-a-date"]})
+        with pytest.raises(Exception):
+            DuckDBWriter(mem_con).full_load(df, "tbl")
+
+    def test_other_columns_are_left_alone(self, mem_con):
+        df = pd.DataFrame({"id": ["a"], "released_at": ["2026-04-01"]})
+        DuckDBWriter(mem_con).full_load(df, "tbl")
+        assert self._type_of(mem_con, "tbl", "released_at") == "VARCHAR"

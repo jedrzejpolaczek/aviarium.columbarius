@@ -205,7 +205,19 @@ def test_main_does_not_alert_when_no_trigger(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def mlflow_tmp_for_real_retrain(tmp_path):
+def mlflow_tmp_for_real_retrain(tmp_path, monkeypatch):
+    """Isolate the tracking DB *and* the artifact tree.
+
+    A fresh sqlite store gives new experiments the relative artifact_location
+    'mlruns/<id>', resolved against the cwd — so redirecting only the tracking
+    URI left logged models accumulating in the project's real ./mlruns.
+    _PROJECT_ROOT is patched to match the new cwd so setup_experiment's
+    project-root guard still passes.
+    """
+    from src.ml.training import tracking
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(tracking, "_PROJECT_ROOT", tmp_path)
     db_path = tmp_path / "mlflow.db"
     mlflow.set_tracking_uri(f"sqlite:///{db_path}")
     yield
