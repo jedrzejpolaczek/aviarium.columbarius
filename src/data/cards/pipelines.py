@@ -16,6 +16,7 @@ import asyncio
 import datetime
 import time
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -27,13 +28,53 @@ from src.data.cards.sources import ingesting_pipeline
 from src.data.cards.storage.bronze import BronzeStorage
 from src.data.cards.storage.silver import SilverStorage
 from src.data.cards.storage.gold import GoldStorage
-from src.data.cards.storage.health import run_health_checks
+from src.data.cards.storage.health import CheckResult, run_health_checks
 from src.data.json_files import load_json_file
 
 
 logger = get_logger(__name__)
 
 _StageResult = tuple[str, float, str]  # (name, elapsed_s, "ok" | "error")
+
+
+@dataclass
+class PipelineOutcome:
+    """What a daily_pipeline run observed, for the caller to act on.
+
+    daily_pipeline completing without raising does not mean the day's data
+    arrived. Two failure modes are non-fatal by design and therefore invisible
+    to a bare try/except around the call:
+
+    - a Bronze source that failed to download is logged and skipped so the
+      other sources still land (see ADR-013: the HTML scrapers are expected to
+      break), leaving that source with no rows for the day;
+    - a health check that FAILs logs at ERROR but does not raise.
+
+    Both are collected here so the entry point can alert and record a
+    "degraded" run instead of reporting success. Silence on both counts is
+    what let a 36-day Scryfall outage report ``"result": "success"`` every day.
+    """
+
+    health: list[CheckResult] = field(default_factory=list)
+    failed_sources: list[str] = field(default_factory=list)
+
+    @property
+    def failed_checks(self) -> list[CheckResult]:
+        return [r for r in self.health if r.status == "FAIL"]
+
+    @property
+    def is_degraded(self) -> bool:
+        return bool(self.failed_checks or self.failed_sources)
+
+    def summary(self) -> str:
+        """One-line, human-readable reason the run is degraded."""
+        parts = []
+        if self.failed_sources:
+            parts.append(f"sources with no records: {', '.join(self.failed_sources)}")
+        if self.failed_checks:
+            names = ", ".join(f"{r.layer}/{r.name}" for r in self.failed_checks)
+            parts.append(f"failed health checks: {names}")
+        return "; ".join(parts) if parts else "no problems detected"
 
 
 def _load_json_config(config_path: str) -> dict[str, Any]:
@@ -214,7 +255,7 @@ def initial_gold_pipeline(config: dict[str, Any]) -> None:
     logger.info("Gold initial pipeline finished")
 
 
-def daily_pipeline(config_path: str) -> None:
+def daily_pipeline(config_path: str) -> PipelineOutcome:
     """Run incremental updates across all three tiers (Bronze → Silver → Gold).
 
     Loads configuration from the given YAML file, then delegates to the
@@ -222,26 +263,39 @@ def daily_pipeline(config_path: str) -> None:
 
     Args:
         config_path: Path to the YAML config file (e.g. "configs/data_sources.yaml").
+
+    Returns:
+        PipelineOutcome carrying the health-check results and any Bronze
+        sources that produced no records. A raised exception still means a
+        hard failure; a returned outcome with ``is_degraded`` means the run
+        finished but the day's data is incomplete. Callers must inspect it —
+        that is the whole point of returning it.
     """
     config = load_config(config_path)
     pipeline_start = time.perf_counter()
     results: list[_StageResult] = []
+    outcome = PipelineOutcome()
 
-    _run_timed("Bronze", lambda: daily_bronze_pipeline(config), results)
+    _run_timed(
+        "Bronze",
+        lambda: outcome.failed_sources.extend(daily_bronze_pipeline(config)),
+        results,
+    )
     _run_timed("Silver", lambda: daily_silver_pipeline(config), results)
     _run_timed("Gold", lambda: daily_gold_pipeline(config), results)
 
     _log_pipeline_summary(results, time.perf_counter() - pipeline_start)
 
-    run_health_checks(
+    outcome.health = run_health_checks(
         bronze_path=config["storage"]["bronze_duckdb_path"],
         silver_path=config["storage"]["silver_duckdb_path"],
         gold_path=config["storage"]["gold_duckdb_path"],
         today=datetime.date.today(),
     )
+    return outcome
 
 
-def daily_bronze_pipeline(config: dict[str, Any]) -> None:
+def daily_bronze_pipeline(config: dict[str, Any]) -> list[str]:
     """Run an incremental update of Bronze tables and append a daily snapshot.
 
     Downloads (if flag=true in bronze_config), validates, and upserts card data
@@ -254,11 +308,33 @@ def daily_bronze_pipeline(config: dict[str, Any]) -> None:
 
     Args:
         config: Parsed configuration dict (see configs/data_sources.yaml).
+
+    Returns:
+        The ``type`` of every configured JSON source that produced no records —
+        either because ingesting_pipeline caught its download error and omitted
+        it, or because it came back empty. The three JSON sources are full
+        catalogue dumps, so zero records always means failure, never a quiet
+        day. Still a list rather than an exception: one dead source must not
+        abort the tiers that the surviving sources can still refresh, since a
+        day's prices cannot be re-fetched later. Escalation is the caller's job.
     """
     logger.info("Starting daily bronze data update pipeline")
 
     bronze_config = _load_json_config(config["storage"]["bronze_config_path"])
     results = asyncio.run(ingesting_pipeline(bronze_config))
+
+    configured = [str(s["type"]) for s in bronze_config.get("sources", [])]
+    failed_sources = [
+        source_type
+        for source_type in configured
+        if not results.get(source_type, ([], []))[0]
+    ]
+    if failed_sources:
+        logger.error(
+            "Bronze sources produced no records: %s — today's data is "
+            "incomplete and cannot be back-filled from the vendor APIs later.",
+            ", ".join(failed_sources),
+        )
 
     total_records = sum(len(records) for records, _ in results.values())
     logger.info(
@@ -273,6 +349,7 @@ def daily_bronze_pipeline(config: dict[str, Any]) -> None:
         storage.daily_update(results)
 
     logger.info("Daily bronze pipeline finished")
+    return failed_sources
 
 
 def daily_silver_pipeline(config: dict[str, Any]) -> None:

@@ -2,7 +2,6 @@ import datetime
 from pathlib import Path
 
 import duckdb
-import pytest
 
 from src.data.cards.storage.health import (
     CheckResult,
@@ -75,7 +74,9 @@ class TestCheckSnapshotDateToday:
         con = duckdb.connect(":memory:")
         today = datetime.date(2026, 6, 22)
         self._make_prices(con, [today])
-        result = _check_snapshot_date_today(con, "silver_prices_history", today)
+        result = _check_snapshot_date_today(
+            con, "silver_prices_history", today, "silver"
+        )
         assert result.status == "PASS"
         assert "2026-06-22" in result.detail
         con.close()
@@ -85,7 +86,9 @@ class TestCheckSnapshotDateToday:
         today = datetime.date(2026, 6, 22)
         yesterday = datetime.date(2026, 6, 21)
         self._make_prices(con, [yesterday])
-        result = _check_snapshot_date_today(con, "silver_prices_history", today)
+        result = _check_snapshot_date_today(
+            con, "silver_prices_history", today, "silver"
+        )
         assert result.status == "FAIL"
         assert "no rows" in result.detail
         con.close()
@@ -94,7 +97,9 @@ class TestCheckSnapshotDateToday:
         con = duckdb.connect(":memory:")
         today = datetime.date(2026, 6, 22)
         self._make_prices(con, [])
-        result = _check_snapshot_date_today(con, "silver_prices_history", today)
+        result = _check_snapshot_date_today(
+            con, "silver_prices_history", today, "silver"
+        )
         assert result.status == "FAIL"
         con.close()
 
@@ -264,8 +269,22 @@ def _make_all_dbs(tmp_path: Path, today: datetime.date) -> tuple[str, str, str]:
     b.execute("INSERT INTO bronze_scryfall_cards VALUES ('x')")
     b.execute("CREATE TABLE bronze_mtgjson_cards (uuid VARCHAR)")
     b.execute("INSERT INTO bronze_mtgjson_cards VALUES ('x')")
-    b.execute("CREATE TABLE bronze_mtgjson_prices_history (uuid VARCHAR)")
-    b.execute("INSERT INTO bronze_mtgjson_prices_history VALUES ('x')")
+    # Bronze stores snapshot_date as VARCHAR (Silver/Gold use DATE) — the
+    # freshness check relies on DuckDB casting either against a bound date.
+    b.execute(
+        "CREATE TABLE bronze_mtgjson_prices_history (uuid VARCHAR, snapshot_date VARCHAR)"
+    )
+    b.execute(
+        "INSERT INTO bronze_mtgjson_prices_history VALUES ('x', ?)",
+        [today.isoformat()],
+    )
+    b.execute(
+        "CREATE TABLE bronze_scryfall_prices_history (uuid VARCHAR, snapshot_date VARCHAR)"
+    )
+    b.execute(
+        "INSERT INTO bronze_scryfall_prices_history VALUES ('x', ?)",
+        [today.isoformat()],
+    )
     b.close()
 
     silver_path = str(tmp_path / "silver.duckdb")
@@ -331,7 +350,14 @@ class TestRunHealthChecks:
         assert len(results) > 0
         assert all(r.status in ("PASS", "WARN") for r in results)
 
-    def test_exits_one_on_any_fail(self, tmp_path):
+    def test_returns_fail_result_instead_of_raising(self, tmp_path):
+        """A FAIL must come back as data, not as SystemExit.
+
+        Regression guard: run_health_checks used to `raise SystemExit(1)`.
+        SystemExit derives from BaseException, so it bypassed
+        run_pipeline.py's `except Exception` and skipped both send_alert()
+        and _write_status() — leaving the previous run's "success" in place.
+        """
         today = datetime.date(2026, 6, 22)
         bronze, silver, gold = _make_all_dbs(tmp_path, today)
         # Corrupt: gold_ml_dataset has all-NULL targets
@@ -339,9 +365,12 @@ class TestRunHealthChecks:
         g.execute("DELETE FROM gold_ml_dataset")
         g.execute("INSERT INTO gold_ml_dataset VALUES ('u1', NULL)")
         g.close()
-        with pytest.raises(SystemExit) as exc:
-            run_health_checks(bronze, silver, gold, today)
-        assert exc.value.code == 1
+
+        results = run_health_checks(bronze, silver, gold, today)
+
+        failed = [r for r in results if r.status == "FAIL"]
+        assert failed
+        assert any("target_price_7d" in r.name for r in failed)
 
     def test_skips_silver_quality_when_structure_fails(self, tmp_path):
         today = datetime.date(2026, 6, 22)
@@ -350,8 +379,37 @@ class TestRunHealthChecks:
         s = duckdb.connect(silver)
         s.execute("DROP TABLE silver_cards")
         s.close()
-        with pytest.raises(SystemExit):
-            run_health_checks(bronze, silver, gold, today)
+
+        results = run_health_checks(bronze, silver, gold, today)
+
+        assert any(r.status == "FAIL" for r in results)
+        # Quality checks are gated behind a fully-PASSing Silver structure.
+        assert not any("no NULLs" in r.detail for r in results)
+
+    def test_flags_stale_bronze_source_while_other_source_is_fresh(self, tmp_path):
+        """The 2026-07-29 → 2026-09-02 outage in miniature.
+
+        Scryfall stops delivering while MTGJson keeps going. Bronze row counts
+        stay healthy (the cumulative tables are untouched), so only a per-source
+        freshness check can see it.
+        """
+        today = datetime.date(2026, 6, 22)
+        bronze, silver, gold = _make_all_dbs(tmp_path, today)
+        b = duckdb.connect(bronze)
+        b.execute("DELETE FROM bronze_scryfall_prices_history")
+        b.execute(
+            "INSERT INTO bronze_scryfall_prices_history VALUES ('x', ?)",
+            [(today - datetime.timedelta(days=30)).isoformat()],
+        )
+        b.close()
+
+        results = run_health_checks(bronze, silver, gold, today)
+
+        by_name = {r.name: r for r in results}
+        assert by_name["bronze_scryfall_prices_history freshness"].status == "FAIL"
+        assert by_name["bronze_mtgjson_prices_history freshness"].status == "PASS"
+        # The cumulative row-count check still passes — that is the blind spot.
+        assert by_name["bronze_scryfall_prices_history rows"].status == "PASS"
 
 
 def test_check_result_warn():
