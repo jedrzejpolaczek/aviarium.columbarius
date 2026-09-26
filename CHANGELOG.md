@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-26
+
+**Upgrading from 0.1.x requires one manual step.** Every `snapshot_date` and
+`tournament_date` column changed from `VARCHAR` to `DATE`. Run
+`python -m scripts.migrate_snapshot_date_to_date --dry-run` and then without
+the flag, against a backup (`python -m scripts.backup_data`). The migration is
+idempotent and validates every value before touching a column.
+
+Two behaviours changed in ways that look like failures but are not:
+walk-forward CV now raises `InsufficientDataError` where it previously returned
+a silently reduced set of folds, and automatic promotion refuses when either
+side of the comparison lacks a real metric. Both are covered in
+`docs/runbooks/model-incidents.md` (§4b, §4c).
+
 ### Added
 - `.env.example` — annotated template for every environment variable the application reads (`MODEL_RUN_ID`, `GOLD_DB_PATH`, `MLFLOW_TRACKING_URI`, `ADMIN_TOKEN`, `CORS_ORIGINS`, `ALERT_WEBHOOK_URL`, `HEARTBEAT_URL`), documenting the degraded behaviour when each is left unset.
 - `docker/docker-compose.staging.yml` — full standalone staging environment (API 8100, frontend 3100, own `data-staging/` Gold copy and `logs-staging/`), runnable alongside production. Staging deliberately copies the Gold database rather than sharing the production file, so a staging failure cannot take production down; MLflow stores are shared read-only since artifacts are immutable.
