@@ -149,6 +149,16 @@ def prepare_training_data(
     returned. Cards missing lag history, card metadata, or a target value are
     silently excluded.
 
+    "Missing a target value" covers two distinct cases, and both are dropped
+    here: the uuid is absent from target_df (no t+7 snapshot), and the uuid is
+    present but log_return_7d is NaN. The second case is the common one —
+    build_target computes LN(1+eur_t7) - LN(1+eur_t0), which is NULL whenever
+    `eur` is NULL on either end, and roughly 16% of the catalogue has no
+    Cardmarket EUR price at all. Keeping those rows poisons every downstream
+    metric: evaluate_per_tier() aggregates with np.mean (not nanmean), and
+    assign_tier() maps a NaN price to Tier 1, so a single NaN target turns
+    Tier 1's MAE and MAPE into NaN for the whole fold.
+
     Args:
         lag_df:    Output of build_lag_features(): one row per card per snapshot.
         card_df:   gold_card_features: static card attributes (rarity, foil, etc.).
@@ -156,11 +166,12 @@ def prepare_training_data(
 
     Returns:
         (X, y) where X is the feature DataFrame and y is the log_return_7d Series.
-        LEAKAGE_COLS are dropped from X if present.
+        Both share a fresh RangeIndex. LEAKAGE_COLS are dropped from X if present.
     """
     df = lag_df.merge(card_df, on="uuid", how="inner").merge(
         target_df, on="uuid", how="inner"
     )
+    df = df[df["log_return_7d"].notna()].reset_index(drop=True)
     df = df.drop(columns=[c for c in LEAKAGE_COLS if c in df.columns])
     y = df["log_return_7d"]
     X = df.drop(columns=["log_return_7d"])

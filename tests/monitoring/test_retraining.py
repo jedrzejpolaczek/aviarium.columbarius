@@ -247,7 +247,7 @@ def test_compare_and_promote_reraises_unexpected_mlflow_errors():
         mock_client_cls.return_value = mock_client
         mock_client.get_model_version_by_alias.side_effect = unexpected_exc
         with pytest.raises(mlflow.exceptions.MlflowException):
-            _compare_and_promote(pd.DataFrame(), "test-run-id")
+            _compare_and_promote(_make_cv(0.20), "test-run-id")
         mock_promote.assert_not_called()
 
 
@@ -262,7 +262,7 @@ def test_compare_and_promote_promotes_when_no_production_alias():
         mock_client = MagicMock()
         mock_client_cls.return_value = mock_client
         mock_client.get_model_version_by_alias.side_effect = not_found_exc
-        _compare_and_promote(pd.DataFrame(), "new-run-id")
+        _compare_and_promote(_make_cv(0.20), "new-run-id")
         mock_promote.assert_called_once_with("new-run-id", MODEL_REGISTRY_NAME)
 
 
@@ -311,8 +311,8 @@ def test_compare_and_promote_does_not_promote_when_new_model_is_worse():
         mock_promote.assert_not_called()
 
 
-def test_compare_and_promote_promotes_when_prod_run_id_is_none():
-    """prod_version.run_id is None → promote unconditionally."""
+def test_compare_and_promote_refuses_when_prod_run_id_is_none():
+    """prod_version.run_id is None → nothing to compare against → refuse."""
     with (
         patch("mlflow.tracking.MlflowClient") as mock_client_cls,
         patch("src.monitoring.retraining.promote_to_production") as mock_promote,
@@ -323,13 +323,13 @@ def test_compare_and_promote_promotes_when_prod_run_id_is_none():
         prod_version.run_id = None
         mock_client.get_model_version_by_alias.return_value = prod_version
 
-        _compare_and_promote(pd.DataFrame(), "new-run-id")
+        _compare_and_promote(_make_cv(0.20), "new-run-id")
 
-        mock_promote.assert_called_once_with("new-run-id", MODEL_REGISTRY_NAME)
+        mock_promote.assert_not_called()
 
 
-def test_compare_and_promote_uses_inf_mape_when_cv_empty():
-    """Empty cv_results → new_mape = inf → never promotes over a prod with finite MAPE."""
+def test_compare_and_promote_refuses_when_cv_empty():
+    """Empty cv_results → new_mape is NaN → refuse before touching MLflow."""
     with (
         patch("mlflow.tracking.MlflowClient") as mock_client_cls,
         patch("src.monitoring.retraining.promote_to_production") as mock_promote,
@@ -342,5 +342,45 @@ def test_compare_and_promote_uses_inf_mape_when_cv_empty():
         mock_client.get_run.return_value.data.metrics = {"cv_mape_tier1": 0.15}
 
         _compare_and_promote(pd.DataFrame(), "new-run-id")
+
+        mock_promote.assert_not_called()
+
+
+def test_compare_and_promote_refuses_when_new_mape_is_nan():
+    """Tier 1 rows exist but the metric is NaN → refuse, never promote on NaN."""
+    with (
+        patch("mlflow.tracking.MlflowClient") as mock_client_cls,
+        patch("src.monitoring.retraining.promote_to_production") as mock_promote,
+    ):
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        prod_version = MagicMock()
+        prod_version.run_id = "old-run-id"
+        mock_client.get_model_version_by_alias.return_value = prod_version
+        mock_client.get_run.return_value.data.metrics = {"cv_mape_tier1": 0.15}
+
+        _compare_and_promote(_make_cv(float("nan")), "new-run-id")
+
+        mock_promote.assert_not_called()
+
+
+def test_compare_and_promote_refuses_when_prod_has_no_cv_metric():
+    """Incumbent has no cv_mape_tier1 → absence must block, not wave through.
+
+    Regression guard: treating the missing metric as +inf made every candidate
+    look better and promoted unconditionally.
+    """
+    with (
+        patch("mlflow.tracking.MlflowClient") as mock_client_cls,
+        patch("src.monitoring.retraining.promote_to_production") as mock_promote,
+    ):
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        prod_version = MagicMock()
+        prod_version.run_id = "old-run-id"
+        mock_client.get_model_version_by_alias.return_value = prod_version
+        mock_client.get_run.return_value.data.metrics = {"train_mae": 0.05}
+
+        _compare_and_promote(_make_cv(0.20), "new-run-id")
 
         mock_promote.assert_not_called()
