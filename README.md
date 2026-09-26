@@ -384,6 +384,8 @@ uv run python -m scripts.run_pipeline; if ($?) { uv run python -m scripts.check_
 
 (Set the task's "Start in (optional)" field to the project root — relative paths like `logs/` and `data/gold/cards.duckdb` won't resolve otherwise.)
 
+> **`ALERT_WEBHOOK_URL` and `HEARTBEAT_URL` must be set in the *host* environment, not just `docker/.env`.** These scheduled commands are plain host processes; `docker/.env` is read by docker-compose and reaches only the API container. Setting the webhook there alone gives you alerts for a degraded API startup and none for a failed or degraded ETL run — the failure mode that went unnoticed for 36 days. See `.env.example` for the per-platform commands.
+
 Every run writes `logs/last_check_status.json` with one of `no_retrain` / `retrained` / `error`, so the outcome can be checked without reading log files. See [docs/runbooks/model-incidents.md](docs/runbooks/model-incidents.md) for what to do with each result.
 
 ---

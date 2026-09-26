@@ -145,6 +145,69 @@ alert (see `src.monitoring.alerts`) and a JSON status file were written.
 3. Fix the underlying issue, then re-run `make pipeline` manually to
    confirm before waiting for the next scheduled run.
 
+## 4b. `logs/last_pipeline_status.json` shows `"result": "degraded"`
+
+**Symptom:** The pipeline finished, but the day's data is incomplete. New in
+this state (it used to be reported as `"success"`), so nothing older than
+2026-09-26 will show it.
+
+**Cause:** one or both of the fields alongside it:
+- `"failed_sources"` — a Bronze source delivered zero records. The three JSON
+  sources are full catalogue dumps, so zero always means failure. The run
+  continued on purpose: one dead source must not abort the tiers the survivors
+  can still refresh, because a day's prices cannot be re-fetched later.
+- `"failed_checks"` — a health check FAILed, each listed as `layer/name: detail`.
+
+**Fix:**
+1. Find the matching `[FAIL]` lines in the day's `logs/pipeline_*.log`.
+2. A Bronze freshness FAIL means that source produced no rows *for today*
+   while its cumulative table is still healthy — usually a download failure
+   logged earlier in the same file as `Source '<name>' failed: … — skipping`.
+3. Fix the cause, then re-run `make pipeline`. Today's snapshot can still be
+   captured if you re-run the same day; it cannot be recovered afterwards.
+
+---
+
+## 4c. Re-measuring the published metrics under walk-forward CV
+
+**When:** from **2026-09-30**, the first date on which Gold has 3 usable folds.
+Before that `walk_forward_cv` raises `InsufficientDataError` by design — see
+`generate_folds` and `fold_is_usable` in `src/ml/training/trainer.py`.
+
+**Why it is a procedure and not just a training run:** the numbers in README
+("Measured results") and `ML_FINDINGS.md` T6/T8 are a single chronological
+split taken at `gold_snapshot_date = 2026-07-02`. Replacing them also produces
+the first real `cv_mape_tier1` metric this project has ever had, which is what
+unblocks automatic promotion.
+
+1. Confirm the gate has opened:
+   ```bash
+   uv run python -c "
+   import duckdb
+   from src.ml.training.trainer import generate_folds, get_available_snapshots
+   con = duckdb.connect('data/gold/cards.duckdb', read_only=True)
+   print(len(generate_folds(get_available_snapshots(con))), 'usable folds')"
+   ```
+   An `InsufficientDataError` here means the date has not arrived or snapshots
+   were missed — the message names both counts and the unlock date.
+2. Run the retrain so CV results are logged (`log_cv_results` writes
+   `cv_mae_tier{n}` / `cv_mape_tier{n}`):
+   `uv run python -m scripts.check_and_retrain`
+3. **Expect it to refuse to promote, once.** The incumbent (version 3, run
+   `9c1ec7de…`) predates CV and carries no `cv_mape_tier1`, so
+   `_compare_and_promote` logs *"Production run … has no 'cv_mape_tier1'
+   metric — cannot compare, refusing to promote"* and stops. That is the guard
+   working, not a fault. Promote the new run by hand after checking its
+   numbers: `uv run python -m scripts.rollback_model --version <new_version>`,
+   then `POST /admin/reload-model` (see §2 step 3).
+4. From that point the incumbent has a comparable metric and automatic
+   promotion works unattended.
+5. Update README "Measured results" and `ML_FINDINGS.md` T6/T8 with the
+   per-fold figures, stating the fold count — 3 folds is the project's own
+   minimum credibility threshold, not a strong result. Re-measuring again at
+   6 folds (≈2026-10-21) and 14 (≈2026-12-16) is worthwhile; the trend across
+   fold counts is itself informative.
+
 ## 5. Desktop alert / `logs/alerts.jsonl` entry titled "Backup failed"
 
 **Symptom:** `scripts/backup_data.py` (scheduled daily via `make backup`,
