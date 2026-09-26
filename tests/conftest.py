@@ -6,8 +6,29 @@ tests/data/cards/storage/), so this file is reserved for fixtures needed
 across multiple, otherwise-unrelated test directories.
 """
 
+from pathlib import Path
+
 import duckdb
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_alert_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep every test's send_alert() calls out of the real logs/alerts.jsonl.
+
+    send_alert resolves its target from the module-level ALERTS_LOG_PATH at
+    call time, so redirecting that constant is enough to cover callers that
+    do not pass alerts_log_path explicitly.
+
+    Without this, the production alert log is where test noise goes: all 190
+    records it held on 2026-09-25 were written by pytest (124 of them
+    "Monitor: Gold DB missing" naming pytest tmp paths). The log is documented
+    as the one channel that always succeeds and is meant to be replayable —
+    it cannot be that and a test scratch file at the same time.
+    """
+    from src.monitoring import alerts
+
+    monkeypatch.setattr(alerts, "ALERTS_LOG_PATH", tmp_path / "alerts.jsonl")
 
 
 @pytest.fixture
