@@ -22,7 +22,9 @@ _(wypelnij po uruchomieniu notebooka)_
 ## T6 — Baseline vs LightGBM
 
 **Notebook:** `02_baseline_lightgbm.ipynb`
-**Status:** [X] Uruchomiony ponownie (36 snapshotów, SNAPSHOT_DATE = 2026-07-02). Dataset: 78 692 wierszy × 45 kolumn (17 cech użytych przez pipeline, 14 694 wiersze odrzucone z powodu NaN w targecie).
+**Status:** [X] Uruchomiony 2026-07-10 — **wyniki nieaktualne**, patrz T7: Gold ma
+dzis 67 snapshotow (do 2026-09-24) i walk-forward CV jest juz mozliwe.
+Ponizsze liczby to pojedynczy podzial chronologiczny na danych do 2026-07-02. Dataset: 78 692 wierszy × 45 kolumn (17 cech użytych przez pipeline, 14 694 wiersze odrzucone z powodu NaN w targecie).
 
 ### Wynik — już nie degeneratywny, LightGBM wygrywa w 2/3 tierów
 
@@ -59,15 +61,46 @@ Przy 32 snapshotach i pierwszym uruchomieniu, `log_return_7d` był idealnie pła
 ## T7 — Time Series (data-gated)
 
 **Notebook:** `03_time_series.ipynb`
-**Status:** [ ] Odblokowany — próg 20 snapshotów minął (jest 36, stan na 2026-07-02), do uruchomienia.
+**Status:** [ ] Odblokowany — do uruchomienia.
 
 UWAGA: Pierwotna kolejnosc zakladala zrobienie T8 przed T7 (T7 czekal na dane).
 Ten warunek juz nie obowiazuje — oba notebooki mozna uruchomic.
 
-Osobne ograniczenie, ktore *nadal* obowiazuje: walk-forward CV
-(`walk_forward_cv_nb03`) wymaga >= 50 snapshotow i przy 36 konczy sie
-`InsufficientDataError`. To nie blokuje T7, ale oznacza, ze wszystkie
-dotychczasowe metryki pochodza z pojedynczego podzialu chronologicznego.
+### Walk-forward CV jest juz mozliwe (stan na 2026-09-25)
+
+`walk_forward_cv_nb03` konczyl sie `InsufficientDataError` przy obu probach
+(2026-07-05 i 2026-07-10) i to bylo wtedy poprawne. `generate_folds` liczy
+jednak **rozpietosc kalendarzowa**, nie liczbe snapshotow: przy
+`min_train_days=30, val_days=7, step_days=7` trzeci fold pojawia sie po
+`30-1 + 2*7 + 7 = 50` dniach od pierwszego snapshotu. Pierwszy snapshot to
+2026-05-26, wiec CV odblokowalo sie **2026-07-15** — piec dni po ostatnim
+nieudanym uruchomieniu. Od tego czasu notebook nie byl uruchamiany ponownie.
+
+Stan Gold na 2026-09-26: **67 snapshotow, 2026-05-26 -> 2026-09-24**,
+`generate_folds` zwraca **13 foldow — ale tylko 2 z nich sa uzyteczne**
+(zweryfikowane bezposrednio na `data/gold/cards.duckdb`).
+
+`generate_folds` waliduje rozpietosc kalendarzowa, nie dostepnosc danych.
+`walk_forward_cv` pomija fold (`continue`), gdy w oknie walidacyjnym nie ma
+zadnego snapshotu, albo gdy dla wybranego snapshotu nie istnieje dokladny
+partner `t+7` wymagany przez `build_target`. Na obecnym Gold przechodza tylko
+foldy 1 i 2 (val 2026-07-08 i 2026-07-15); foldy 5-9 nie maja w ogole
+snapshotu w oknie walidacyjnym. Zmierzone uruchomieniem `walk_forward_cv`:
+
+| | wartosc |
+|---|---:|
+| foldy wygenerowane | 13 |
+| foldy faktycznie wykonane | **2** |
+
+Wniosek z 2 foldow jest statystycznie czym innym niz z 13, a sam `generate_folds`
+deklaruje minimum 3 foldy jako prog wiarygodnosci — czyli obecny stan ten prog
+obchodzi. Zrodlem ograniczenia jest luka w snapshotach Gold (67 z 181 dni
+dostepnych w Bronze), nie sam kod CV.
+
+Wszystkie metryki w T6 i T8 pochodza wiec z pojedynczego podzialu
+chronologicznego przy `gold_snapshot_date = 2026-07-02` i sa juz
+nieaktualne o ~3 miesiace danych. Ponowne uruchomienie T6/T8 pod CV jest
+glowna zalegloscia tego katalogu.
 
 Kluczowe pytania:
 - Prophet vs LightGBM: ktory model jest lepszy dla plynnych kart?
