@@ -20,14 +20,24 @@ PARAMETERS (from model_preparation/validation_config.json):
   step_days      = 7   (days the split point advances between folds)
 
 DATA GATE:
-Walk-forward CV needs >= 3 folds. With the default parameters, the first
-three usable folds appear after approximately 50 days of daily snapshots
-(start + 29 train days + 2×7 step days + 7 val days).
-Raises InsufficientDataError if fewer than 3 folds can be generated.
+Walk-forward CV needs >= 3 *usable* folds. A fold spanning the right calendar
+range is not necessarily usable: walk_forward_cv skips one whose validation
+window contains no snapshot, and one whose chosen snapshot has no snapshot
+exactly TARGET_HORIZON_DAYS later, because build_target joins t to t+7 and
+returns nothing without both. generate_folds applies the same test and returns
+only the folds that will actually run.
+
+With the default parameters the first three usable folds appear after roughly
+57 days of daily snapshots (start + 29 train days + 2×7 step days + 7 val days
++ 7 days for the last fold's target horizon).
+
+This used to be checked on calendar span alone, which let generate_folds
+report 13 folds on a Gold layer where walk_forward_cv silently executed 2 —
+and nothing in the output distinguished the two numbers.
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -49,7 +59,25 @@ from src.ml.models.tiered import assign_tier
 
 
 class InsufficientDataError(Exception):
-    """Raised when there are too few snapshots to run walk-forward CV (need >= 3 folds)."""
+    """Raised when too few snapshots yield usable walk-forward folds.
+
+    "Usable" is the operative word: see :func:`fold_is_usable`. A fold that spans
+    the right calendar range but would be skipped at run time does not count.
+    """
+
+
+TARGET_HORIZON_DAYS = 7
+"""Days ahead the target looks. Must match the INTERVAL in features/sql/target.sql:
+build_target inner-joins a snapshot to the one exactly this many days later, so a
+fold whose snapshot has no such partner yields an empty training or validation
+set and is skipped by walk_forward_cv.
+"""
+
+
+MIN_USABLE_FOLDS = 3
+"""Credibility threshold from the MP-03 power analysis. Counted over usable folds,
+not folds that merely span the right calendar range.
+"""
 
 
 @dataclass
@@ -98,6 +126,47 @@ def get_available_snapshots(conn: duckdb.DuckDBPyConnection) -> list[str]:
     return result["snapshot_date"].astype(str).tolist()
 
 
+def fold_is_usable(fold: CVFold, available: set[date]) -> bool:
+    """Will walk_forward_cv actually run this fold, or skip it?
+
+    Mirrors the loop's two ``continue`` branches, using only the set of
+    snapshot dates — no database access needed, because both conditions are
+    properties of the calendar:
+
+    1. the validation window must contain at least one snapshot (the loop's
+       ``val_snap is None`` check);
+    2. the snapshot chosen at each end must have a snapshot exactly
+       TARGET_HORIZON_DAYS later, or build_target returns no rows and the
+       feature matrix comes back empty (the loop's ``X_train_raw.empty or
+       X_val_raw.empty`` check).
+
+    ``train_snap`` is never None in practice — the training window starts at
+    the first snapshot — but it is checked here for the same reason the loop
+    checks it.
+
+    Args:
+        fold:      The candidate fold.
+        available: Every snapshot date present in gold_price_features.
+
+    Returns:
+        True if the fold contributes metrics, False if it would be skipped.
+    """
+    horizon = timedelta(days=TARGET_HORIZON_DAYS)
+
+    train_end = date.fromisoformat(fold.train_end)
+    train_snap = max((d for d in available if d <= train_end), default=None)
+    if train_snap is None or train_snap + horizon not in available:
+        return False
+
+    val_start = date.fromisoformat(fold.val_start)
+    val_end = date.fromisoformat(fold.val_end)
+    val_snaps = [d for d in available if val_start <= d <= val_end]
+    if not val_snaps:
+        return False
+
+    return max(val_snaps) + horizon in available
+
+
 def generate_folds(
     snapshot_dates: list[str],
     min_train_days: int = 30,
@@ -121,16 +190,19 @@ def generate_folds(
         step_days:      Days by which the split point advances per fold.
 
     Returns:
-        List of CVFold objects.
+        List of CVFold objects, containing only the folds walk_forward_cv will
+        actually run (see :func:`fold_is_usable`), re-indexed from 0.
 
     Raises:
-        InsufficientDataError: Fewer than 3 folds can be generated. The error
-            message includes the approximate date when CV will become possible.
+        InsufficientDataError: Fewer than MIN_USABLE_FOLDS *usable* folds. The
+            message reports both counts and the approximate unlock date, so
+            "2 usable out of 13 generated" can never again be reported as 13.
     """
     dates = sorted(snapshot_dates)
     if not dates:
         raise InsufficientDataError("No snapshot dates available.")
 
+    available = {date.fromisoformat(d) for d in dates}
     start = date.fromisoformat(dates[0])
     end = date.fromisoformat(dates[-1])
 
@@ -155,17 +227,26 @@ def generate_folds(
         )
         train_end += timedelta(days=step_days)
 
-    if len(folds) < 3:
-        # Earliest date that would allow 3 folds:
-        # start + (min_train_days-1) + 2*step_days + val_days
-        unlock = start + timedelta(days=min_train_days - 1 + 2 * step_days + val_days)
+    usable = [f for f in folds if fold_is_usable(f, available)]
+
+    if len(usable) < MIN_USABLE_FOLDS:
+        # Earliest date allowing MIN_USABLE_FOLDS usable folds:
+        # start + (min_train_days-1) + 2*step_days + val_days, plus the target
+        # horizon the last fold's validation snapshot still needs a partner for.
+        unlock = start + timedelta(
+            days=min_train_days - 1 + 2 * step_days + val_days + TARGET_HORIZON_DAYS
+        )
         raise InsufficientDataError(
-            f"Only {len(folds)} fold(s) generated (minimum 3 required). "
+            f"Only {len(usable)} usable fold(s) out of {len(folds)} generated "
+            f"(minimum {MIN_USABLE_FOLDS} required). A fold is usable only when "
+            f"its training and validation snapshots each have a snapshot exactly "
+            f"{TARGET_HORIZON_DAYS} days later, which build_target needs. "
             f"Walk-forward CV unlocks at approximately {unlock.isoformat()}. "
-            f"Current data spans {str(start)} to {str(end)}."
+            f"Current data spans {str(start)} to {str(end)} "
+            f"({len(available)} snapshots)."
         )
 
-    return folds
+    return [replace(f, fold_idx=i) for i, f in enumerate(usable)]
 
 
 def walk_forward_cv(
@@ -197,8 +278,10 @@ def walk_forward_cv(
         folds: Walk-forward folds generated by generate_folds(). When None,
                folds are generated automatically from the available snapshots
                using default parameters (min_train_days=30, val_days=7,
-               step_days=7). Raises InsufficientDataError if fewer than 3
-               folds can be generated.
+               step_days=7), and only usable ones are returned — see
+               generate_folds(). Raises InsufficientDataError if fewer than
+               MIN_USABLE_FOLDS are usable. Folds passed in explicitly are run
+               as given; the skip branches below still guard them.
 
     Returns:
         DataFrame with columns: fold_idx, val_snapshot, model, tier, n_cards,
