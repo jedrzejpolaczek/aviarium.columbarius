@@ -177,23 +177,66 @@ def _check_silver_prices_no_negative_eur(
     )
 
 
-def _check_gold_ml_dataset_has_target(con: duckdb.DuckDBPyConnection) -> CheckResult:
-    count: int = con.execute(
-        "SELECT COUNT(*) FROM gold_ml_dataset WHERE target_price_7d IS NOT NULL"
-    ).fetchone()[0]  # type: ignore[index]
-    if count == 0:
+_MAX_TARGET_STALENESS_DAYS = 14
+"""How old the newest target-bearing snapshot may be before it counts as a failure.
+
+Twice the 7-day prediction horizon: the newest snapshot can never have a target
+(its t+7 partner does not exist yet), so roughly one horizon of lag is normal.
+Beyond two, targets have stopped materialising.
+"""
+
+
+def _check_gold_ml_dataset_has_target(
+    con: duckdb.DuckDBPyConnection, today: datetime.date
+) -> CheckResult:
+    """Check that usable training targets exist *and are recent*.
+
+    target_price_7d is NULL by construction for any snapshot whose t+7 partner
+    is missing — always the newest week, plus every snapshot bordering a gap.
+    So the share of NULLs is not a defect signal and a threshold on it would
+    fire constantly; what matters is whether *fresh* targets keep appearing.
+
+    This used to test `COUNT(*) WHERE target_price_7d IS NOT NULL > 0`, which is
+    the same blind spot the Bronze row-count checks had: one usable row from any
+    date in history kept it passing forever, so a Gold layer that had stopped
+    producing targets months ago still reported PASS.
+    """
+    name = "gold_ml_dataset target_price_7d"
+    try:
+        row = con.execute(
+            "SELECT COUNT(*), MAX(snapshot_date) FROM gold_ml_dataset "
+            "WHERE target_price_7d IS NOT NULL"
+        ).fetchone()
+    except duckdb.Error as exc:
+        # Same rationale as the freshness check: a schema surprise becomes one
+        # reported FAIL, not an exception that aborts every remaining check.
+        return CheckResult(name, "gold", "FAIL", f"cannot read gold_ml_dataset: {exc}")
+    count = int(row[0]) if row else 0
+    newest = row[1] if row else None
+    if count == 0 or newest is None:
         return CheckResult(
-            "gold_ml_dataset target_price_7d",
+            name,
             "gold",
             "FAIL",
             "target_price_7d is 100% NULL — no usable training rows",
         )
-    return CheckResult(
-        "gold_ml_dataset target_price_7d",
-        "gold",
-        "PASS",
-        f"{count} rows with non-NULL target_price_7d",
+
+    newest_date = (
+        newest
+        if isinstance(newest, datetime.date)
+        else datetime.date.fromisoformat(str(newest))
     )
+    age = (today - newest_date).days
+    detail = f"{count} rows with a target, newest {newest_date} ({age}d old)"
+    if age > _MAX_TARGET_STALENESS_DAYS:
+        return CheckResult(
+            name,
+            "gold",
+            "FAIL",
+            f"{detail} — no target newer than {_MAX_TARGET_STALENESS_DAYS}d; "
+            "the t+7 joins have stopped producing rows",
+        )
+    return CheckResult(name, "gold", "PASS", detail)
 
 
 def _check_bronze_prices_schema_drift(
@@ -383,7 +426,7 @@ def run_health_checks(
         # Same rationale as the Silver gate above — gold_ml_dataset's target
         # column check assumes the table exists.
         if all(r.status == "PASS" for r in gold_structure):
-            results.append(_check_gold_ml_dataset_has_target(gold_con))
+            results.append(_check_gold_ml_dataset_has_target(gold_con, today))
 
     finally:
         bronze_repo.close()

@@ -237,27 +237,75 @@ class TestCheckSilverPricesNegativeEur:
 
 
 class TestCheckGoldMlDatasetHasTarget:
-    def test_pass_when_some_targets_non_null(self):
+    TODAY = datetime.date(2026, 6, 22)
+
+    def _make(self, rows: list[tuple]) -> duckdb.DuckDBPyConnection:
         con = duckdb.connect(":memory:")
         con.execute(
-            "CREATE TABLE gold_ml_dataset (uuid VARCHAR, target_price_7d FLOAT)"
+            "CREATE TABLE gold_ml_dataset "
+            "(uuid VARCHAR, snapshot_date DATE, target_price_7d FLOAT)"
         )
-        con.execute("INSERT INTO gold_ml_dataset VALUES ('u1', 5.0)")
-        con.execute("INSERT INTO gold_ml_dataset VALUES ('u2', NULL)")
-        result = _check_gold_ml_dataset_has_target(con)
+        for r in rows:
+            con.execute("INSERT INTO gold_ml_dataset VALUES (?, ?, ?)", list(r))
+        return con
+
+    def test_pass_when_recent_targets_exist(self):
+        con = self._make(
+            [
+                ("u1", self.TODAY - datetime.timedelta(days=8), 5.0),
+                ("u2", self.TODAY, None),  # newest week never has a target
+            ]
+        )
+        result = _check_gold_ml_dataset_has_target(con, self.TODAY)
         assert result.status == "PASS"
-        assert "1 rows" in result.detail
+        assert "1 rows with a target" in result.detail
         con.close()
 
     def test_fail_when_all_targets_null(self):
-        con = duckdb.connect(":memory:")
-        con.execute(
-            "CREATE TABLE gold_ml_dataset (uuid VARCHAR, target_price_7d FLOAT)"
-        )
-        con.execute("INSERT INTO gold_ml_dataset VALUES ('u1', NULL)")
-        result = _check_gold_ml_dataset_has_target(con)
+        con = self._make([("u1", self.TODAY, None)])
+        result = _check_gold_ml_dataset_has_target(con, self.TODAY)
         assert result.status == "FAIL"
         assert "100% NULL" in result.detail
+        con.close()
+
+    def test_fail_when_newest_target_is_stale(self):
+        """The blind spot this replaces: one old usable row kept it PASSing.
+
+        Targets stopped materialising months ago, but `COUNT(*) > 0` over the
+        whole table could never see that — the same cumulative-count blindness
+        the Bronze row checks had.
+        """
+        con = self._make(
+            [
+                ("u1", self.TODAY - datetime.timedelta(days=90), 5.0),
+                ("u2", self.TODAY, None),
+            ]
+        )
+        result = _check_gold_ml_dataset_has_target(con, self.TODAY)
+        assert result.status == "FAIL"
+        assert "stopped producing" in result.detail
+        con.close()
+
+    def test_pass_at_the_staleness_boundary(self):
+        """One prediction horizon of lag is normal; two is the limit."""
+        con = self._make([("u1", self.TODAY - datetime.timedelta(days=14), 5.0)])
+        result = _check_gold_ml_dataset_has_target(con, self.TODAY)
+        assert result.status == "PASS"
+        con.close()
+
+    def test_accepts_varchar_snapshot_date(self):
+        """Gold stores snapshot_date as VARCHAR in places — must not crash."""
+        con = duckdb.connect(":memory:")
+        con.execute(
+            "CREATE TABLE gold_ml_dataset "
+            "(uuid VARCHAR, snapshot_date VARCHAR, target_price_7d FLOAT)"
+        )
+        con.execute(
+            "INSERT INTO gold_ml_dataset VALUES ('u1', ?, 5.0)",
+            [(self.TODAY - datetime.timedelta(days=8)).isoformat()],
+        )
+        result = _check_gold_ml_dataset_has_target(con, self.TODAY)
+        assert result.status == "PASS"
         con.close()
 
 
@@ -335,8 +383,13 @@ def _make_all_dbs(tmp_path: Path, today: datetime.date) -> tuple[str, str, str]:
     g.execute("INSERT INTO gold_format_staples VALUES ('x')")
     g.execute("CREATE TABLE gold_tournament_signals (oracle_id VARCHAR)")
     g.execute("INSERT INTO gold_tournament_signals VALUES ('o1')")
-    g.execute("CREATE TABLE gold_ml_dataset (uuid VARCHAR, target_price_7d FLOAT)")
-    g.execute("INSERT INTO gold_ml_dataset VALUES ('u1', 5.0)")
+    # snapshot_date mirrors production: gold_ml_dataset is built from the
+    # gold_price_features spine, so it carries that column through.
+    g.execute(
+        "CREATE TABLE gold_ml_dataset "
+        "(uuid VARCHAR, snapshot_date DATE, target_price_7d FLOAT)"
+    )
+    g.execute("INSERT INTO gold_ml_dataset VALUES ('u1', ?, 5.0)", [today])
     g.close()
 
     return bronze_path, silver_path, gold_path
@@ -363,7 +416,7 @@ class TestRunHealthChecks:
         # Corrupt: gold_ml_dataset has all-NULL targets
         g = duckdb.connect(gold)
         g.execute("DELETE FROM gold_ml_dataset")
-        g.execute("INSERT INTO gold_ml_dataset VALUES ('u1', NULL)")
+        g.execute("INSERT INTO gold_ml_dataset VALUES ('u1', ?, NULL)", [today])
         g.close()
 
         results = run_health_checks(bronze, silver, gold, today)
