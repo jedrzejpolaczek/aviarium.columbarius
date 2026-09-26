@@ -73,7 +73,7 @@ class _EchoModel(mlflow.pyfunc.PythonModel):  # type: ignore[name-defined]
         return model_input
 
 
-def test_rollback_sets_real_alias_to_specified_version(tmp_path):
+def test_rollback_sets_real_alias_to_specified_version(tmp_path, monkeypatch):
     """Exercise rollback() against a real (sqlite-backed) MLflow model registry.
 
     Registers two throwaway versions of the same model name via two runs, then
@@ -81,6 +81,11 @@ def test_rollback_sets_real_alias_to_specified_version(tmp_path):
     at it — catching regressions (e.g. wrong alias name, wrong version format)
     that a fully-mocked MlflowClient would not.
     """
+    # chdir as well as redirecting the tracking URI: a new experiment's
+    # artifact_location is the relative path 'mlruns/<id>', resolved against
+    # the cwd, so without this the two throwaway models land in the project's
+    # real ./mlruns tree.
+    monkeypatch.chdir(tmp_path)
     mlflow.set_tracking_uri(f"sqlite:///{tmp_path / 'mlflow.db'}")
     # mlflow's fluent API caches the active experiment id at module scope, so
     # without re-setting it here, start_run() below could reuse a stale

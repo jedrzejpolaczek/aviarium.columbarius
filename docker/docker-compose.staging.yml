@@ -45,10 +45,11 @@ services:
       # Staging's own Gold copy — deliberately NOT the production file.
       - ../data-staging:/app/data:ro
       # MLflow tracking + artifacts, shared read-only with production.
-      # See README "Tracking DB and artifacts live in different places" for why
-      # this mounts notebooks/ml_models/mlruns and not ./mlruns.
+      # Both live at the project root: mlflow.db stores artifact_location as
+      # the relative path 'mlruns/<id>', resolved against the container's
+      # WORKDIR (/app), so the tree must be mounted at /app/mlruns.
       - ../mlflow.db:/app/mlflow.db:ro
-      - ../notebooks/ml_models/mlruns:/app/mlruns:ro
+      - ../mlruns:/app/mlruns:ro
       # Writable, staging-local: send_alert writes logs/alerts.jsonl here.
       - ../logs-staging:/app/logs
     environment:
