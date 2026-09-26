@@ -115,3 +115,23 @@ def test_send_alert_does_not_raise_when_webhook_request_fails(tmp_path, monkeypa
 
     lines = log_path.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 1  # the durable log still got written
+
+
+def test_send_alert_resolves_default_path_at_call_time(tmp_path, monkeypatch):
+    """Omitting alerts_log_path must follow the current ALERTS_LOG_PATH.
+
+    It used to be a default argument, bound to logs/alerts.jsonl at import
+    time, so no amount of monkeypatching could keep test alerts out of the
+    production log — which is how that file ended up holding 190 records
+    written entirely by pytest.
+    """
+    redirected = tmp_path / "redirected.jsonl"
+    monkeypatch.setattr(alerts, "ALERTS_LOG_PATH", redirected)
+    monkeypatch.setattr(alerts, "_notify_desktop", MagicMock())
+    monkeypatch.delenv("ALERT_WEBHOOK_URL", raising=False)
+
+    alerts.send_alert("Subject", "body")
+
+    lines = redirected.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["subject"] == "Subject"

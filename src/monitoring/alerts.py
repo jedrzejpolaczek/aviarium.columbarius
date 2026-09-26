@@ -44,7 +44,7 @@ def send_alert(
     message: str,
     *,
     severity: str = "error",
-    alerts_log_path: Path = ALERTS_LOG_PATH,
+    alerts_log_path: Path | None = None,
 ) -> None:
     """Record *subject*/*message* as an alert, best-effort notify the desktop,
     and best-effort POST to a configured webhook.
@@ -57,10 +57,21 @@ def send_alert(
         message:         Full alert body (e.g. the exception string).
         severity:        Free-text severity label, stored in the log line.
                           Defaults to "error".
-        alerts_log_path: Where to append the JSON-lines record. Overridable
-                          for tests; defaults to ``logs/alerts.jsonl``.
+        alerts_log_path: Where to append the JSON-lines record. ``None``
+                          resolves to the module-level ``ALERTS_LOG_PATH`` at
+                          call time (not at import time), so the test suite can
+                          redirect it with a single monkeypatch. It has to:
+                          every one of the 190 records this file accumulated up
+                          to 2026-09-25 came from pytest runs writing into the
+                          real logs/alerts.jsonl, which made the one channel
+                          documented as "always succeeds" useless to read.
     """
-    _append_to_log(subject, message, severity, alerts_log_path)
+    _append_to_log(
+        subject,
+        message,
+        severity,
+        ALERTS_LOG_PATH if alerts_log_path is None else alerts_log_path,
+    )
     _notify_desktop(subject, message)
     _notify_webhook(subject, message)
 
