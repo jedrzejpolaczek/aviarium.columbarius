@@ -1,3 +1,4 @@
+import datetime
 import json
 import logging
 from pathlib import Path
@@ -59,7 +60,10 @@ def _make_storage_with_meta_bronze(
     con.execute("""
         CREATE TABLE bronze_scryfall_meta_history (
             id            VARCHAR,
-            snapshot_date VARCHAR,
+            -- DATE, matching production since the 2026-09-26 migration. Declaring
+            -- it VARCHAR here is what let TRIM(snapshot_date) pass the suite and
+            -- then fail the live pipeline with a binder error.
+            snapshot_date DATE,
             legalities    VARCHAR,
             edhrec_rank   DOUBLE,
             reserved      BOOLEAN,
@@ -310,18 +314,26 @@ class TestAppendMetaHistorySql:
             tables = {r[0] for r in s._silver_con.execute("SHOW TABLES").fetchall()}
             assert "silver_meta_history" in tables
 
-    def test_trims_id_and_snapshot_date(self, tmp_path):
+    def test_trims_id_and_passes_snapshot_date_through_as_date(self, tmp_path):
+        """id is still whitespace-trimmed; snapshot_date is not, and must not be.
+
+        Regression guard for the 2026-09-28 pipeline failure: the transform ran
+        TRIM(b.snapshot_date), which DuckDB rejects on a DATE column
+        ("No function matches the given name and argument types 'trim(DATE)'").
+        It survived the suite only because this fixture still declared the
+        column VARCHAR, three days after the migration made it DATE.
+        """
         bronze_path = str(tmp_path / "bronze.duckdb")
         con = duckdb.connect(bronze_path)
         con.execute("""
             CREATE TABLE bronze_scryfall_meta_history (
-                id VARCHAR, snapshot_date VARCHAR, legalities VARCHAR,
+                id VARCHAR, snapshot_date DATE, legalities VARCHAR,
                 edhrec_rank DOUBLE, reserved BOOLEAN, promo_types VARCHAR, finishes VARCHAR
             )
         """)
         con.execute(
             "INSERT INTO bronze_scryfall_meta_history VALUES (?, ?, NULL, NULL, false, '[]', '[]')",
-            ["  abc  ", " 2026-06-20 "],
+            ["  abc  ", datetime.date(2026, 6, 20)],
         )
         con.close()
         config_path = tmp_path / "cfg.json"
@@ -331,14 +343,14 @@ class TestAppendMetaHistorySql:
             row = s._silver_con.execute(
                 "SELECT id, snapshot_date FROM silver_meta_history"
             ).fetchone()
-            assert row == ("abc", "2026-06-20")
+            assert row == ("abc", datetime.date(2026, 6, 20))
 
     def test_casts_edhrec_rank_to_integer(self, tmp_path):
         bronze_path = str(tmp_path / "bronze.duckdb")
         con = duckdb.connect(bronze_path)
         con.execute("""
             CREATE TABLE bronze_scryfall_meta_history (
-                id VARCHAR, snapshot_date VARCHAR, legalities VARCHAR,
+                id VARCHAR, snapshot_date DATE, legalities VARCHAR,
                 edhrec_rank DOUBLE, reserved BOOLEAN, promo_types VARCHAR, finishes VARCHAR
             )
         """)
@@ -361,7 +373,7 @@ class TestAppendMetaHistorySql:
         con = duckdb.connect(bronze_path)
         con.execute("""
             CREATE TABLE bronze_scryfall_meta_history (
-                id VARCHAR, snapshot_date VARCHAR, legalities VARCHAR,
+                id VARCHAR, snapshot_date DATE, legalities VARCHAR,
                 edhrec_rank DOUBLE, reserved BOOLEAN, promo_types VARCHAR, finishes VARCHAR
             )
         """)
@@ -398,7 +410,7 @@ class TestAppendMetaHistorySql:
         con = duckdb.connect(bronze_path)
         con.execute("""
             CREATE TABLE bronze_scryfall_meta_history (
-                id VARCHAR, snapshot_date VARCHAR, legalities VARCHAR,
+                id VARCHAR, snapshot_date DATE, legalities VARCHAR,
                 edhrec_rank DOUBLE, reserved BOOLEAN, promo_types VARCHAR, finishes VARCHAR
             )
         """)

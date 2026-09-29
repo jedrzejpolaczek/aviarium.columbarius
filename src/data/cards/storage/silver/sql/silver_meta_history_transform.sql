@@ -4,7 +4,9 @@
 -- the calling code in silver/storage.py for what it's conditioned on).
 SELECT
     TRIM(b.id)            AS id,
-    TRIM(b.snapshot_date) AS snapshot_date,
+    -- Not TRIM()ed: snapshot_date is DATE since the 2026-09-26 migration, and
+    -- trim() only accepts VARCHAR. A DATE needs no whitespace cleaning anyway.
+    b.snapshot_date       AS snapshot_date,
     b.legalities,
     TRY_CAST(b.edhrec_rank AS INTEGER)   AS edhrec_rank,
     COALESCE(b.reserved::BOOLEAN, false)  AS is_reserved,
