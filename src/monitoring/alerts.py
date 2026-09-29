@@ -93,11 +93,34 @@ def _append_to_log(
         logger.error("Could not write alert to %s: %s", alerts_log_path, exc)
 
 
+# Windows NOTIFYICONDATAW caps szInfo at 256 wide chars and szInfoTitle at 64,
+# and plyer passes the strings through without checking. Anything longer raises
+# ValueError inside the balloon-tip *thread* plyer spawns, where the try/except
+# below cannot reach it — it surfaces as an unhandled "Exception in thread"
+# traceback and no notification at all. Alert bodies grew past this the moment
+# they started carrying real detail (a DuckDB binder error runs to 315 chars).
+_DESKTOP_TITLE_LIMIT = 60
+_DESKTOP_MESSAGE_LIMIT = 250
+
+
+def _truncate(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 def _notify_desktop(subject: str, message: str) -> None:
+    """Best-effort desktop notification.
+
+    Truncates to what the OS will accept; the untruncated text is already in
+    logs/alerts.jsonl and, if configured, in the webhook payload.
+    """
     try:
         from plyer import notification
 
-        notification.notify(title=subject, message=message, timeout=10)
+        notification.notify(
+            title=_truncate(subject, _DESKTOP_TITLE_LIMIT),
+            message=_truncate(message, _DESKTOP_MESSAGE_LIMIT),
+            timeout=10,
+        )
     except Exception as exc:
         logger.warning("Desktop notification failed (non-fatal): %s", exc)
 
