@@ -57,16 +57,29 @@ _TIER_KEYS = (
 )
 
 
-def find_varchar_date_columns(
+def find_mistyped_date_columns(
     con: duckdb.DuckDBPyConnection,
-) -> list[tuple[str, str]]:
-    """Return (table, column) pairs still typed VARCHAR that should be DATE."""
-    found: list[tuple[str, str]] = []
+) -> list[tuple[str, str, str]]:
+    """Return (table, column, current_type) for date columns that are not DATE.
+
+    Two wrong types occur in practice, from two different routes:
+
+    - ``VARCHAR`` — the original state before this migration, from ingestion
+      handing DuckDB ISO strings.
+    - ``TIMESTAMP`` — what a *rebuild* produced afterwards. DuckDB returns a
+      DATE column to pandas as datetime64[ns], and writing that back widens it
+      to TIMESTAMP. The Gold layer is dropped and recreated on every run, so it
+      regressed this way on 2026-09-29 while Bronze and Silver stayed DATE.
+
+    Anything other than DATE on these columns is reported, so a third route
+    would be caught too rather than silently skipped.
+    """
+    found: list[tuple[str, str, str]] = []
     tables = [r[0] for r in con.execute("SHOW TABLES").fetchall()]
     for table in tables:
         for name, dtype, *_ in con.execute(f"DESCRIBE {table}").fetchall():
-            if name in _DATE_COLUMNS and dtype == "VARCHAR":
-                found.append((table, name))
+            if name in _DATE_COLUMNS and dtype != "DATE":
+                found.append((table, name, dtype))
     return found
 
 
@@ -92,12 +105,12 @@ def migrate_file(path: str, dry_run: bool) -> int:
     con = duckdb.connect(path, read_only=dry_run)
     changed = 0
     try:
-        targets = find_varchar_date_columns(con)
+        targets = find_mistyped_date_columns(con)
         if not targets:
             logger.info("%s — nothing to migrate", path)
             return 0
 
-        for table, column in targets:
+        for table, column, dtype in targets:
             bad = unparseable_values(con, table, column)
             if bad:
                 raise ValueError(
@@ -105,14 +118,20 @@ def migrate_file(path: str, dry_run: bool) -> int:
                     "parse as DATE — refusing to migrate. Inspect them first."
                 )
             if dry_run:
-                logger.info("[dry-run] would ALTER %s.%s VARCHAR → DATE", table, column)
+                logger.info(
+                    "[dry-run] would ALTER %s.%s %s → DATE", table, column, dtype
+                )
                 changed += 1
                 continue
 
             t0 = time.perf_counter()
             con.execute(f"ALTER TABLE {table} ALTER COLUMN {column} TYPE DATE")
             logger.info(
-                "ALTERed %s.%s → DATE in %.1fs", table, column, time.perf_counter() - t0
+                "ALTERed %s.%s %s → DATE in %.1fs",
+                table,
+                column,
+                dtype,
+                time.perf_counter() - t0,
             )
             changed += 1
     finally:
