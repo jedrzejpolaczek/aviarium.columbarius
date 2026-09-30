@@ -48,8 +48,8 @@ def test_main_calls_retrain_with_latest_trainable_snapshot(tmp_path, monkeypatch
     con.execute("""
         CREATE TABLE gold_price_features AS
         SELECT * FROM (VALUES
-            ('uuid-1', '2026-06-01', 1.5),
-            ('uuid-1', '2026-06-08', 1.8)
+            ('uuid-1', DATE '2026-06-01', 1.5),
+            ('uuid-1', DATE '2026-06-08', 1.8)
         ) AS t(uuid, snapshot_date, eur)
     """)
     con.close()

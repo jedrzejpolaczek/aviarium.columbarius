@@ -13,6 +13,93 @@ from unittest.mock import MagicMock
 import duckdb
 import pytest
 
+from src.data.cards.storage.schema import find_mistyped_date_columns
+
+_DUCKDB_CONNECTIONS = pytest.StashKey[list[tuple[duckdb.DuckDBPyConnection, str]]]()
+_REAL_DUCKDB_CONNECT = duckdb.connect
+
+
+@pytest.fixture(autouse=True)
+def _track_duckdb_connections(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Record every DuckDB connection opened during a test, by fixtures or code.
+
+    Feeds the schema guard in :func:`pytest_runtest_call` below. Production
+    code and tests both call ``duckdb.connect`` through the module attribute,
+    so replacing it here sees every connection without changing either.
+    """
+    connections: list[tuple[duckdb.DuckDBPyConnection, str]] = []
+
+    def tracking_connect(*args: object, **kwargs: object) -> duckdb.DuckDBPyConnection:
+        con = _REAL_DUCKDB_CONNECT(*args, **kwargs)  # type: ignore[arg-type]
+        database = args[0] if args else kwargs.get("database", ":memory:")
+        connections.append((con, str(database)))
+        return con
+
+    monkeypatch.setattr(duckdb, "connect", tracking_connect)
+    request.node.stash[_DUCKDB_CONNECTIONS] = connections
+
+
+def _mistyped_date_columns(
+    con: duckdb.DuckDBPyConnection, database: str
+) -> list[tuple[str, str, str]]:
+    """Inspect one tracked connection, reopening its file if it was closed."""
+    try:
+        return find_mistyped_date_columns(con, include_attached=True)
+    except duckdb.Error:
+        pass  # closed by the test — fall back to the file, if there is one
+    if database in ("", ":memory:") or not Path(database).is_file():
+        return []
+    try:
+        reopened = _REAL_DUCKDB_CONNECT(database, read_only=True)
+    except duckdb.Error:
+        return []  # still held open elsewhere; that connection was inspected
+    try:
+        return [
+            (f"{Path(database).name}:{t}", c, d)
+            for t, c, d in find_mistyped_date_columns(reopened)
+        ]
+    finally:
+        reopened.close()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item: pytest.Item) -> object:
+    """Fail a passing test whose DuckDB tables break the production date schema.
+
+    Runs right after the test body. Connections still open are inspected
+    directly; file databases whose connection the test already closed (a
+    ``with GoldStorage(...)`` block, a seeding helper) are reopened read-only.
+    Every ``snapshot_date`` / ``tournament_date`` column in any table the
+    test (or the code under test) created must be DATE — the invariant in
+    ``src/data/cards/storage/schema.py``.
+
+    Why a guard and not a convention: on 2026-09-28 the Silver tests declared
+    ``snapshot_date VARCHAR`` long after production had moved to DATE, so they
+    kept passing against a schema that no longer existed while the real run
+    died on ``TRIM(DATE)``. The same check catches production code that writes
+    the wrong type, as the 2026-09-29 Gold rebuild did with TIMESTAMP.
+
+    Tests that need a legacy schema on purpose (e.g. tolerating a pre-0.2.0
+    database) opt out with ``@pytest.mark.legacy_date_schema``.
+    """
+    result = yield
+    if item.get_closest_marker("legacy_date_schema"):
+        return result
+    problems: set[tuple[str, str, str]] = set()
+    for con, database in item.stash.get(_DUCKDB_CONNECTIONS, []):
+        problems.update(_mistyped_date_columns(con, database))
+    if problems:
+        listed = ", ".join(f"{t}.{c} is {d}" for t, c, d in sorted(problems))
+        pytest.fail(
+            f"Date columns must be DATE as in production: {listed}. "
+            "Build fixture tables with DuckDBWriter or cast with ::DATE; mark "
+            "@pytest.mark.legacy_date_schema only for deliberate legacy schemas.",
+            pytrace=False,
+        )
+    return result
+
 
 @pytest.fixture(autouse=True)
 def _no_real_log_files(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -69,10 +156,10 @@ def tiny_gold_conn():
     con.execute("""
         CREATE TABLE gold_price_features AS
         SELECT * FROM (VALUES
-            ('uuid-1', '2026-06-01', 1.5, 100.0, NULL),
-            ('uuid-1', '2026-06-08', 1.8, 100.0, NULL),
-            ('uuid-2', '2026-06-01', 0.3, 200.0, NULL),
-            ('uuid-2', '2026-06-08', 0.4, 200.0, NULL)
+            ('uuid-1', DATE '2026-06-01', 1.5, 100.0, NULL),
+            ('uuid-1', DATE '2026-06-08', 1.8, 100.0, NULL),
+            ('uuid-2', DATE '2026-06-01', 0.3, 200.0, NULL),
+            ('uuid-2', DATE '2026-06-08', 0.4, 200.0, NULL)
         ) AS t(uuid, snapshot_date, eur, edhrec_rank, foil_premium)
     """)
     # edhrec_saltiness is required here (not in gold_price_features) because

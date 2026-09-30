@@ -40,47 +40,16 @@ from pathlib import Path
 import duckdb
 
 from src.data.cards.pipelines import load_config
+from src.data.cards.storage.schema import find_mistyped_date_columns
 from src.logger import get_logger, setup_logging
 
 logger = get_logger(__name__)
-
-# (tier config key, column name) → every table carrying a date-typed column.
-# Discovered by inspection rather than hard-coded blindly: the script re-checks
-# each table's current type and skips anything already migrated, so re-running
-# it is a no-op.
-_DATE_COLUMNS = ("snapshot_date", "tournament_date")
 
 _TIER_KEYS = (
     "bronze_duckdb_path",
     "silver_duckdb_path",
     "gold_duckdb_path",
 )
-
-
-def find_mistyped_date_columns(
-    con: duckdb.DuckDBPyConnection,
-) -> list[tuple[str, str, str]]:
-    """Return (table, column, current_type) for date columns that are not DATE.
-
-    Two wrong types occur in practice, from two different routes:
-
-    - ``VARCHAR`` — the original state before this migration, from ingestion
-      handing DuckDB ISO strings.
-    - ``TIMESTAMP`` — what a *rebuild* produced afterwards. DuckDB returns a
-      DATE column to pandas as datetime64[ns], and writing that back widens it
-      to TIMESTAMP. The Gold layer is dropped and recreated on every run, so it
-      regressed this way on 2026-09-29 while Bronze and Silver stayed DATE.
-
-    Anything other than DATE on these columns is reported, so a third route
-    would be caught too rather than silently skipped.
-    """
-    found: list[tuple[str, str, str]] = []
-    tables = [r[0] for r in con.execute("SHOW TABLES").fetchall()]
-    for table in tables:
-        for name, dtype, *_ in con.execute(f"DESCRIBE {table}").fetchall():
-            if name in _DATE_COLUMNS and dtype != "DATE":
-                found.append((table, name, dtype))
-    return found
 
 
 def unparseable_values(con: duckdb.DuckDBPyConnection, table: str, column: str) -> int:

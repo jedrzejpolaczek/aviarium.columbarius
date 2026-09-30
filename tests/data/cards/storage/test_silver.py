@@ -7,6 +7,8 @@ import duckdb
 import pandas as pd
 import pytest
 
+from tests.duckdb_helpers import create_table_from_df
+
 from src.data.cards.storage.silver import SilverStorage
 from src.data.cards.storage.base.writers import DuckDBWriter as SilverWriter
 from src.data.cards.storage.errors import StorageWriteError
@@ -548,9 +550,7 @@ def _make_storage_with_bronze(
 
     con = duckdb.connect(bronze_path)
     for table_name, df in bronze_tables.items():
-        con.register("_df", df)
-        con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM _df")
-        con.unregister("_df")
+        create_table_from_df(con, table_name, df)
     con.close()
 
     return SilverStorage(bronze_path, ":memory:", str(config_path))
@@ -725,7 +725,7 @@ class TestSilverPriceBuilder:
             result = s._prices.build("2026-05-11")
 
             assert len(result) == 1
-            assert result.iloc[0]["snapshot_date"] == "2026-05-11"
+            assert result.iloc[0]["snapshot_date"] == pd.Timestamp("2026-05-11")
 
     def test_english_card_with_stale_scryfall_id_uses_canonical_uuid(self, tmp_path):
         # Simulate an English paper card where MTGJson holds a stale scryfall_id:
@@ -804,12 +804,12 @@ def _make_price_df(rows: list[dict]) -> pd.DataFrame:
 
 def _seed_silver_prices_history(storage: SilverStorage, rows: list[dict]) -> None:
     """Insert rows into silver_prices_history to simulate prior-day snapshots."""
-    df = _make_price_df(rows)
-    storage._silver_con.register("_ph", df)
-    storage._silver_con.execute(
-        "CREATE TABLE IF NOT EXISTS silver_prices_history AS SELECT * FROM _ph"
+    create_table_from_df(
+        storage._silver_con,
+        "silver_prices_history",
+        _make_price_df(rows),
+        if_not_exists=True,
     )
-    storage._silver_con.unregister("_ph")
 
 
 class TestFillPriceHistory:

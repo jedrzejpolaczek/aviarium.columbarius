@@ -5,6 +5,7 @@ import json
 import duckdb
 import pandas as pd
 from src.data.cards.storage.errors import StorageWriteError
+from src.data.cards.storage.schema import DATE_COLUMNS
 
 from src.logger import get_logger
 
@@ -28,8 +29,8 @@ class DuckDBWriter:
     def __init__(self, con: duckdb.DuckDBPyConnection) -> None:
         self._con = con
 
-    DATE_COLUMNS = ("snapshot_date", "tournament_date")
-    """Columns that must land as DATE, never VARCHAR.
+    DATE_COLUMNS = DATE_COLUMNS
+    """Columns that must land as DATE, never VARCHAR (see ``storage/schema.py``).
 
     Every one of these was VARCHAR in all three tiers until the 2026-09-26
     migration, because the ingestion side hands DuckDB ISO strings and

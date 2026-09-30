@@ -7,6 +7,8 @@ import duckdb
 import pandas as pd
 import pytest
 
+from tests.duckdb_helpers import create_table_from_df
+
 from src.data.cards.storage.gold import GoldStorage
 from src.data.cards.storage.gold.ml_dataset import GoldMLDatasetBuilder
 from src.data.cards.storage.base.writers import DuckDBWriter as GoldWriter
@@ -19,9 +21,7 @@ def _make_gold_storage(
     silver_path = str(tmp_path / "silver.duckdb")
     con = duckdb.connect(silver_path)
     for table_name, df in silver_tables.items():
-        con.register("_df", df)
-        con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM _df")
-        con.unregister("_df")
+        create_table_from_df(con, table_name, df)
     con.close()
 
     return GoldStorage(silver_path, ":memory:")
@@ -744,7 +744,7 @@ class TestBuildEvents:
             result = g._signals.build_events()
         assert len(result) == 1
         row = result.iloc[0]
-        assert row["event_date"] == "2026-05-02"
+        assert row["event_date"] == pd.Timestamp("2026-05-02")
         assert row["format"] == "modern"
         assert row["event_type"] == "ban"
         assert row["card_count"] == 1
@@ -932,7 +932,7 @@ class TestBuildBanPriceImpact:
         assert row["scryfall_id"] == "s1"
         assert row["format"] == "commander"
         assert row["event_type"] == "ban"
-        assert row["event_date"] == "2026-05-02"
+        assert row["event_date"] == pd.Timestamp("2026-05-02")
 
     def test_detects_unban_event(self, tmp_path):
         meta = _make_meta_history(
@@ -2073,9 +2073,7 @@ def _build_ml(gold_tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
     """Run build_ml_dataset against an in-memory Gold DB pre-loaded with gold_tables."""
     con = duckdb.connect(":memory:")
     for name, df in gold_tables.items():
-        con.register("_df", df)
-        con.execute(f"CREATE TABLE {name} AS SELECT * FROM _df")
-        con.unregister("_df")
+        create_table_from_df(con, name, df)
     result = GoldMLDatasetBuilder(con).build_ml_dataset()
     con.close()
     return result
