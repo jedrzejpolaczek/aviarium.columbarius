@@ -10,6 +10,10 @@ uv run ruff check .
 echo ">>> [pre-push] ruff format --check..."
 uv run ruff format --check .
 
+echo ">>> [pre-push] doc paths + notebook paths..."
+uv run python -m scripts.check_doc_paths
+uv run python -m scripts.strip_notebook_paths --check
+
 echo ">>> [pre-push] mypy..."
 uv run mypy .
 

@@ -1,4 +1,4 @@
-.PHONY: install install-hooks lint format format-check type-check test coverage check pipeline train monitor backup
+.PHONY: install install-hooks lint format format-check type-check test coverage docs-check check pipeline train monitor backup
 
 install:
 	uv sync --all-groups
@@ -26,7 +26,11 @@ test:
 coverage:
 	uv run pytest --cov=src --cov=app --cov-report=term-missing
 
-check: lint format-check type-check test
+docs-check:
+	uv run python -m scripts.check_doc_paths
+	uv run python -m scripts.strip_notebook_paths --check
+
+check: lint format-check type-check docs-check test
 
 pipeline:
 	uv run python -m scripts.run_pipeline
