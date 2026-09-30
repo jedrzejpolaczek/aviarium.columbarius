@@ -1,8 +1,8 @@
 """Unit tests for src/monitoring/retraining.py.
 
 MLflow-dependent functions (retrain, promote_to_production, _compare_and_promote)
-are tested with mocked MLflow clients.  should_retrain is tested by mocking
-the underlying monitoring functions it calls.
+are tested with mocked MLflow clients. should_retrain runs on a real DuckDB
+for the ban path and on real skill frames for the degradation path.
 """
 
 from datetime import date
@@ -30,18 +30,11 @@ from src.monitoring.retraining import (
 
 @pytest.fixture
 def conn_no_events():
-    """DuckDB with empty gold_events and gold_predictions/gold_price_features."""
+    """DuckDB with empty gold_events and gold_price_features."""
     con = duckdb.connect()
     con.execute("""
         CREATE TABLE gold_events (
             event_date DATE, format VARCHAR, event_type VARCHAR, card_name VARCHAR
-        )
-    """)
-    con.execute("""
-        CREATE TABLE gold_predictions (
-            uuid VARCHAR, snapshot_date DATE,
-            predicted_eur DOUBLE, model_run_id VARCHAR,
-            created_at TIMESTAMP
         )
     """)
     con.execute("""
@@ -86,63 +79,48 @@ def test_should_retrain_ban_event_reason_is_ban_event(conn_with_ban_event):
 
 
 # ---------------------------------------------------------------------------
-# should_retrain — MAPE threshold path
+# should_retrain — model-worse-than-naive path (ADR-034)
 # ---------------------------------------------------------------------------
 
 
-def test_should_retrain_mape_alert_triggers_retrain(conn_no_events):
-    mape_df = pd.DataFrame({"mape": [35.0, 38.0, 40.0]})
-    with (
-        patch("src.monitoring.retraining.compute_rolling_mape", return_value=mape_df),
-        patch("src.monitoring.retraining.is_mape_alert", return_value=True),
-    ):
-        retrain_flag, reason = should_retrain(conn_no_events)
+def _skill(*values):
+    return pd.DataFrame(
+        {
+            "snapshot_date": pd.date_range("2026-10-01", periods=len(values)),
+            "skill": list(values),
+        }
+    )
+
+
+def test_should_retrain_when_model_worse_than_naive_three_dates_running(
+    conn_no_events,
+):
+    retrain_flag, reason = should_retrain(conn_no_events, _skill(-0.2, -0.1, -0.08))
     assert retrain_flag is True
-    assert reason == "mape_threshold"
+    assert reason == "model_worse_than_naive"
 
 
-# ---------------------------------------------------------------------------
-# should_retrain — no trigger path
-# ---------------------------------------------------------------------------
-
-
-def test_should_retrain_no_trigger_when_both_false(conn_no_events):
-    mape_df = pd.DataFrame({"mape": [5.0, 6.0, 7.0]})
-    with (
-        patch("src.monitoring.retraining.compute_rolling_mape", return_value=mape_df),
-        patch("src.monitoring.retraining.is_mape_alert", return_value=False),
-    ):
-        retrain_flag, reason = should_retrain(conn_no_events)
+def test_should_retrain_ignores_small_losses_within_normal_noise(conn_no_events):
+    # Calibration: normal weeks sit within -0.9% .. +0.8% of naive.
+    retrain_flag, reason = should_retrain(conn_no_events, _skill(-0.01, -0.02, -0.009))
     assert retrain_flag is False
     assert reason == "no_trigger"
 
 
-def test_should_retrain_no_trigger_reason_is_string(conn_no_events):
-    mape_df = pd.DataFrame({"mape": []})
-    with (
-        patch("src.monitoring.retraining.compute_rolling_mape", return_value=mape_df),
-        patch("src.monitoring.retraining.is_mape_alert", return_value=False),
-    ):
-        _, reason = should_retrain(conn_no_events)
-    assert isinstance(reason, str)
+def test_should_retrain_no_trigger_without_skill_data(conn_no_events):
+    assert should_retrain(conn_no_events) == (False, "no_trigger")
+    assert should_retrain(conn_no_events, pd.DataFrame()) == (False, "no_trigger")
 
 
-def test_should_retrain_ban_takes_priority_over_mape(conn_with_ban_event):
-    # Even if MAPE would NOT trigger, ban event should take priority
-    mape_df = pd.DataFrame({"mape": [5.0, 5.0, 5.0]})
-    with (
-        patch("src.monitoring.retraining.compute_rolling_mape", return_value=mape_df),
-        patch("src.monitoring.retraining.is_mape_alert", return_value=False),
-    ):
-        _, reason = should_retrain(conn_with_ban_event)
+def test_should_retrain_ban_takes_priority_over_skill(conn_with_ban_event):
+    _, reason = should_retrain(conn_with_ban_event, _skill(-0.3, -0.3, -0.3))
     assert reason == "ban_event"
 
 
-def test_should_retrain_skips_mape_check_when_ban_detected(conn_with_ban_event):
-    # is_mape_alert should never be called when ban event is found
-    with patch("src.monitoring.retraining.is_mape_alert") as mock_mape:
-        should_retrain(conn_with_ban_event)
-    mock_mape.assert_not_called()
+def test_should_retrain_skips_skill_check_when_ban_detected(conn_with_ban_event):
+    with patch("src.monitoring.retraining.is_degraded") as mock_degraded:
+        should_retrain(conn_with_ban_event, _skill(-0.3, -0.3, -0.3))
+    mock_degraded.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

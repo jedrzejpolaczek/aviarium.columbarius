@@ -192,14 +192,26 @@ unblocks automatic promotion.
    were missed — the message names both counts and the unlock date.
 2. Run the retrain so CV results are logged (`log_cv_results` writes
    `cv_mae_tier{n}` / `cv_mape_tier{n}`):
-   `uv run python -m scripts.check_and_retrain`
+   `uv run python -m scripts.train_model`
+   (Not `check_and_retrain`: that script retrains only when a ban/unban or
+   model-worse-than-naive trigger fires, and otherwise exits with `no_retrain`. `train_model` calls the
+   same `retrain()` unconditionally — CV, final model, MLflow logging and the
+   promotion comparison.)
 3. **Expect it to refuse to promote, once.** The incumbent (version 3, run
    `9c1ec7de…`) predates CV and carries no `cv_mape_tier1`, so
    `_compare_and_promote` logs *"Production run … has no 'cv_mape_tier1'
    metric — cannot compare, refusing to promote"* and stops. That is the guard
    working, not a fault. Promote the new run by hand after checking its
-   numbers: `uv run python -m scripts.rollback_model --version <new_version>`,
-   then `POST /admin/reload-model` (see §2 step 3).
+   numbers. The refused run was never registered, so `rollback_model` (which
+   only re-points the alias at an *existing* version) cannot do it; register
+   and alias it in one step instead:
+   ```bash
+   uv run python -c "from src.ml.training.tracking import setup_experiment; \
+   from src.monitoring.retraining import promote_to_production; \
+   setup_experiment(); promote_to_production('<new_run_id>')"
+   ```
+   Then point the API at it: set `MODEL_RUN_ID` in `docker/.env` and restart,
+   or `POST /admin/reload-model` (see §2 step 3).
 4. From that point the incumbent has a comparable metric and automatic
    promotion works unattended.
 5. Update README "Measured results" and `ML_FINDINGS.md` T6/T8 with the
@@ -231,6 +243,75 @@ automatically, so a failed run never leaves a corrupt backup behind).
    `/predict` or retraining — but should be fixed before the next scheduled
    run so backup coverage doesn't have a gap.
 
+## 6. Alert: "Model worse than naive"
+
+**Symptom:** `check_and_retrain.py` alerted that the served model scored below
+−5% against the naive "no change" forecast on the last 3 evaluated prediction
+dates. `logs/last_check_status.json` shows `"reason": "model_worse_than_naive"`
+and `monitoring.skill_latest` (ADR-034).
+
+**What it means:** predicting "every price stays where it is" would have been
+more accurate than the model for three weeks' worth of predictions. Normal
+weeks sit within about ±1% of naive, so −5% is not noise.
+
+**What already happened automatically:** a retrain ran in the same job.
+`_compare_and_promote` promoted the new model only if its `cv_mape_tier1` was
+not worse. Otherwise the incumbent is still served.
+
+**Fix:**
+1. Check for a data incident first. A price-return drift alert (§6b) or a
+   degraded pipeline (§4b) in the same week usually explains it, and a retrain
+   on bad data will not help.
+2. Look at the scored dates:
+   ```bash
+   uv run python -c "
+   import duckdb
+   from src.monitoring.prediction_tracker import MONITORING_DB_PATH, daily_skill
+   mon = duckdb.connect(MONITORING_DB_PATH, read_only=True)
+   gold = duckdb.connect('data/gold/cards.duckdb', read_only=True)
+   print(daily_skill(mon, gold).tail(10))"
+   ```
+3. If the retrained model was promoted, point the API at it (§2 step 3) and
+   watch the next evaluated dates.
+4. If no model beats naive, that is a finding about the problem, not an
+   outage. Decide whether `/predict` should keep serving model output; see the
+   README "Measured results".
+
+## 6b. Alert: "Price-return drift"
+
+**Symptom:** the distribution of 7-day price returns over the latest matured
+week differs from the four weeks before it (normalised Wasserstein distance
+above 0.15). `monitoring.drift_score` is in the status file.
+
+**What it means:** prices are moving differently from how they moved last
+month. The July 2026 price-feed switch scored 1.59; normal weeks score
+0.03–0.08. This is an early warning only and does not trigger a retrain.
+
+**Fix:**
+1. Rule out the feed first: compare today's Bronze prices with Scryfall for a
+   few cards, and check §4b for source failures in the window named in the
+   alert.
+2. If the feed changed (new source, new currency, a backfill), treat the
+   affected dates as suspect. Do not retrain across them; a model trained on
+   that week is the case §6 exists for.
+3. If the market genuinely moved (a set release, a ban wave), no action is
+   needed. The skill check will show whether the model coped.
+
+## 6c. Alert: "Monitoring step failed: …"
+
+**Symptom:** one of the daily monitoring steps (`record predictions`,
+`return drift`) raised. It is listed under `monitoring.errors` in
+`logs/last_check_status.json`. The retrain decision and the heartbeat still ran.
+
+**Common causes:** MLflow could not load the served model (a wrong
+`MODEL_RUN_ID`, or artifacts missing from `mlruns/`); the monitoring DB is locked
+by another process; Gold was mid-rebuild.
+
+**Fix:** read the alert text, fix the cause, and rerun
+`uv run python -m scripts.check_and_retrain`. A missed day only delays scoring
+by a day: predictions for that date are never recorded, and the skill check
+works on the dates that were.
+
 ## Alerting
 
 `scripts/run_pipeline.py`, `scripts/check_and_retrain.py`,
@@ -248,9 +329,9 @@ API container's alerts land in the same `logs/alerts.jsonl` on the host
 as the scheduled scripts' — check there first, container logs second
 (the desktop notification itself never fires inside a headless container).
 Set `HEARTBEAT_URL` (a healthchecks.io-style ping URL) to detect the
-scheduled task silently not running at all — `check_and_retrain.py` pings
-it on every run, success or failure, so a missing ping (not just a
-`result: error` status) is itself the alert.
+scheduled task silently not running at all — `run_pipeline.py` and
+`check_and_retrain.py` ping it on every run, success or failure, so a missing
+ping (not just a `result: error` status) is itself the alert.
 
 Set `ALERT_WEBHOOK_URL` to a Slack/Discord/Mattermost-compatible incoming
 webhook URL to also get every `send_alert` call posted there — this is the

@@ -1,114 +1,131 @@
-"""Detects distribution drift in card prices using Evidently.
+"""Detects a shift in how card prices *move*, as an early warning (ADR-034).
 
-Why drift monitoring:
-    Format bans (e.g. a card banned in Modern) can shift the EUR price
-    distribution within 24 hours — cards drop 50–90%.  A model trained on
-    pre-ban data has no knowledge of this regime change.  Drift detection
-    is the safety net that flags "the world changed, retrain before the
-    MAPE alarm fires three days later."
+What is compared, and why not prices:
+    The previous version compared the distribution of price *levels* across
+    the whole catalogue. That distribution is dominated by ~60 000 sub-€1
+    cards and barely moves in months: on real history the drift score stayed
+    at 0.001–0.010 against a 0.1 threshold even across the July 2026
+    price-feed switch, the biggest data shock the project has had. A ban moves
+    a handful of cards out of ~80 000 and is invisible to it.
 
-Comparison window:
-    ``reference`` = previous 30 days (stable baseline distribution)
-    ``current``   = last 7 days (what the model is currently seeing)
+    This version compares the distribution of 7-day log returns — the quantity
+    the model predicts. Measured on the same history, normal weeks score
+    0.02–0.03 and the feed-switch week scores 0.34–0.42.
 
-    Evidently computes per-column statistical tests (KS test for continuous
-    features, Jensen-Shannon divergence) and reports an overall ``dataset_drift``
-    boolean when enough columns drift simultaneously.
+Statistic:
+    Wasserstein distance between the reference and current return
+    distributions, divided by the reference standard deviation. It is the
+    statistic Evidently used for large samples, computed directly with numpy so
+    the check no longer depends on Evidently's API.
 
-Dependency:
-    Requires ``evidently>=0.4.0`` (``uv add evidently``).
-    Only imported inside :func:`compute_drift_report` so the rest of the module
-    loads without evidently installed (useful for non-drift monitoring paths).
+    Default windows: current = returns *starting* in the last 7 days whose
+    t+7 end has been collected; reference = the 28 days before that.
+
+Drift only raises an alert. It is not a retrain trigger: a changed market
+does not make the model wrong by itself, and the skill check in
+``prediction_tracker`` measures whether it did.
 """
 
-from typing import Any
+from dataclasses import dataclass
+from datetime import date, timedelta
 
 import duckdb
+import numpy as np
 import pandas as pd
 
+DRIFT_THRESHOLD = 0.15
+"""Calibrated on 2026-06..09 history, scoring every snapshot date.
 
-def fetch_prices_for_period(
-    conn: duckdb.DuckDBPyConnection,
-    start_date: str,
-    end_date: str,
-) -> pd.DataFrame:
-    """Return EUR prices and their log transform for a date range.
-
-    ``log_eur`` is computed in SQL as ``LN(1 + eur)`` to avoid a round-trip
-    through Python and to keep NULLs intact (NULL eur → NULL log_eur).
-
-    Args:
-        conn:       Open DuckDB connection with ``gold_price_features`` in scope.
-        start_date: Start of the period (inclusive), ISO format ``'YYYY-MM-DD'``.
-        end_date:   End of the period (inclusive), ISO format ``'YYYY-MM-DD'``.
-
-    Returns:
-        DataFrame with columns ``uuid`` (VARCHAR), ``eur`` (DOUBLE),
-        ``log_eur`` (DOUBLE), ``snapshot_date`` (DATE).
-        May be empty if no data exists in the given range.
-    """
-    return conn.execute(
-        """
-        SELECT
-            uuid,
-            eur,
-            CASE WHEN eur IS NOT NULL THEN LN(1 + eur) END AS log_eur,
-            snapshot_date
-        FROM gold_price_features
-        WHERE snapshot_date BETWEEN ? AND ?
-        """,
-        [start_date, end_date],
-    ).df()
+Normal September weeks scored 0.027-0.076, with a single 0.103 on 2026-09-28.
+The July price-feed switch scored 1.59, 0.80 and 0.69 on the first days it
+entered the current window, and stayed above 0.16 for the next week.
+Evidently's default of 0.1 would have fired on that September outlier."""
+CURRENT_DAYS = 7
+REFERENCE_DAYS = 28
+HORIZON_DAYS = 7
 
 
-def compute_drift_report(
-    reference: pd.DataFrame, current: pd.DataFrame
-) -> dict[str, Any]:
-    """Build an Evidently data-drift report and return the result as a dict.
+@dataclass(frozen=True)
+class DriftResult:
+    score: float
+    drifted: bool
+    reference_n: int
+    current_n: int
+    current_start: str
+    current_end: str
 
-    Compares the ``eur`` and ``log_eur`` column distributions between the
-    reference period (30 days) and the current period (7 days).  Evidently
-    runs per-column statistical tests and produces an overall drift verdict.
 
-    Args:
-        reference: Historical price DataFrame (``eur``, ``log_eur`` columns
-                   required).  Typically covers the previous 30 days.
-        current:   Recent price DataFrame (same schema).  Typically covers
-                   the last 7 days.
-
-    Returns:
-        Evidently ``report.as_dict()`` — a nested dict whose first element
-        is the ``DatasetDriftMetric`` result.  Pass this directly to
-        :func:`is_drift_detected`.
-
-    Raises:
-        ImportError: ``evidently`` is not installed.
-    """
-    from evidently.metric_preset import DataDriftPreset
-    from evidently.report import Report
-
-    report = Report(metrics=[DataDriftPreset()])
-    report.run(
-        reference_data=reference[["eur", "log_eur"]].dropna(),
-        current_data=current[["eur", "log_eur"]].dropna(),
+def fetch_returns(conn: duckdb.DuckDBPyConnection, start: date, end: date) -> pd.Series:
+    """7-day log returns ``ln(1+eur_t+7) - ln(1+eur_t)`` for start dates in [start, end]."""
+    return (
+        conn.execute(
+            """
+            SELECT LN(1 + f.eur) - LN(1 + p.eur) AS r
+            FROM gold_price_features p
+            JOIN gold_price_features f
+              ON p.uuid = f.uuid
+             AND f.snapshot_date = p.snapshot_date + CAST(? AS INTEGER)
+            WHERE p.snapshot_date BETWEEN ? AND ?
+              AND p.eur IS NOT NULL AND f.eur IS NOT NULL
+            """,
+            [HORIZON_DAYS, start, end],
+        )
+        .df()["r"]
+        .astype(float)
     )
-    result: dict[str, Any] = report.as_dict()
-    return result
 
 
-def is_drift_detected(drift_report: dict[str, Any]) -> bool:
-    """Extract the overall drift verdict from an Evidently report dict.
+def wasserstein_1d(u: np.ndarray, v: np.ndarray) -> float:
+    """First Wasserstein distance between two 1-D samples (area between their CDFs).
 
-    Reads the ``dataset_drift`` boolean from the first metric entry, which
-    is always ``DatasetDriftMetric`` when the report was built with
-    :func:`compute_drift_report`.
+    Same algorithm as ``scipy.stats.wasserstein_distance`` for unweighted
+    samples; written out so the check needs neither scipy nor Evidently.
+    """
+    u = np.sort(u)
+    v = np.sort(v)
+    grid = np.sort(np.concatenate([u, v]))
+    deltas = np.diff(grid)
+    u_cdf = np.searchsorted(u, grid[:-1], side="right") / len(u)
+    v_cdf = np.searchsorted(v, grid[:-1], side="right") / len(v)
+    return float(np.sum(np.abs(u_cdf - v_cdf) * deltas))
+
+
+def drift_score(reference: pd.Series, current: pd.Series) -> float:
+    """Wasserstein distance normalised by the reference spread; NaN if undefined."""
+    if reference.empty or current.empty:
+        return float("nan")
+    spread = float(np.std(reference))
+    if spread == 0.0:
+        return float("nan")
+    return wasserstein_1d(reference.to_numpy(), current.to_numpy()) / spread
+
+
+def return_drift(
+    conn: duckdb.DuckDBPyConnection,
+    latest_snapshot: date,
+    threshold: float = DRIFT_THRESHOLD,
+) -> DriftResult:
+    """Compare the latest week of matured 7-day returns with the four weeks before it.
 
     Args:
-        drift_report: Dict returned by :func:`compute_drift_report` (i.e.
-                      ``report.as_dict()`` from Evidently).
-
-    Returns:
-        ``True`` when Evidently detected statistically significant drift in
-        the price distribution, ``False`` otherwise.
+        conn:            Connection with ``gold_price_features`` in scope.
+        latest_snapshot: Newest snapshot in Gold. Returns ending after it do
+                         not exist yet, so the current window ends 7 days
+                         earlier.
     """
-    return bool(drift_report["metrics"][0]["result"]["dataset_drift"])
+    current_end = latest_snapshot - timedelta(days=HORIZON_DAYS)
+    current_start = current_end - timedelta(days=CURRENT_DAYS - 1)
+    reference_end = current_start - timedelta(days=1)
+    reference_start = reference_end - timedelta(days=REFERENCE_DAYS - 1)
+
+    reference = fetch_returns(conn, reference_start, reference_end)
+    current = fetch_returns(conn, current_start, current_end)
+    score = drift_score(reference, current)
+    return DriftResult(
+        score=score,
+        drifted=bool(np.isfinite(score) and score > threshold),
+        reference_n=len(reference),
+        current_n=len(current),
+        current_start=str(current_start),
+        current_end=str(current_end),
+    )
