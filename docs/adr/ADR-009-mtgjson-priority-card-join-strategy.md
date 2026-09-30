@@ -1,5 +1,8 @@
 # ADR-009: MTGJson-Priority Card Join Strategy
 
+**Date:** 2026-06-19
+**Status:** Accepted
+
 ## Context
 
 The Silver layer unifies card data from two independent sources:

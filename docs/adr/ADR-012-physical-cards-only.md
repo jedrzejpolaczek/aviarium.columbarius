@@ -1,5 +1,8 @@
 # ADR-012: Physical Cards Only — No Digital Formats or Tix Pricing
 
+**Date:** 2026-06-19
+**Status:** Accepted
+
 ## Context
 
 Magic: The Gathering exists in two distinct formats: physical (paper) and digital
@@ -35,7 +38,8 @@ and their `tix` pricing are explicitly out of scope.
 
 ### Neutral
 - `tix` is stored in the Bronze Scryfall table (ADR-025) and explicitly excluded from
-  Silver SQL extractions (`scryfall_prices_base.sql`, `scryfall_language_prices_base.sql`).
+  the Silver SQL extraction (`scryfall_prices_daily.sql`, shared by the English and
+  language-variant price builders).
 
 ## Alternatives Considered
 

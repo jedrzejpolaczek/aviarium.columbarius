@@ -1,5 +1,8 @@
 # ADR-007: Three-Level Configuration Hierarchy
 
+**Date:** 2026-06-19
+**Status:** Amended 2026-09-29 — the files hold different levels than the table below originally said; see [Amendment](#amendment-2026-09-29).
+
 ## Context
 
 The pipeline requires configuration at several distinct stability levels:
@@ -49,7 +52,7 @@ strategy because they are tightly coupled to the storage class and type-checked 
   in Python or transformation rules stay in JSON.
 
 ### Neutral
-- `gold_config.json` was originally reserved for when the Gold layer would be
+- `gold_config.json` was originally reserved for when the Gold layer would be <!-- doc-paths: historical -->
   implemented. Gold shipped without ever needing transformation-rule config
   (its logic is pure SQL/window functions with no tunable parameters), so the
   placeholder was removed in 2026-07 rather than carried indefinitely.
@@ -74,3 +77,17 @@ flowchart LR
 | Single YAML file | Mixes frequently-changed ingest URLs with rarely-changed storage strategy; diff noise |
 | All configuration in Python | Non-technical operators cannot update source URLs without touching code |
 | Environment variables | Suitable for secrets or deployment-specific values, not for structured transformation rules |
+
+## Amendment (2026-09-29)
+
+The three levels exist, but the files hold different things than the Decision table says:
+
+| Level | File as built | Contains |
+|---|---|---|
+| Entry point | `configs/data_sources.yaml` | DuckDB paths per tier and the paths of the per-tier configs. **No URLs or flags.** |
+| Ingest | `configs/bronze_config.json` (daily), `configs/bronze_config_seed.json` (initial load) | Source URLs, local file paths, download flags, HTML scraping parameters |
+| Transformation | `configs/silver_config.json` | Loaded by `SilverStorage`, but **no code reads it**: Silver transformations are SQL in `src/data/cards/storage/silver/sql/` (see the ADR-008 amendment). A missing file still aborts the run. |
+| Storage | `STORAGE_CONFIG` in `src/data/cards/storage/bronze/config.py` | As decided |
+
+The rationale above still holds for the levels that exist. The open decision is whether
+`silver_config.json` should be wired back in or deleted together with its loader.

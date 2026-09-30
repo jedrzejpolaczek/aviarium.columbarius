@@ -1,144 +1,128 @@
 # ML Models — Findings
 
-Wyniki i obserwacje z notebookow ML (Miesiac 2).
-Wypelnij kazda sekcje po uruchomieniu odpowiedniego notebooka.
+Results from the `notebooks/ml_models/` notebooks. Every number below comes from the
+notebook's saved output or from the MLflow run it names.
+
+**Read this first:** T6 and T8 are a *single chronological split* at
+`SNAPSHOT_DATE = 2026-07-02` (36 snapshots). The cross-validated result, in T7 (2026-09-30),
+is less flattering: LightGBM does not beat the naive baseline.
 
 ---
 
-## T5 — Feature Engineering
+## T5 — Feature engineering
 
-**Notebook:** `01_feature_engineering.ipynb`
-**Status:** [ ] Do uruchomienia
+**Notebook:** `01_feature_engineering.ipynb` · run at `SNAPSHOT_DATE = 2026-07-02`
 
-Kluczowe pytania do odpowiedzi:
-- Ile kart ma kompletne lag features (nie-NaN dla lag_7d)?
-- Jaki jest rozklad momentum_7d — czy symetryczny wokol 0?
-- Czy rolling_std_14d dobrze rozroznia stabilne karty od spekulatywnych?
-
-_(wypelnij po uruchomieniu notebooka)_
-
----
-
-## T6 — Baseline vs LightGBM
-
-**Notebook:** `02_baseline_lightgbm.ipynb`
-**Status:** [X] Uruchomiony 2026-07-10 — **wyniki nieaktualne**, patrz T7: Gold ma
-dzis 67 snapshotow (do 2026-09-24) i walk-forward CV jest juz mozliwe.
-Ponizsze liczby to pojedynczy podzial chronologiczny na danych do 2026-07-02. Dataset: 78 692 wierszy × 45 kolumn (17 cech użytych przez pipeline, 14 694 wiersze odrzucone z powodu NaN w targecie).
-
-### Wynik — już nie degeneratywny, LightGBM wygrywa w 2/3 tierów
-
-| model | tier | mae |
-|---|---|---:|
-| Naive | 1 | 0.056128 |
-| MA7d | 1 | 0.056128 |
-| LightGBM | 1 | **0.054001** |
-| Naive | 2 | **0.031356** |
-| MA7d | 2 | 0.031356 |
-| LightGBM | 2 | 0.033488 |
-| Naive | 3 | 0.053028 |
-| MA7d | 3 | 0.053028 |
-| LightGBM | 3 | **0.052530** |
-
-AR1 (overall, nie per-tier w tym notebooku): 0.0569 — najsłabszy baseline.
-
-**Does LightGBM beat Naive?** Tier 1: **Tak** (0.054001 < 0.056128) | Tier 2: **Nie** (0.033488 > 0.031356, ~7% gorzej) | Tier 3: **Tak, marginalnie** (0.052530 < 0.053028).
-
-To już nie jest degeneratywny remis MAE=0 opisany poniżej (32 snapshoty, SNAPSHOT_DATE = 2026-06-22) — przy 36 snapshotach wszystkie modele raportują niezerowe, nie-degeneratywne MAE/MAPE per tier. Tier 2 (111 kart testowych) to najtrudniejszy tier do pobicia — Naive/MA7d siedzą już na MAE ≈ 0.031 (najniższe ze wszystkich tierów) i LightGBM tego nie dogonił. Tier 1 (15 606 kart) i Tier 3 (22 karty) — LightGBM wygrywa, ale nie jest to jednolite zwycięstwo we wszystkich tierach, warto zweryfikować ponownie gdy przybędzie więcej snapshotów (zwłaszcza Tier 3 przez małą próbkę).
-
-### Poprzedni wynik (32 snapshoty, 2026-06-22) — zachowane jako kontekst historyczny
-
-Przy 32 snapshotach i pierwszym uruchomieniu, `log_return_7d` był idealnie płaski (~84% kart identycznych po 7 dniach) — Naive, MA7d i LightGBM wszystkie osiągały MAE ≈ 0 dla każdego tieru, co nie było zwycięstwem LightGBM tylko degeneratywnym porównaniem (LightGBM's `No further splits with positive gain` na każdej rundzie). Root cause zweryfikowany bezpośrednio na `data/gold/cards.duckdb`: ceny Tier 1 (<€100) były wtedy płaskie w niemal 100% przypadków w oknie 7-dniowym, zgodnie z zamkniętą już analizą `2026-07-06-price-feed-anomalies.md`. Przy 36 snapshotach ten efekt już nie dominuje — patrz wynik powyżej.
-
-### Implication for future work
-
-- **Headline MAE per tier jest teraz wiarygodny** (nie jest już zdominowany przez zerowy target) — ale nadal warto raportować obok niego frakcję wierszy z `log_return_7d != 0` per tier, żeby śledzić kiedy/czy efekt degeneracji wraca.
-- Tier 2 pozostaje najtrudniejszy — LightGBM przegrywa z najprostszymi baseline'ami mimo dostępu do 17 cech; warto sprawdzić czy to przeuczenie (zbyt mało przykładów w Tier 2 relative do liczby cech) czy faktyczny brak sygnału.
-- AR1 pozostaje najsłabszym baseline'em nawet przy większej ilości danych historycznych (0.0569 vs Naive 0.0561-0.0566) — sugeruje że `lag_1d`-owy return term dodaje szum, nie sygnał, na poziomie globalnym.
+- **Training matrix:** 93 386 rows × 39 columns. After dropping rows with a NULL
+  target (cards with no Cardmarket EUR price on either end of the 7-day window),
+  78 692 rows and the 17 features the pipeline uses remain.
+- **Lag coverage:** `lag_7d` complete for 80 757 / 96 261 cards (83.9%), `lag_30d` for
+  79 908 (83.0%). The missing ~16% are cards with no EUR price on the snapshot date;
+  history length is no longer the constraint.
+- **Target shape:** `log_return_7d` is sharply peaked at zero with a thin tail to about
+  ±1 and rare outliers up to +5. About 84% of cards have an identical price after
+  7 days. `momentum_7d` shows the same zero spike.
+- **Implication:** aggregate error metrics are dominated by cards whose price did not
+  move. Evaluations should also report the non-zero subset.
 
 ---
 
-## T7 — Time Series (data-gated)
+## T6 — Baselines vs LightGBM
 
-**Notebook:** `03_time_series.ipynb`
-**Status:** [ ] Odblokowany — do uruchomienia.
+**Notebook:** `02_baseline_lightgbm.ipynb` · run 2026-07-10 · single chronological split
 
-UWAGA: Pierwotna kolejnosc zakladala zrobienie T8 przed T7 (T7 czekal na dane).
-Ten warunek juz nie obowiazuje — oba notebooki mozna uruchomic.
+MAE on the `log1p` return scale, per price tier:
 
-### Walk-forward CV jest juz mozliwe (stan na 2026-09-25)
+| Tier | Test cards | Naive | MA7d | LightGBM |
+|---|---:|---:|---:|---:|
+| 1 (< €100) | 15 606 | 0.056128 | 0.056128 | **0.054001** |
+| 2 (€100–1000) | 111 | **0.031356** | 0.031356 | 0.033488 |
+| 3 (> €1000) | 22 | 0.053028 | 0.053028 | **0.052530** |
 
-`walk_forward_cv_nb03` konczyl sie `InsufficientDataError` przy obu probach
-(2026-07-05 i 2026-07-10) i to bylo wtedy poprawne. `generate_folds` liczy
-jednak **rozpietosc kalendarzowa**, nie liczbe snapshotow: przy
-`min_train_days=30, val_days=7, step_days=7` trzeci fold pojawia sie po
-`30-1 + 2*7 + 7 = 50` dniach od pierwszego snapshotu. Pierwszy snapshot to
-2026-05-26, wiec CV odblokowalo sie **2026-07-15** — piec dni po ostatnim
-nieudanym uruchomieniu. Od tego czasu notebook nie byl uruchamiany ponownie.
+AR(1), overall only: 0.0569 — the weakest baseline.
 
-Stan Gold na 2026-09-26: **67 snapshotow, 2026-05-26 -> 2026-09-24**,
-`generate_folds` zwraca **13 foldow — ale tylko 2 z nich sa uzyteczne**
-(zweryfikowane bezposrednio na `data/gold/cards.duckdb`).
-
-`generate_folds` waliduje rozpietosc kalendarzowa, nie dostepnosc danych.
-`walk_forward_cv` pomija fold (`continue`), gdy w oknie walidacyjnym nie ma
-zadnego snapshotu, albo gdy dla wybranego snapshotu nie istnieje dokladny
-partner `t+7` wymagany przez `build_target`. Na obecnym Gold przechodza tylko
-foldy 1 i 2 (val 2026-07-08 i 2026-07-15); foldy 5-9 nie maja w ogole
-snapshotu w oknie walidacyjnym. Zmierzone uruchomieniem `walk_forward_cv`:
-
-| | wartosc |
-|---|---:|
-| foldy wygenerowane | 13 |
-| foldy faktycznie wykonane | **2** |
-
-Wniosek z 2 foldow jest statystycznie czym innym niz z 13, a sam `generate_folds`
-deklaruje minimum 3 foldy jako prog wiarygodnosci — czyli obecny stan ten prog
-obchodzi. Zrodlem ograniczenia jest luka w snapshotach Gold (67 z 181 dni
-dostepnych w Bronze), nie sam kod CV.
-
-Wszystkie metryki w T6 i T8 pochodza wiec z pojedynczego podzialu
-chronologicznego przy `gold_snapshot_date = 2026-07-02` i sa juz
-nieaktualne o ~3 miesiace danych. Ponowne uruchomienie T6/T8 pod CV jest
-glowna zalegloscia tego katalogu.
-
-Kluczowe pytania:
-- Prophet vs LightGBM: ktory model jest lepszy dla plynnych kart?
-- Czy jest widoczna sezonowosc tygodniowa (FNM)?
-
-_(wypelnij po uruchomieniu notebooka)_
+- **LightGBM wins Tier 1, loses Tier 2 by ~7%, and ties Tier 3 within noise.** Seven-day
+  price moves are close to a random walk. Tier 2 has the lowest naive error of any tier
+  and the fewest training examples relative to the feature count.
+- **Naive and MA7d are identical to six decimals** in every tier. MA7d predicts
+  `rolling_mean_7d - log_eur`, and the price feed was effectively frozen until early
+  July: comparing each snapshot with the one 7 days later gives a price-level error of
+  exactly 0.00% for every snapshot up to 2026-06-29. The 7-day mean before the split date
+  therefore equals the current price, and MA7d predicts a zero return, exactly like
+  Naive. The comparison between them becomes meaningful only on post-July data.
+- **An earlier run was degenerate.** At 32 snapshots (2026-06-22) the target was almost
+  entirely zero and every model scored MAE ≈ 0. That was a price-feed artefact that
+  disappeared by 36 snapshots, not a result.
 
 ---
 
-## T8 — Optuna + SHAP
+## T7 — Walk-forward cross-validation
 
-**Notebook:** `04_shap_optuna.ipynb`
-**Status:** [~] Część Optuna uruchomiona (MLflow run `tuned_lightgbm_nb04`, 2026-07-10). Część SHAP — do uzupełnienia.
+**Measured 2026-09-30** via `scripts/train_model.py` → `retrain()` → `walk_forward_cv`,
+MLflow run `351ad6ef3b664b38885fa3965bd3a8a8`. 3 usable folds, the project's minimum.
+MAE on the log1p return scale:
 
-### Optuna — najlepsze parametry
+| Fold | Validation snapshot | Tier 1 LightGBM | Tier 1 naive | Tier 2 LightGBM | Tier 3 LightGBM |
+|---:|---|---:|---:|---:|---:|
+| 0 | 2026-07-08 | 0.025339 | 0.021252 | 0.012602 | 0.004750 |
+| 1 | 2026-07-15 | 0.024447 | 0.024424 | 0.011353 | 0.010953 |
+| 2 | 2026-09-23 | 0.025813 | 0.026280 | 0.011563 | 0.007121 |
+| **Mean** | | **0.025200** | **0.023985** | 0.011839 (naive 0.010363) | 0.007608 (naive 0.006905) |
 
-Run z 2026-07-10 (`9c1ec7de65c7476aa75a199b7189d6f2` — ten sam, który jest obecnie wdrożony w `docker/.env`):
+- **LightGBM does not beat naive under CV:** 5% worse on Tier 1, 14% on Tier 2 and 10% on Tier 3.
+- **Fold 0 is the outlier.** Its training labels span the July price-feed switch. The only
+  fold on clean data both ends (fold 2) has LightGBM 1.8% better on Tier 1, which three
+  folds cannot establish.
+- **Early-stopping leak, fixed the same day.** Before the fix, CV early-stopped on the
+  validation fold. That leak alone showed Tier 1 at 0.02385, 0.6% better than naive.
+  The fix is in `trainer.py`, with a regression test in `tests/ml/training/test_trainer.py`.
+- **Card metadata leak, checked and immaterial.** `gold_card_features` holds current-state
+  card metadata (e.g. `print_count` including later reprints). Rebuilding it as of each
+  fold's date changed Tier 1 MAE by less than 0.1%.
+- **Next re-measurements:** 6 folds (≈2026-10-21) and 14 folds (≈2026-12-16).
+- The optional Prophet comparison has not been run.
 
-| parametr | wartość | zakres przeszukiwania |
+---
+
+## T8 — Optuna and SHAP
+
+**Notebook:** `04_shap_optuna.ipynb` · run 2026-07-10 · MLflow run `tuned_lightgbm_nb04`
+(`9c1ec7de65c7476aa75a199b7189d6f2`)
+
+### Optuna
+
+| Parameter | Best value | Search range |
 |---|---:|---|
 | `num_leaves` | 203 | 32–256 |
 | `learning_rate` | 0.0308 | 0.01–0.3 (log) |
 | `min_child_samples` | 37 | 20–200 |
 | `subsample` | 0.7539 | 0.6–1.0 |
-| `colsample_bytree` | 0.8 | stałe |
-| `n_estimators` | 1000 | stałe (early stopping) |
+| `colsample_bytree` | 0.8 | fixed |
+| `n_estimators` | 1000 | fixed (early stopping) |
 
-Metryki tego runu: `train_mae = 0.0500`, `train_mape = 85.23%`.
+- **Tuning gain is marginal:** validation MAE 0.053116 with default parameters versus
+  0.053038 for the best of 20 trials — a 0.15% improvement. The model is close to what
+  this feature set allows.
+- The run logged training metrics only (`train_mae = 0.0500`, `train_mape = 85.23%`), so
+  it cannot be compared with the per-tier test MAE in T6. The 85% MAPE is expected:
+  the target is a log-return near zero, so the MAPE denominator is tiny even after the
+  `MAPE_CLIP_MIN = 0.01` clip. MAE is the comparison metric.
 
-**Uwaga o MAPE:** 85% nie jest alarmujące — `log_return_7d` jest bliskie zeru dla większości kart, więc mianownik w MAPE jest bardzo mały nawet po clipie `MAPE_CLIP_MIN = 0.01` (`src/ml/evaluation/metrics.py`). MAE pozostaje właściwą metryką do porównywania modeli; MAPE służy tylko jako niezależna od skali kontrola.
+### SHAP
 
-**Uwaga o porównywalności:** zalogowano tylko metryki *treningowe* (`train_mae`), nie testowe — tego runu nie da się bezpośrednio porównać z tabelą per-tier z T6, która raportuje MAE na zbiorze testowym. Przy kolejnym uruchomieniu warto zalogować `mae_test` per tier, żeby odpowiedzieć na pytanie, czy tuning faktycznie poprawił Tier 2 (jedyny tier, w którym LightGBM przegrywa z baseline).
+- **Most important feature:** `edhrec_rank`, followed by `foil_premium`, `rarity_ord`,
+  `lag_1d`, `lag_30d`, `print_count`, `format_count` and `edhrec_saltiness` (8th of ~20).
+- **BA-02 not confirmed:** the Bayesian analysis suggested `edhrec_saltiness` would absorb
+  the importance of `print_count`. In this model `print_count` ranks higher (6th) than
+  `edhrec_saltiness`, and both keep a visible spread.
+- **`is_reserved` has almost no effect** on predictions (near the bottom of the ranking).
+- **Open question:** the waterfall section explained the first three rows of the matrix
+  rather than hand-picked examples, so the effect of `is_reserved` on an actual Reserved
+  List card was not examined.
 
-**Porównanie z poprzednim tuningiem (2026-07-06, 32 snapshoty):** `train_mae = 0.0`, `train_mape = 0.0` — degeneratywny wynik z tego samego powodu co opisany w T6 (płaski target). Przy 36 snapshotach już nie występuje.
+---
 
-### SHAP — do uzupełnienia
+## T9 — Underpriced-card backtest
 
-Pytania bez odpowiedzi (wymagają uruchomienia części SHAP notebooka):
-- Kolejnosc waznosci SHAP: czy edhrec_saltiness > is_reserved?
-- SHAP print_count: czy spada do zera gdy saltiness jest w modelu? (weryfikacja BA-02)
-- Waterfall dla 3 kart: taniej common, Reserved List, tournament staple
+See [ADR-023](../../docs/adr/ADR-023-card-recommendation-strategy.md#backtest) for the
+method and the measured hit rate of the `/underpriced` flag.

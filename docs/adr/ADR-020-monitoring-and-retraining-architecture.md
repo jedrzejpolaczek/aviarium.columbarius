@@ -32,7 +32,7 @@ Use **Option B — Dual-signal monitoring** with four modules:
 
 | Module             | Responsibility                                        |
 |--------------------|-------------------------------------------------------|
-| `mape_tracker.py`  | Write predictions to `gold_predictions`; compute rolling MAPE |
+| `mape_tracker.py`  | Write predictions to `gold_predictions`; compute rolling MAPE (removed 2026-09-30, see ADR-034) | <!-- doc-paths: historical -->
 | `event_trigger.py` | Query `gold_events`; detect same-day bans/unbans       |
 | `drift.py`         | Evidently report on `eur`/`log_eur` distribution shift |
 | `retraining.py`    | Orchestrate: check signals → retrain → promote         |

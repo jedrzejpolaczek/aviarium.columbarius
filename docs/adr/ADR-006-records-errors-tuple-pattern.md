@@ -1,5 +1,8 @@
 # ADR-006: Records and Errors as Co-returned Tuples
 
+**Date:** 2026-06-19
+**Status:** Accepted
+
 ## Context
 
 Ingesting large bulk JSON files (300k+ records per file) will always encounter some

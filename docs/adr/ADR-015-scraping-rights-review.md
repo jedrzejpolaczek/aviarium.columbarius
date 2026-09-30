@@ -1,5 +1,8 @@
 # ADR-015: Scraping Rights Review for External HTML Sources
 
+**Date:** 2026-06-19
+**Status:** Accepted
+
 ## Context
 
 Two external websites are scraped via BeautifulSoup because they do not offer a

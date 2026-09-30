@@ -1,5 +1,8 @@
 # ADR-018: Tier-Based Model Selection Strategy
 
+**Date:** 2026-06-19
+**Status:** Amended 2026-09-29 — the Tier 2 and Tier 3 strategies below were not implemented as written; see [Amendment](#amendment-2026-09-29-what-was-actually-built).
+
 ## Context
 
 MTG card prices span six orders of magnitude — from €0.01 bulk commons to €50,000
@@ -57,8 +60,8 @@ Use a different prediction strategy for each tier:
 ### Neutral
 - `evaluate_per_tier()` in metrics.py enforces this separation at evaluation time —
   there is no code path that computes a global aggregate metric.
-- The tier assignment function (`_assign_tier` in metrics.py) is the single source
-  of truth for boundaries; changing a threshold requires only one edit.
+- The tier assignment function (`assign_tier` in `src/ml/models/tiered.py`) is the
+  single source of truth for boundaries; changing a threshold requires only one edit.
 
 ## Why Not a Single Global Model
 
@@ -79,3 +82,26 @@ this range have meaningfully different feature relationships than Tier 1 (e.g.
 `is_reserved` drives nearly all variance). A Bayesian hierarchical model with
 an explicit `is_reserved` prior is more appropriate than a gradient boosting model
 that must infer this structure from 560 examples.
+
+## Amendment (2026-09-29): what was actually built
+
+The tier *boundaries* and per-tier *reporting* were implemented as decided. The
+per-tier *prediction strategies* were not:
+
+| Tier | Decided above | Implemented |
+|---|---|---|
+| 1 (< €100) | LightGBM | LightGBM — as decided |
+| 2 (€100–€1,000) | Bayesian hierarchical model | **The same LightGBM model as Tier 1.** The Bayesian analysis lives in `notebooks/bayesian_analysis/` only; nothing in `src/` fits or serves it. |
+| 3 (> €1,000) | Direct Cardmarket lookup | **No prediction.** `/predict` returns `predicted_price = null` for Tier 3; no Cardmarket integration exists. |
+
+- **One model serves Tiers 1 and 2.** `retrain()` trains a single LightGBM on every
+  card with a target, and the API routes by `assign_tier` only to decide whether to
+  return a prediction. `TieredRouter` in `src/ml/models/tiered.py` can train separate
+  Tier 1 / Tier 2 models, but only tests use it.
+- **The measured result supports revisiting Tier 2.** On the single split at
+  2026-07-02, LightGBM is ~7% *worse* than the naive baseline on Tier 2 (README,
+  "Measured results"). That is the gap the Bayesian model was meant to close.
+- **What would change this amendment back to the original decision:** a Tier 2
+  model (Bayesian or a dedicated LightGBM via `TieredRouter`) that beats the naive
+  baseline under walk-forward CV, and a Cardmarket data source for Tier 3 that passes
+  the scraping-rights review in ADR-015.

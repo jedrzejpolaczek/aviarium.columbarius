@@ -1,5 +1,8 @@
 # ADR-014: HTTP Retry with Exponential Backoff for Download Functions
 
+**Date:** 2026-06-19
+**Status:** Accepted — library references updated 2026-09-29: the HTTP client is now `httpx` (async); the retry policy is unchanged.
+
 ## Context
 
 The ingesting pipeline makes 200+ HTTP requests per run — one bulk JSON download
@@ -8,7 +11,7 @@ External services (mtgtop8.com, mtggoldfish.com, Cardmarket) do not guarantee
 availability and enforce rate limits in production.
 
 `download_json_from_url()` and `download_html_page()` previously made a single
-`requests.get()` call with no retry logic. A single transient error (429, 503)
+HTTP GET with no retry logic. A single transient error (429, 503)
 would abort the entire pipeline, discarding all work done in that run.
 
 ## Decision
@@ -29,7 +32,7 @@ both download functions) before errors are wrapped in `SourceDownloadError`.
 `_fetch_with_retry` helper — a single generic fetch-then-parse function shared
 by both `download_json_from_url` and `download_html_page` — not to the public
 `download_*` functions themselves. This keeps the separation clean: the inner
-helper raises `requests.HTTPError` (which tenacity can intercept), while the
+helper raises `httpx.HTTPStatusError` / `httpx.TransportError` (which tenacity can intercept), while the
 outer `download_*` functions wrap the final failure in `SourceDownloadError`.
 
 ## Consequences

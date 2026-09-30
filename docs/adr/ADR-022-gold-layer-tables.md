@@ -1,11 +1,14 @@
 # ADR-022: Gold Layer Table Design
 
+**Date:** 2026-06-19
+**Status:** Accepted — amended 2026-09-30: the planned runtime table `gold_predictions` was never written and is replaced by a separate monitoring database ([ADR-034](ADR-034-skill-vs-naive-and-return-drift-monitoring.md)).
+
 ## Context
 
 ADR-003 established the medallion architecture (Bronze → Silver → Gold). The Gold
 layer's job is to materialise ML-ready feature tables from Silver data. As the project
 grew, 9 Gold tables were implemented across two builders (`GoldFeatureBuilders` and
-`GoldSignalBuilders`) and one runtime table (`gold_predictions`). ADR-003 only shows
+`GoldSignalBuilders`), with one runtime table (`gold_predictions`) planned but never built. ADR-003 only shows
 `gold_card_features` and `gold_price_features` — the full Gold table set and their
 roles in the ML pipeline are undocumented.
 
@@ -36,13 +39,14 @@ Built by `GoldSignalBuilders` in `src/data/cards/storage/gold/signals.py`.
 | `gold_ban_price_impact` | `silver_meta_history` + `silver_prices_history` | EUR price windows (30d before, 7d before, at event, 7d after, 30d after) for each ban/unban event |
 | `gold_tournament_signals` | `silver_tournament_results_history` | Per-oracle_id-format top-8 appearance counts and copy averages over 30-day and 90-day windows |
 
-### Group 3 — Runtime Monitoring Tables
+### Group 3 — Runtime Monitoring Tables (moved out of Gold)
 
-Written by `src/monitoring/mape_tracker.py` at API time.
-
-| Table | Written by | Contents |
-|---|---|---|
-| `gold_predictions` | `mape_tracker.save_predictions()` | Per-card per-date model predictions with model_run_id for lineage; used for MAPE auditing |
+Planned here as `gold_predictions`, written by the former MAPE tracker. It was never
+written in practice, and a Gold table could not have held it: the nightly rebuild prunes
+any `gold_*` table its builders do not produce. Since 2026-09-30 the served model's
+daily predictions live in a separate monitoring database (`predictions` table, written
+by `src/monitoring/prediction_tracker.py`); see
+[ADR-034](ADR-034-skill-vs-naive-and-return-drift-monitoring.md).
 
 ### Why a complete rebuild for every `update()` call
 
@@ -64,9 +68,10 @@ inspectable artifact.
 
 ### Positive
 - Each Gold table has a single, clear responsibility — feature tables for ML, signal
-  tables for monitoring, predictions table for MAPE tracking.
-- `gold_predictions` captures model output in the same database as input features,
-  enabling full lineage: alert → prediction date → model_run_id → training snapshot.
+  tables for monitoring.
+- *(Superseded)* Keeping model output in Gold next to its input features was meant to
+  give alert → prediction → model_run_id lineage. The lineage now lives in the
+  monitoring database (ADR-034), outside the nightly rebuild.
 - `gold_ml_dataset` decouples the Trainer from raw Silver data — it reads one
   precomputed table, not a multi-join.
 
@@ -104,15 +109,10 @@ flowchart TD
             GBP["gold_ban_price_impact"]
             GTS["gold_tournament_signals"]
         end
-
-        subgraph Runtime["Group 3 — Runtime Monitoring"]
-            GPR["gold_predictions"]
-        end
     end
 
     subgraph ML["ML Pipeline"]
         TR["Trainer"]
-        MAPE["mape_tracker"]
     end
 
     SC --> GCF
@@ -130,8 +130,6 @@ flowchart TD
     STRH --> GTS
 
     GML --> TR
-    TR --> MAPE
-    MAPE -->|"save_predictions()"| GPR
 ```
 
 ## Alternatives Considered

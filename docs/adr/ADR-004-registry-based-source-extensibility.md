@@ -1,5 +1,8 @@
 # ADR-004: Registry-Based Source Extensibility
 
+**Date:** 2026-06-19
+**Status:** Accepted — file references corrected 2026-09-29 (the registry lives in `src/data/cards/sources/registry.py`; the marketplace stubs were never created).
+
 ## Context
 
 The pipeline must ingest data from multiple external sources (Scryfall, MTGJson cards,
@@ -19,7 +22,7 @@ declared separately from pipeline logic.
 
 Use two registries declared as module-level constants:
 
-- `SOURCE_REGISTRY` in `sources.py` — maps source type → `(Pydantic model, extractor function)`
+- `SOURCE_REGISTRY` in `src/data/cards/sources/registry.py` — maps source type → `(Pydantic model, extractor function)`
 - `STORAGE_CONFIG` in `storage/bronze/config.py` — maps source type → storage strategy
   (table name, primary key, incremental flag, snapshot definitions)
 
@@ -42,14 +45,18 @@ a Pydantic model. No changes to pipeline orchestration logic are needed.
   is config-driven, not the implementation.
 
 ### Neutral
-- The market integrations (`allegro.py`, `cardmarket.py`) are reserved module stubs,
-  designed to be registered the same way once implemented.
+- The two HTML sources (`format_staples`, `tournament_results`) are registered for
+  their Pydantic models only. Their scraping spans several pages per source and is
+  driven by `src/data/cards/sources/scrapers.py`, so their registry extractors are
+  unused placeholders.
+- Marketplace integrations (Cardmarket, Allegro) were planned as further registry
+  entries but never implemented.
 
 ## Diagram
 
 ```mermaid
 flowchart LR
-    YAML["data_sources.yaml\n(source list)"]
+    YAML["bronze_config.json\n(source list)"]
     REG["SOURCE_REGISTRY\n{source → (Model, extractor)}"]
     SCFG["STORAGE_CONFIG\n{source → StorageStrategy}"]
     PIPE["Pipeline\n(generic loop)"]

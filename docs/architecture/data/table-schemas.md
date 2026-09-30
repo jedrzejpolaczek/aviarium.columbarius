@@ -86,7 +86,7 @@ Raw ingestion from external sources. Bronze tables store Pydantic model dumps ex
 | Column | Type | Description |
 |--------|------|-------------|
 | id | VARCHAR | Scryfall UUID |
-| snapshot_date | VARCHAR | Date this price snapshot was taken |
+| snapshot_date | DATE | Date this price snapshot was taken |
 | eur | FLOAT? | EUR non-foil price |
 | eur_foil | FLOAT? | EUR foil price |
 | usd | FLOAT? | USD non-foil price |
@@ -144,7 +144,7 @@ without pre-selection. Silver pivots to wide columns via `CASE WHEN` SQL.
 | Column | Type | Description |
 |--------|------|-------------|
 | uuid | VARCHAR | MTGJson UUID |
-| snapshot_date | VARCHAR | Date this price was recorded |
+| snapshot_date | DATE | Date this price was recorded |
 | retailer | VARCHAR | Source retailer (cardmarket, tcgplayer, …) |
 | tx_type | VARCHAR | Transaction type: `retail` or `buylist` |
 | finish | VARCHAR | Card finish: `normal`, `foil`, `etched` |
@@ -181,7 +181,7 @@ without pre-selection. Silver pivots to wide columns via `CASE WHEN` SQL.
 |--------|------|-------------|
 | id | VARCHAR | Composite PK: `{tournament_id}__{card_name}__{is_sideboard}` |
 | tournament_id | VARCHAR | Tournament identifier, e.g. `mtgtop8_99999` |
-| tournament_date | VARCHAR | Tournament date as ISO string (YYYY-MM-DD) |
+| tournament_date | DATE | Tournament date |
 | format | VARCHAR | Format: `modern`, `legacy`, `vintage`, `standard`, `pioneer` |
 | event_name | VARCHAR | Name of the tournament event |
 | placement | INTEGER | Top-8 placement (1–8) |
@@ -330,7 +330,7 @@ Cleaned and merged data. `silver_cards` is the central card reference table (MTG
 |--------|------|-------------|
 | id | VARCHAR | Composite PK from Bronze |
 | tournament_id | VARCHAR | Tournament identifier |
-| tournament_date | VARCHAR | ISO date string |
+| tournament_date | DATE | Tournament date |
 | format | VARCHAR | Format |
 | event_name | VARCHAR | Tournament event name |
 | placement | INTEGER | Top-8 placement (1–8) |

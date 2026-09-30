@@ -1,5 +1,8 @@
 # ADR-017: LightGBM as the Primary Gradient Boosting Library
 
+**Date:** 2026-06-19
+**Status:** Accepted
+
 ## Context
 
 The ML module requires a regression model for predicting MTG card prices.
@@ -7,7 +10,7 @@ Three candidates were considered: scikit-learn's ensemble methods, XGBoost, and 
 TensorFlow was also evaluated as an option.
 
 The data has a documented statistical property that directly constrains the choice:
-ceny kart MTG follow a Pareto distribution with α = 1.303 (confirmed in Statistical Properties 01).
+MTG card prices follow a Pareto distribution with α = 1.303 (confirmed in Statistical Properties 01).
 Because 1 < α < 2, the distribution has a **finite mean but infinite theoretical variance**.
 This rules out any loss function that squares errors (MSE) — a single €2000 outlier would
 dominate the entire gradient signal. MAE and Huber are robust to this; both are first-class
@@ -63,7 +66,7 @@ with a drop-in XGBoost wrapper.
 
 TensorFlow is optimised for unstructured data (images, text, sequences) and requires
 substantially more engineering effort for tabular regression: manual feature preprocessing,
-architecture search, and GPU infrastructure. For a dataset with ~25 tabular features,
+architecture search, and GPU infrastructure. For a dataset with ~20 tabular features (17 in the served model),
 gradient boosting consistently matches or outperforms neural networks at a fraction of
 the operational complexity. There is no scenario in this project where TensorFlow would
 be justified over LightGBM.

@@ -983,8 +983,12 @@ exactly the failures that matter most.
   quantifies the marginal value of static card features for 7-day price prediction
 - All results per tier — aggregate numbers hide failures that matter
 
-**Output file:** `baseline_benchmark.csv` — the official performance bar that every
-subsequent XGBoost / LightGBM / deep learning model must exceed.
+**Output file:** `baseline_benchmark.csv` — intended as the performance bar every later
+model must beat. **As committed it is all zeros**: its training window
+(2026-05-26 → 2026-06-17) fell in the period when the price feed was frozen, so every
+7-day return was zero and every baseline scored MAE 0 — the notebook's conclusions cell
+explains this. The baselines LightGBM is actually compared against are the per-tier
+figures in `ml_models/ML_FINDINGS.md` (T6).
 
 ---
 

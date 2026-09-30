@@ -1,67 +1,70 @@
 # C3 — ML System Components
 
-The ML System subsystem orchestrates machine learning model training, inference preparation, and feature engineering for price prediction. It integrates with the Gold layer to build lag-based feature matrices, trains LightGBM price models per card tier using time-series cross-validation and Optuna hyperparameter search, computes SHAP explanations, and prepares similarity-based and rule-based card recommendation indices. All training artifacts (parameters, metrics, models) are logged to MLflow for experiment tracking and model registry.
+The ML system turns the Gold layer into a trained price model and the inputs the API needs at request time. It builds lag features from `gold_price_features`, trains a single LightGBM model on the 7-day log-return target, evaluates it per price tier with walk-forward cross-validation, and logs runs and the model to MLflow. At API startup the same feature code builds the inference matrix and a card-similarity index.
+
+*Revised 2026-09-29 against the code: the previous version cited modules that do not exist (`src/ml/trainer.py`, `src/ml/metrics/`, `src/ml/indices/`), placed Optuna inside the training pipeline, and had the model writing to `gold_predictions`, which nothing does.* <!-- doc-paths: historical -->
 
 ```mermaid
 C4Component
   title Component diagram for ML System
 
-  ContainerDb_Ext(silver_db, "Silver DB", "DuckDB")
   ContainerDb_Ext(gold_db, "Gold DB", "DuckDB")
-  System_Ext(mlflow, "MLflow Server", "Experiment tracking, model registry")
+  System_Ext(mlflow, "MLflow", "sqlite tracking store + registry")
 
   Container_Boundary(ml, "ML System") {
-    Component(feature_builder, "FeatureBuilder", "", "Builds lag features from silver_prices_history using SQL and Pandas")
-    Component(lightgbm_model, "LightGBMPriceModel", "", "Wrapper for training and inference with LightGBM boosters per tier")
-    Component(trainer, "Trainer", "", "Time-series cross-validation, Optuna hyperparameter search, MLflow logging")
-    Component(evaluation_metrics, "EvaluationMetrics", "", "Computes MAPE per price tier for model evaluation")
-    Component(shap_analyzer, "ShapAnalyzer", "", "Computes SHAP feature importances for model explainability")
-    Component(card_similarity, "CardSimilarityIndex", "", "Cosine similarity NearestNeighbors index over gold card features")
-    Component(underpriced_scanner, "UnderpricedScanner", "", "Identifies underpriced cards by comparing model predictions to current prices")
+    Component(features, "Feature pipeline", "features/lag.py, features/pipeline.py", "Lag features, target, imputation")
+    Component(model, "LightGBMPriceModel", "models/lightgbm_model.py", "Wrapper around one LightGBM booster")
+    Component(tiers, "assign_tier", "models/tiered.py", "Price-tier boundaries")
+    Component(trainer, "walk_forward_cv", "training/trainer.py", "Fold generation and per-fold evaluation")
+    Component(tracking, "Tracking", "training/tracking.py", "MLflow experiment, runs, model logging and loading")
+    Component(metrics, "Metrics", "evaluation/metrics.py", "Per-tier MAE / MAPE")
+    Component(similarity, "CardSimilarityIndex", "recommendation/similarity.py", "Nearest neighbours over card features")
+    Component(underpriced, "flag_underpriced", "recommendation/underpriced.py", "Predicted vs current price ratio")
   }
 
-  Rel(feature_builder, silver_db, "Reads silver_prices_history")
-  Rel(feature_builder, gold_db, "Reads gold_card_features")
-  Rel(trainer, feature_builder, "Requests feature matrix")
-  Rel(trainer, lightgbm_model, "Trains model")
-  Rel(trainer, evaluation_metrics, "Evaluates per-tier MAPE")
-  Rel(trainer, shap_analyzer, "Computes feature importance")
-  Rel(trainer, mlflow, "Logs runs, params, metrics, registers model")
-  Rel(card_similarity, gold_db, "Reads gold_card_features")
-  Rel(underpriced_scanner, gold_db, "Reads gold_price_features and predictions")
-  Rel(lightgbm_model, gold_db, "Writes predictions to gold_predictions")
+  Rel(features, gold_db, "Reads gold_price_features, gold_card_features")
+  Rel(trainer, features, "Builds per-fold matrices")
+  Rel(trainer, model, "Fits and predicts")
+  Rel(trainer, metrics, "Scores per tier")
+  Rel(metrics, tiers, "Groups by tier")
+  Rel(tracking, mlflow, "Logs runs, metrics, model")
+  Rel(similarity, gold_db, "Reads gold_card_features")
+  Rel(underpriced, tiers, "Tier-specific flag rule")
 ```
 
 ## Components
 
-| Component | Responsibility | Source Reference | ADR References |
+| Component | Responsibility | Source | ADRs |
 |---|---|---|---|
-| **FeatureBuilder** | Constructs lag-based feature matrices from silver price history; joins with card features to produce training-ready datasets | `src/ml/features/lag.py` | ADR-003 (medallion architecture), ADR-008 (Silver layer) |
-| **LightGBMPriceModel** | Encapsulates LightGBM booster training and inference; maintains separate models per price tier; handles model serialization and loading | `src/ml/models/lightgbm_*.py` | ADR-017 (LightGBM model choice), ADR-018 (tier-based selection) |
-| **Trainer** | Orchestrates the full training pipeline: feature generation, Optuna hyperparameter search, time-series cross-validation, metric evaluation, and MLflow logging | `src/ml/trainer.py` | ADR-017, ADR-018, ADR-019 (startup precomputation) |
-| **EvaluationMetrics** | Computes MAPE (Mean Absolute Percentage Error) per price tier to measure model performance across different card value ranges | `src/ml/metrics/` | ADR-018 (tier-specific metrics) |
-| **ShapAnalyzer** | Generates SHAP values for model features to provide explainability on which factors drive price predictions | `src/ml/explainability/` | ADR-020 (monitoring and retraining), ADR-028 (TreeSHAP choice) |
-| **CardSimilarityIndex** | Builds and maintains a KNeighborsIndex (cosine similarity) over Gold layer card features for recommendation and content-based filtering | `src/ml/indices/similarity.py` | ADR-019 (FastAPI startup precomputation) |
-| **UnderpricedScanner** | Scans Gold layer predictions and current market prices to identify cards with significant upside potential (model prediction > current price) | `src/ml/indices/underpriced.py` | ADR-019, ADR-020 |
+| **Feature pipeline** | Lag and rolling features per snapshot (SQL), the 7-day `log_return_7d` target, card attributes, and the sklearn imputation pipeline shared by training and serving | `src/ml/features/lag.py`, `src/ml/features/pipeline.py`, `src/ml/features/sql/` | ADR-022, ADR-024 |
+| **LightGBMPriceModel** | Fits one LightGBM booster with early stopping; predicts `log_return_7d` | `src/ml/models/lightgbm_model.py` | ADR-017 |
+| **Tiers** | `assign_tier` maps a current EUR price to tier 1/2/3 — the single source of the €100 / €1,000 boundaries. `TieredRouter` (separate Tier 1/2 models) exists but is used only in tests | `src/ml/models/tiered.py` | ADR-018 (amended) |
+| **Baselines** | Naive, mean, MA7d and AR(1) forecasts for comparison | `src/ml/models/baseline.py` | — |
+| **walk_forward_cv** | Generates expanding-window folds, keeps only folds with a validation snapshot and its t+7 partner, trains and scores each fold | `src/ml/training/trainer.py` | ADR-018 |
+| **Tracking** | MLflow experiment setup (anchored to the project root), run logging, `cv_mape_tier1`, model logging and loading | `src/ml/training/tracking.py` | ADR-026 |
+| **Metrics** | Per-tier MAE and MAPE on the log-return scale; no global aggregate | `src/ml/evaluation/metrics.py`, `src/ml/evaluation/error_analysis.py` | ADR-018 |
+| **SHAP / Optuna** | TreeSHAP explanations and an Optuna search; used from notebook `ml_models/04`, not by the training pipeline | `src/ml/evaluation/shap_analysis.py` | ADR-028 |
+| **CardSimilarityIndex** | Scaled card features + nearest-neighbour index for `/similar` | `src/ml/recommendation/similarity.py` | ADR-023 |
+| **flag_underpriced** | Flags Tier 1/2 cards whose predicted price exceeds the current one by the confidence threshold | `src/ml/recommendation/underpriced.py` | ADR-023 |
 
-## Training Pipeline
+## Training pipeline
 
-The training pipeline runs when a Trainer instance is initialized or explicitly triggered:
+Entry points: `scripts/train_model.py` (manual) and `scripts/check_and_retrain.py` (scheduled, only when a trigger fires). Both call `retrain()` in `src/monitoring/retraining.py`:
 
-1. **FeatureBuilder** reads `silver_prices_history` and `gold_card_features` to construct a feature matrix with lagged price indicators and card metadata.
-2. **Trainer** splits the data using time-series cross-validation (respecting temporal order) and runs Optuna hyperparameter search to find optimal booster configurations per price tier.
-3. For each tier, **LightGBMPriceModel** trains a booster on the train fold.
-4. **EvaluationMetrics** computes per-tier MAPE on the validation fold.
-5. **ShapAnalyzer** computes feature importance from the best model configuration.
-6. **Trainer** logs all runs, hyperparameters, metrics, and the final models to the **MLflow Server** for experiment tracking and model registry.
+1. **walk_forward_cv** runs over the Gold history. With fewer than 3 usable folds it raises `InsufficientDataError`; `retrain()` then logs a warning and continues without CV.
+2. The feature pipeline builds the matrix for the latest snapshot that has a t+7 target, drops rows with a NULL target, and fits the imputation pipeline.
+3. **LightGBMPriceModel** trains one model on all tiers.
+4. **Tracking** logs CV results (including `cv_mape_tier1`) and the model to a new MLflow run.
+5. `_compare_and_promote` moves the registry's `production` alias only when both the new and the current model have a finite `cv_mape_tier1` and the new one is not worse (runbook §4c).
 
-The trained models are persisted to disk and loaded during API startup for inference preparation.
+The API does not follow the alias: it loads the run named by `MODEL_RUN_ID`. `src/monitoring/serving_check.py` alerts when the two disagree.
 
-## Inference Preparation
+## Inference preparation
 
-At API startup (ADR-019), the system precomputes inference-time indices to support fast recommendation and anomaly detection:
+At API startup (ADR-019) `app/main.py`:
 
-1. **CardSimilarityIndex** loads `gold_card_features` and builds a KNeighborsIndex using cosine similarity, enabling fast lookups of similar cards by feature distance.
-2. **UnderpricedScanner** reads the latest `gold_card_features` alongside the pre-trained **LightGBMPriceModel** predictions and identifies cards where the model's predicted price exceeds the current market price by a configurable threshold—these cards are candidates for investment recommendation.
+1. builds the inference feature matrix for the latest Gold snapshot with the same feature pipeline and fits the imputation pipeline on it;
+2. loads the model for `MODEL_RUN_ID` from MLflow (degraded mode if this fails);
+3. builds the **CardSimilarityIndex**.
 
-Both indices are kept in-memory during the API lifecycle to support low-latency responses on pricing and recommendation endpoints.
+`/predict` answers from the precomputed matrix. `/underpriced` runs inference over the whole matrix on each request and applies **flag_underpriced**. Nothing is written back to Gold.
