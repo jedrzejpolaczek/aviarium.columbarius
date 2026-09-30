@@ -11,8 +11,11 @@ Walk-forward guarantees the validation set is ALWAYS later than training:
   Fold 1: train 2026-05-26..2026-07-01, val 2026-07-02..2026-07-08
   ...
 
-The training window grows (more historical data each fold); the validation
-window advances at the same rate (step_days = 7 by default).
+The fold windows grow, but each fold trains on ONE snapshot — the last one on
+or before train_end — with earlier history reaching the model only through
+its lag/rolling features. The validation window advances by step_days (7 by
+default). The validation fold is never shown to fit(), not even for early
+stopping, so its score is an honest out-of-sample estimate.
 
 PARAMETERS (from model_preparation/validation_config.json):
   min_train_days = 30  (minimum calendar days in the training window)
@@ -340,7 +343,12 @@ def walk_forward_cv(
         y_train = y_train.reset_index(drop=True)
         y_val = y_val.reset_index(drop=True)
 
-        model.fit(X_train, y_train, X_val, y_val)
+        # The validation fold is scored below, so it must not be seen here —
+        # not even as the early-stopping monitor. Letting LightGBM choose its
+        # tree count on X_val/y_val made CV optimistic enough to flip the
+        # Tier 1 verdict against the naive baseline (2026-09-30). Without
+        # X_val the model early-stops on a split of its own training rows.
+        model.fit(X_train, y_train)
         y_pred = pd.Series(model.predict(X_val), name="predicted")
 
         tiers = val_eur.apply(assign_tier)
