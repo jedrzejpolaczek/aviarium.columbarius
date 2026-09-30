@@ -1,5 +1,8 @@
 # ADR-023: Card Recommendation and Underpriced Detection Strategy
 
+**Date:** 2026-06-19
+**Status:** Amended 2026-09-30 — the Tier 2 Bayesian guardrail was never wired in, and the unverified "73%" backtest figure is replaced by a measured one; see [Backtest](#backtest).
+
 ## Context
 
 The API exposes two recommendation endpoints:
@@ -53,11 +56,55 @@ threshold (from `src/ml/recommendation/underpriced.py`):
 | Tier | Price range | Strategy |
 |---|---|---|
 | Tier 1 | < €100 | Flag if `confidence > 1.3` (ML signal alone sufficient) |
-| Tier 2 | €100–€1,000 | Flag if `confidence > 1.3` AND Bayesian guardrail (BA-02 HDI) confirms signal |
+| Tier 2 | €100–€1,000 | Flag if `confidence > 1.3` AND Bayesian guardrail (BA-02 HDI) confirms signal — *the guardrail is not implemented; Tier 2 uses the Tier 1 rule* |
 | Tier 3 | > €1,000 | Never flag — too little training data; route to manual Cardmarket review |
 
 The `confidence` score is `predicted_eur / actual_eur` (clipped to ≥ 0.01 to avoid
-division by zero). Backtest result: 73% of flagged cards rose > 10% within 30 days.
+division by zero). Its measured behaviour is in [Backtest](#backtest) below.
+
+## Backtest
+
+*Measured 2026-09-30 with `python -m scripts.backtest_underpriced`; per-date results in
+`notebooks/ml_models/underpriced_backtest.csv`. This replaces an earlier sentence claiming
+"73% of flagged cards rose > 10% within 30 days", for which no backtest existed.*
+
+**Method.** For every date d that has snapshots on d−7 and d+7, a LightGBM model is trained
+on snapshot d−7. Its target, the d−7 → d return, is known on day d, so the model uses
+nothing a production retrain on d would not have. It scores every card on d, the
+`flag_underpriced` rule behind `GET /underpriced` is applied, and the outcome is read at
+d+7. The horizon is 7 days because that is what the model predicts. A 30-day horizon
+cannot be measured on this history: the 2026-07-29 → 2026-09-02 ingestion gap leaves no
+(d, d+30) pairs. A "hit" is a price rise of more than 10%. It is compared with the share
+of *all* Tier 1–2 cards that rose more than 10% over the same week (the base rate).
+Dates in the frozen-feed period (up to early July) are excluded: no card moved, and
+nothing was flagged.
+
+| | Evaluation dates | Flagged card-days | Hit rate | Base rate (all) | Base rate (< €1) |
+|---|---:|---:|---:|---:|---:|
+| All live dates | 14 | 10 755 | 36.4% | 17.4% | 20.2% |
+| Dates whose training week spans the July price-feed switch | 3 | 10 012 | 34.9% | 14.5% | 16.9% |
+| Clean dates | 11 | 743 | **55.6%** | 18.2% | 21.1% |
+
+**What the numbers mean — read before quoting the hit rate:**
+
+- **Every flag is a card priced under €1.** The rule never fired on a card worth €1 or more.
+  So the fair comparison is the sub-€1 base rate, not the catalogue-wide one.
+- **The flag mostly catches price dips that revert.** In a one-off breakdown of the clean
+  dates, 86% of flagged cards had fallen more than 20% in the week before the flag,
+  against 6% of eligible cards. Simply buying every sub-€1 card that fell more than 20%
+  scores about 32%, so the model adds selection on top of the dip, but the dip is most of
+  the signal.
+- **The money involved is negligible.** Buying one copy of every flagged card and selling
+  it a week later would have gained €46 across all 743 clean flags, about €0.06 per flag,
+  before Cardmarket fees and shipping, which exceed that many times over.
+- **93% of all flags come from three dates** whose training labels span the July
+  price-feed switch. Those models learned "everything jumps" and flagged thousands of
+  cards. This is an artefact of the data source, not skill.
+
+**Conclusion.** The flag has a real, statistically clear edge over the base rate within its
+price band, and no practical value: it identifies cent-level mean reversion in bulk cards,
+not undervalued cards anyone would buy. To become useful it would need a minimum price, and
+it should be re-measured on the cards that remain.
 
 ## Consequences
 
@@ -98,7 +145,7 @@ flowchart TD
     end
 
     subgraph Underpriced["/underpriced"]
-        UL["Load all cards\ngold_card_features\n+ gold_predictions"]
+        UL["Load all cards\ngold_card_features\n+ in-memory predictions"]
         UC["Compute confidence\npredicted_eur / actual_eur"]
         UT{"Tier?"}
         T1["Tier 1 (<€100)\nFlag if confidence > 1.3"]
