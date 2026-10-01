@@ -55,7 +55,7 @@ calls):
      original docstring) claimed callers "already reimplement ad hoc" this logic; a
      code-review pass on the introducing commit found that claim false — all three
      locations already migrated at that point (`app/main.py`, `health.py`,
-     `check_and_retrain.py`), plus `train_model.py` (migrated by this task), only
+     `check_and_retrain.py`), plus `train_model.py` (migrated in the same change), only
      ever use `.connection` and `.close()`. The docstring was corrected accordingly
      (commit `0e73d7e`), and this ADR keeps that honesty: the two methods
      are a low-cost convenience addition, not a fix.
@@ -63,12 +63,12 @@ calls):
      `BaseStorage` in the storage tier, so callers can write
      `with open_repository(...) as repo:` instead of an explicit `try`/`finally`.
 
-3. **Migration of the four locations**, across this task sequence:
+3. **Migration of the four locations:**
    - `app/main.py` + `app/dependencies.py` — `app.state.repo` (a `DuckDBRepository`)
      replaces `app.state.db` (a raw connection); `get_db()` returns the repository.
    - `src/data/cards/storage/health.py` — all three connections (Bronze, Silver, Gold).
    - `scripts/check_and_retrain.py` — the single Gold connection.
-   - `scripts/train_model.py` (this task) — the single Gold connection:
+   - `scripts/train_model.py` — the single Gold connection:
      `repo = open_repository(args.db_path, read_only=True)`, `conn = repo.connection`
      passed to `get_latest_gold_snapshot_date` and `retrain` exactly as the raw
      connection was before. `train_model.py` never called `conn.close()` explicitly

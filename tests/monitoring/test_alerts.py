@@ -135,3 +135,37 @@ def test_send_alert_resolves_default_path_at_call_time(tmp_path, monkeypatch):
     lines = redirected.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 1
     assert json.loads(lines[0])["subject"] == "Subject"
+
+
+def test_desktop_notification_is_truncated_to_os_limits(tmp_path, monkeypatch):
+    """Windows caps the balloon tip at 256 chars and plyer does not check.
+
+    Regression guard for the 2026-09-28 run: send_alert carried a 315-char
+    DuckDB binder error, plyer raised ValueError("string too long") inside the
+    thread it spawns — outside this module's try/except — so the run printed an
+    unhandled traceback and showed no notification at all.
+    """
+    import sys
+
+    captured = {}
+
+    class _FakeNotification:
+        @staticmethod
+        def notify(title, message, timeout):
+            captured["title"] = title
+            captured["message"] = message
+
+    monkeypatch.setitem(
+        sys.modules, "plyer", type("m", (), {"notification": _FakeNotification})
+    )
+    monkeypatch.setattr(alerts, "ALERTS_LOG_PATH", tmp_path / "alerts.jsonl")
+    monkeypatch.delenv("ALERT_WEBHOOK_URL", raising=False)
+
+    long_message = "x" * 400
+    alerts.send_alert("T" * 100, long_message)
+
+    assert len(captured["message"]) <= 250
+    assert len(captured["title"]) <= 60
+    # The full text still reaches the durable log — only the OS view is cut.
+    logged = json.loads((tmp_path / "alerts.jsonl").read_text(encoding="utf-8").strip())
+    assert logged["message"] == long_message

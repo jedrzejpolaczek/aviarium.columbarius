@@ -1,9 +1,12 @@
 # ADR-019: FastAPI Startup Pre-computation Strategy
 
+**Date:** 2026-06-19
+**Status:** Accepted — updated 2026-09-29: the API has since gained `/predict/uuid/{uuid}` and `POST /admin/reload-model` ([ADR-032](ADR-032-hot-model-reload-endpoint.md)). The reload endpoint swaps the *model* only; new *data* from an ETL run still needs a restart.
+
 ## Context
 
-The REST API exposes five endpoints: `/health`, `/cards`, `/predict/{card_name}`,
-`/similar/{card_name}`, and `/underpriced`.  Each of the latter three requires:
+When this decision was made, the REST API exposed five endpoints: `/health`, `/cards`,
+`/predict/{card_name}`, `/similar/{card_name}`, and `/underpriced`.  Each of the latter three requires:
 
 1. A DuckDB query to retrieve price and card feature data.
 2. An sklearn pipeline transformation to produce model-ready features.

@@ -33,6 +33,7 @@ import shutil as shutil  # explicit re-export: tests patch backup_data.shutil.co
 from src.data.cards.pipelines import load_config
 from src.logger import get_logger, setup_logging
 from src.monitoring.alerts import send_alert
+from src.monitoring.prediction_tracker import MONITORING_DB_PATH
 
 logger = get_logger(__name__)
 
@@ -138,7 +139,13 @@ def run_backup(
 
     copied_any = False
     try:
-        for tier, src in _tiered_duckdb_sources(config_path):
+        # The monitoring DB holds what the served model predicted each day; unlike
+        # Silver and Gold it cannot be rebuilt from Bronze (ADR-034).
+        sources = [
+            *_tiered_duckdb_sources(config_path),
+            ("monitoring", Path(MONITORING_DB_PATH)),
+        ]
+        for tier, src in sources:
             if _copy_duckdb(tier, src, snapshot_dir):
                 copied_any = True
         for src in (MLFLOW_DB_PATH, MLRUNS_DIR):

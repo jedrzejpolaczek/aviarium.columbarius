@@ -25,8 +25,8 @@ Gold's precomputed rolling-window columns. The *other* columns compared in the
 same investigation (`rolling_std_14d`, `rolling_min_30d`, `rolling_max_30d`)
 are not duplicates at all — different window widths and aggregate functions
 than anything in `price_features.sql`. Considered and rejected merging the two
-real duplicate columns during the round-3 maintainability remediation
-(2026-07-08) — see that plan's Task 9 for the full trade-off.
+real duplicate columns during the 2026-07-08 maintainability refactoring, for
+the self-containment reason above (commit `0be303b`).
 
 ## "7d"/"30d" lag and rolling columns can silently span more or fewer calendar days near a snapshot gap
 

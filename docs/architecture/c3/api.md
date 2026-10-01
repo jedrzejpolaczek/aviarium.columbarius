@@ -30,7 +30,7 @@ C4Component
   Rel(operator, adminrouter, "POST /admin/reload-model (X-Admin-Token)")
 
   Rel(lifespanmgr, golddb, "Reads features at startup (DuckDB read-only)")
-  Rel(lifespanmgr, mlflow, "Loads model by alias at startup")
+  Rel(lifespanmgr, mlflow, "Loads model by MODEL_RUN_ID at startup")
   Rel(lifespanmgr, appstate, "Populates state: db, model, X_all_t, similarity_index")
   Rel(adminrouter, mlflow, "Loads model by run_id, in-place, post-startup")
   Rel(adminrouter, appstate, "Swaps model and model_run_id only")
@@ -67,7 +67,7 @@ C4Component
 Pre-computing critical data at startup (ADR-019) eliminates redundant I/O and computation on every request:
 
 - **Database Connection**: Opened once at startup, reused across all requests via AppState
-- **Model Loading**: LightGBM model loaded from MLflow by alias at startup, held in memory
+- **Model Loading**: LightGBM model loaded from MLflow by `MODEL_RUN_ID` at startup, held in memory; `POST /admin/reload-model` swaps it without a restart (ADR-032)
 - **Feature Matrix (X_all_t)**: All card features pre-fetched from DuckDB and cached as a dense NumPy array for fast slicing
 - **Similarity Index**: Pre-built CardSimilarityIndex for O(1) similarity lookups
 

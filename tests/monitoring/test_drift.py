@@ -1,174 +1,117 @@
-"""Unit tests for src/monitoring/drift.py."""
+"""Tests for src/monitoring/drift.py — 7-day return drift (ADR-034)."""
 
 from datetime import date, timedelta
 
 import duckdb
+import numpy as np
 import pandas as pd
 import pytest
+from scipy.stats import wasserstein_distance  # type: ignore[import-untyped]
 
-from src.monitoring.drift import fetch_prices_for_period, is_drift_detected
+from src.monitoring.drift import (
+    DRIFT_THRESHOLD,
+    drift_score,
+    fetch_returns,
+    return_drift,
+    wasserstein_1d,
+)
+
+LATEST = date(2026, 10, 30)
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+def _gold(weekly_return_for_start):
+    """Gold with 60 cards priced daily for 50 days.
 
-
-@pytest.fixture
-def conn():
-    """In-memory DuckDB with 40 days of price data for two cards."""
+    ``weekly_return_for_start(start_date, card)`` sets each card's 7-day log
+    return from that start date, so tests control the return distribution.
+    """
+    rng = np.random.default_rng(0)
+    first = LATEST - timedelta(days=49)
+    rows = []
+    for card in range(60):
+        log_price = np.log1p(5.0 + card)
+        prices: dict[date, float] = {}
+        for day in range(50):
+            d = first + timedelta(days=day)
+            if day >= 7:
+                start = d - timedelta(days=7)
+                log_price = np.log1p(prices[start]) + weekly_return_for_start(
+                    start, card, rng
+                )
+            prices[d] = float(np.expm1(log_price))
+            rows.append((f"c{card}", d, prices[d]))
     con = duckdb.connect()
-    con.execute("""
-        CREATE TABLE gold_price_features (
-            uuid          VARCHAR,
-            snapshot_date DATE,
-            eur           DOUBLE,
-            edhrec_rank   DOUBLE,
-            foil_premium  DOUBLE
-        )
-    """)
-    for i in range(40):
-        d = date(2026, 1, 1) + timedelta(days=i)
-        eur_a = round(1.0 + i * 0.05, 2)
-        con.execute(
-            "INSERT INTO gold_price_features VALUES (?, ?, ?, ?, ?)",
-            ["card_a", str(d), eur_a, None, None],
-        )
-        con.execute(
-            "INSERT INTO gold_price_features VALUES (?, ?, ?, ?, ?)",
-            ["card_b", str(d), 5.0, None, None],
-        )
-    yield con
+    con.execute(
+        "CREATE TABLE gold_price_features (uuid VARCHAR, snapshot_date DATE, eur DOUBLE)"
+    )
+    con.executemany("INSERT INTO gold_price_features VALUES (?, ?, ?)", rows)
+    return con
+
+
+def test_wasserstein_1d_matches_scipy():
+    rng = np.random.default_rng(1)
+    u, v = rng.normal(0, 1, 500), rng.normal(0.3, 2, 300)
+
+    assert wasserstein_1d(u, v) == pytest.approx(wasserstein_distance(u, v))
+
+
+def test_drift_score_is_nan_when_undefined():
+    assert np.isnan(drift_score(pd.Series([], dtype=float), pd.Series([0.1])))
+    # Frozen feed: every reference return is zero, so there is no spread.
+    assert np.isnan(drift_score(pd.Series([0.0, 0.0]), pd.Series([0.1])))
+
+
+def test_stable_returns_do_not_drift():
+    con = _gold(lambda start, card, rng: rng.normal(0, 0.05))
+
+    result = return_drift(con, LATEST)
+
+    assert result.drifted is False
+    assert result.score < DRIFT_THRESHOLD
     con.close()
 
 
-# ---------------------------------------------------------------------------
-# fetch_prices_for_period
-# ---------------------------------------------------------------------------
+def test_a_market_wide_jump_in_the_current_week_drifts():
+    current_start = LATEST - timedelta(days=13)
+
+    def returns(start, card, rng):
+        jump = 0.4 if start >= current_start else 0.0
+        return jump + rng.normal(0, 0.05)
+
+    con = _gold(returns)
+
+    result = return_drift(con, LATEST)
+
+    assert result.drifted is True
+    assert result.score > DRIFT_THRESHOLD
+    con.close()
 
 
-def test_fetch_prices_returns_dataframe(conn):
-    result = fetch_prices_for_period(conn, "2026-01-01", "2026-01-10")
-    assert isinstance(result, pd.DataFrame)
+def test_windows_end_where_returns_can_exist():
+    con = _gold(lambda start, card, rng: 0.0)
+
+    result = return_drift(con, LATEST)
+
+    # A return starting after LATEST-7 has no end price yet.
+    assert result.current_end == str(LATEST - timedelta(days=7))
+    assert result.current_start == str(LATEST - timedelta(days=13))
+    assert result.current_n == 7 * 60
+    assert result.reference_n == 28 * 60
+    con.close()
 
 
-def test_fetch_prices_has_eur_column(conn):
-    result = fetch_prices_for_period(conn, "2026-01-01", "2026-01-10")
-    assert "eur" in result.columns
+def test_fetch_returns_skips_cards_without_both_prices():
+    con = duckdb.connect()
+    con.execute(
+        "CREATE TABLE gold_price_features (uuid VARCHAR, snapshot_date DATE, eur DOUBLE)"
+    )
+    d = date(2026, 10, 1)
+    con.executemany(
+        "INSERT INTO gold_price_features VALUES (?, ?, ?)",
+        [("a", d, 1.0), ("a", d + timedelta(days=7), 3.0), ("b", d, 1.0)],
+    )
 
+    r = fetch_returns(con, d, d)
 
-def test_fetch_prices_has_log_eur_column(conn):
-    result = fetch_prices_for_period(conn, "2026-01-01", "2026-01-10")
-    assert "log_eur" in result.columns
-
-
-def test_fetch_prices_has_uuid_column(conn):
-    result = fetch_prices_for_period(conn, "2026-01-01", "2026-01-10")
-    assert "uuid" in result.columns
-
-
-def test_fetch_prices_has_snapshot_date_column(conn):
-    result = fetch_prices_for_period(conn, "2026-01-01", "2026-01-10")
-    assert "snapshot_date" in result.columns
-
-
-def test_fetch_prices_date_filter_inclusive(conn):
-    result = fetch_prices_for_period(conn, "2026-01-05", "2026-01-05")
-    dates = result["snapshot_date"].astype(str).unique()
-    assert list(dates) == ["2026-01-05"]
-
-
-def test_fetch_prices_returns_empty_for_future_dates(conn):
-    result = fetch_prices_for_period(conn, "2099-01-01", "2099-01-10")
-    assert result.empty
-
-
-def test_fetch_prices_log_eur_is_log1p_of_eur(conn):
-    import numpy as np
-
-    result = fetch_prices_for_period(conn, "2026-01-01", "2026-01-01")
-    for _, row in result.iterrows():
-        if pd.notna(row["eur"]) and pd.notna(row["log_eur"]):
-            expected = np.log1p(row["eur"])
-            assert abs(row["log_eur"] - expected) < 1e-9
-
-
-def test_fetch_prices_respects_both_bounds(conn):
-    result = fetch_prices_for_period(conn, "2026-01-01", "2026-01-07")
-    dates = result["snapshot_date"].astype(str).unique()
-    assert all("2026-01-01" <= d <= "2026-01-07" for d in dates)
-
-
-# ---------------------------------------------------------------------------
-# is_drift_detected
-# ---------------------------------------------------------------------------
-
-
-def _make_report(dataset_drift: bool) -> dict:
-    return {"metrics": [{"result": {"dataset_drift": dataset_drift}}]}
-
-
-def test_is_drift_detected_returns_true_when_flagged():
-    assert is_drift_detected(_make_report(True)) is True
-
-
-def test_is_drift_detected_returns_false_when_not_flagged():
-    assert is_drift_detected(_make_report(False)) is False
-
-
-def test_is_drift_detected_returns_bool():
-    result = is_drift_detected(_make_report(True))
-    assert isinstance(result, bool)
-
-
-def test_is_drift_detected_with_integer_true():
-    report = {"metrics": [{"result": {"dataset_drift": 1}}]}
-    assert is_drift_detected(report) is True
-
-
-def test_is_drift_detected_with_integer_zero():
-    report = {"metrics": [{"result": {"dataset_drift": 0}}]}
-    assert is_drift_detected(report) is False
-
-
-# ---------------------------------------------------------------------------
-# compute_drift_report (requires evidently — skipped if not installed)
-# ---------------------------------------------------------------------------
-
-evidently = pytest.importorskip("evidently", reason="evidently not installed")
-
-
-def test_compute_drift_report_returns_dict(conn):
-    from src.monitoring.drift import compute_drift_report
-
-    reference = fetch_prices_for_period(conn, "2026-01-01", "2026-01-30")
-    current = fetch_prices_for_period(conn, "2026-01-31", "2026-02-09")
-    result = compute_drift_report(reference, current)
-    assert isinstance(result, dict)
-
-
-def test_compute_drift_report_has_metrics_key(conn):
-    from src.monitoring.drift import compute_drift_report
-
-    reference = fetch_prices_for_period(conn, "2026-01-01", "2026-01-30")
-    current = fetch_prices_for_period(conn, "2026-01-31", "2026-02-09")
-    result = compute_drift_report(reference, current)
-    assert "metrics" in result
-
-
-def test_compute_drift_report_first_metric_has_dataset_drift(conn):
-    from src.monitoring.drift import compute_drift_report
-
-    reference = fetch_prices_for_period(conn, "2026-01-01", "2026-01-30")
-    current = fetch_prices_for_period(conn, "2026-01-31", "2026-02-09")
-    result = compute_drift_report(reference, current)
-    assert "dataset_drift" in result["metrics"][0]["result"]
-
-
-def test_compute_drift_report_dataset_drift_is_bool(conn):
-    from src.monitoring.drift import compute_drift_report
-
-    reference = fetch_prices_for_period(conn, "2026-01-01", "2026-01-30")
-    current = fetch_prices_for_period(conn, "2026-01-31", "2026-02-09")
-    result = compute_drift_report(reference, current)
-    assert isinstance(result["metrics"][0]["result"]["dataset_drift"], bool)
+    assert r.tolist() == pytest.approx([np.log(4.0) - np.log(2.0)])
+    con.close()

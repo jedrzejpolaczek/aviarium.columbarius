@@ -46,9 +46,9 @@ def main() -> None:
     print(f"\n{'=' * 60}")
     print(f"MODEL_RUN_ID = {run_id}")
     print(f"{'=' * 60}")
-    print("\nUstaw w PowerShell:")
+    print("\nSet in PowerShell:")
     print(f'  $env:MODEL_RUN_ID = "{run_id}"')
-    print("\nUruchom API:")
+    print("\nStart the API:")
     print("  uv run uvicorn app.main:app --reload")
 
 

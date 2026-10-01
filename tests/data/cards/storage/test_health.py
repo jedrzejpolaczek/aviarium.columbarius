@@ -2,6 +2,7 @@ import datetime
 from pathlib import Path
 
 import duckdb
+import pytest
 
 from src.data.cards.storage.health import (
     CheckResult,
@@ -293,8 +294,9 @@ class TestCheckGoldMlDatasetHasTarget:
         assert result.status == "PASS"
         con.close()
 
+    @pytest.mark.legacy_date_schema
     def test_accepts_varchar_snapshot_date(self):
-        """Gold stores snapshot_date as VARCHAR in places — must not crash."""
+        """A pre-0.2.0 (unmigrated) Gold file has VARCHAR dates — must not crash."""
         con = duckdb.connect(":memory:")
         con.execute(
             "CREATE TABLE gold_ml_dataset "
@@ -317,22 +319,14 @@ def _make_all_dbs(tmp_path: Path, today: datetime.date) -> tuple[str, str, str]:
     b.execute("INSERT INTO bronze_scryfall_cards VALUES ('x')")
     b.execute("CREATE TABLE bronze_mtgjson_cards (uuid VARCHAR)")
     b.execute("INSERT INTO bronze_mtgjson_cards VALUES ('x')")
-    # Bronze stores snapshot_date as VARCHAR (Silver/Gold use DATE) — the
-    # freshness check relies on DuckDB casting either against a bound date.
     b.execute(
-        "CREATE TABLE bronze_mtgjson_prices_history (uuid VARCHAR, snapshot_date VARCHAR)"
+        "CREATE TABLE bronze_mtgjson_prices_history (uuid VARCHAR, snapshot_date DATE)"
     )
+    b.execute("INSERT INTO bronze_mtgjson_prices_history VALUES ('x', ?)", [today])
     b.execute(
-        "INSERT INTO bronze_mtgjson_prices_history VALUES ('x', ?)",
-        [today.isoformat()],
+        "CREATE TABLE bronze_scryfall_prices_history (uuid VARCHAR, snapshot_date DATE)"
     )
-    b.execute(
-        "CREATE TABLE bronze_scryfall_prices_history (uuid VARCHAR, snapshot_date VARCHAR)"
-    )
-    b.execute(
-        "INSERT INTO bronze_scryfall_prices_history VALUES ('x', ?)",
-        [today.isoformat()],
-    )
+    b.execute("INSERT INTO bronze_scryfall_prices_history VALUES ('x', ?)", [today])
     b.close()
 
     silver_path = str(tmp_path / "silver.duckdb")
@@ -362,10 +356,10 @@ def _make_all_dbs(tmp_path: Path, today: datetime.date) -> tuple[str, str, str]:
     s.execute("INSERT INTO silver_format_staples_history VALUES ('x', ?)", [today])
     s.execute(
         "CREATE TABLE silver_tournament_results_history"
-        " (id VARCHAR, tournament_date VARCHAR)"
+        " (id VARCHAR, tournament_date DATE)"
     )
     s.execute(
-        "INSERT INTO silver_tournament_results_history VALUES ('x', '2026-06-20')"
+        "INSERT INTO silver_tournament_results_history VALUES ('x', DATE '2026-06-20')"
     )
     s.close()
 
@@ -489,7 +483,7 @@ class TestCheckBronzePricesSchemaWarn:
     def _make_eav_table(self, con: duckdb.DuckDBPyConnection, rows: list) -> None:
         con.execute("""
             CREATE TABLE bronze_mtgjson_prices_history (
-                uuid VARCHAR, snapshot_date VARCHAR,
+                uuid VARCHAR, snapshot_date DATE,
                 retailer VARCHAR, tx_type VARCHAR, finish VARCHAR, price FLOAT
             )
         """)
@@ -553,7 +547,7 @@ class TestCheckBronzePricesSchemaWarn:
         b.execute("DROP TABLE IF EXISTS bronze_mtgjson_prices_history")
         b.execute("""
             CREATE TABLE bronze_mtgjson_prices_history (
-                uuid VARCHAR, snapshot_date VARCHAR,
+                uuid VARCHAR, snapshot_date DATE,
                 retailer VARCHAR, tx_type VARCHAR, finish VARCHAR, price FLOAT
             )
         """)

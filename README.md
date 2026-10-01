@@ -1,8 +1,8 @@
 # aviarium.columbarius
 
-![CI](https://github.com/jpolaczek/aviarium.columbarius/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/jedrzejpolaczek/aviarium.columbarius/actions/workflows/ci.yml/badge.svg)
 
-**aviarium.columbarius** is a Magic: The Gathering card price prediction system. It ingests and stores raw card and pricing data from Scryfall and MTGJson, cleans and joins them in a Silver tier, and will grow to include feature engineering and an ML model for predicting card prices.
+**aviarium.columbarius** is a Magic: The Gathering card price prediction system. A daily ETL ingests card, price, format-staple and tournament data (Scryfall, MTGJson, MTGGoldfish, MTGTop8) into a Bronze/Silver/Gold DuckDB medallion; a LightGBM model forecasts each card's 7-day price move, tracked in MLflow; a FastAPI service with a React UI serves predictions, similar cards and underpriced candidates; and scheduled health checks, alerting and ban-triggered retraining keep it running unattended.
 
 <img src="https://upload.wikimedia.org/wikipedia/commons/3/3f/Dvergfalk_-_Merlin_%28Falco_columbarius%29_Lista%2C_Norway.JPG" alt="Falco columbarius — merlin" width="480">
 
@@ -48,6 +48,10 @@
 | Scryfall | `bulk-data/all-cards` | Card metadata, prices, legalities |
 | MTGJson AllPrintings | `AllPrintings.json` | Every printing across all sets |
 | MTGJson AllPricesToday | `AllPricesToday.json` | Current paper/MTGO prices by card UUID |
+| MTGGoldfish | `format-staples/{format}` (HTML) | Most-played cards per format |
+| MTGTop8 | `format?f={code}` (HTML) | Recent tournament top-8 decklists |
+
+Scraping rights for the two HTML sources are reviewed in [ADR-015](docs/adr/ADR-015-scraping-rights-review.md).
 
 ---
 
@@ -57,14 +61,14 @@ The pipeline follows a **Medallion architecture** (Bronze → Silver → Gold).
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  External APIs                                              │
-│  Scryfall  ·  MTGJson AllPrintings  ·  MTGJson AllPrices    │
+│  External sources                                           │
+│  Scryfall · MTGJson (JSON)  ·  MTGGoldfish · MTGTop8 (HTML) │
 └────────────────────┬────────────────────────────────────────┘
-                     │ HTTP download
+                     │ HTTP download (retry + backoff)
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  sources.py  (ingesting_pipeline)                           │
-│  • Downloads JSON files (controlled by flag in config)      │
+│  src/data/cards/sources/  (ingesting_pipeline)              │
+│  • Downloads JSON bulk files and scrapes HTML pages         │
 │  • Validates every record via Pydantic models               │
 │  • Returns (records, errors) per source                     │
 └────────────────────┬────────────────────────────────────────┘
@@ -88,15 +92,15 @@ The pipeline follows a **Medallion architecture** (Bronze → Silver → Gold).
 │  GOLD  —  DuckDB  (data/gold/cards.duckdb)  (done)          │
 │  Aggregated views ready for ML                              │
 └────────────────────┬────────────────────────────────────────┘
-                     │  (trained)
+                     │  walk-forward CV, MLflow tracking + registry
                      ▼
-              ML price prediction model
+        LightGBM model  ──►  FastAPI (app/)  ──►  React UI (frontend/)
 ```
 
-**Pipeline phases:**
+**Pipeline phases** (both in `src/data/cards/pipelines.py`):
 
-- `initial_pipeline` — Full load of all tiers; drops and recreates all tables. Run once on initial setup or for a full rebuild.
-- `daily_pipeline` — Incremental upsert + snapshot for Bronze, incremental Silver refresh. Run once per day.
+- `initial_pipeline` — Full load of all three tiers; drops and recreates every Bronze table. Reads `configs/bronze_config_seed.json`, which points at MTGJson `AllPrices.json` (~90 days of price history) instead of `AllPricesToday.json`, so a fresh install starts with a usable history. Run once on setup or for a full rebuild.
+- `daily_pipeline` — Incremental upsert plus one snapshot row per card for Bronze, then Silver and a full Gold rebuild, then health checks. Run once per day.
 
 ---
 
@@ -106,19 +110,27 @@ The pipeline follows a **Medallion architecture** (Bronze → Silver → Gold).
 aviarium.columbarius/
 ├── app/                              # FastAPI price-prediction service
 │   ├── main.py                       #   app factory, startup precomputation
-│   ├── pricing.py                    #   tiered pricing strategy (ADR-018)
-│   ├── dependencies.py
-│   └── routers/                      #   cards, health, predict, similar, underpriced
+│   ├── pricing.py                    #   log-return → EUR price conversion
+│   ├── dependencies.py               #   shared request state and guards
+│   └── routers/                      #   admin, cards, health, predict, similar, underpriced
 ├── frontend/                         # Vite/React web UI
 │   └── src/                          #   CardSearch, PredictionResult, api.ts
 ├── scripts/
-│   ├── run_pipeline.py               # ETL pipeline entry point
-│   ├── train_model.py                # model training entry point
-│   └── check_and_retrain.py          # scheduled drift/MAPE check
+│   ├── run_pipeline.py               # daily ETL entry point
+│   ├── train_model.py                # train + register a model
+│   ├── check_and_retrain.py          # daily model check (ADR-034)
+│   ├── backup_data.py                # DuckDB + MLflow backup
+│   ├── rollback_model.py             # move the registry's production alias
+│   ├── check_health.py               # standalone data health checks
+│   ├── migrate_snapshot_date_to_date.py  # one-off 0.1.x → 0.2.0 migration
+│   ├── strip_notebook_paths.py       # redact local paths from notebook outputs
+│   ├── check_doc_paths.py            # verify file paths cited in docs exist
+│   └── pre-push                      # git hook running the CI checks locally
 ├── pyproject.toml
 ├── configs/
-│   ├── data_sources.yaml             # source URLs, local paths, download flags
-│   ├── bronze_config.json            # Bronze table definitions
+│   ├── data_sources.yaml             # DuckDB paths and per-tier config paths
+│   ├── bronze_config.json            # source URLs and download flags (daily)
+│   ├── bronze_config_seed.json       # same, with 90-day price history (initial load)
 │   └── silver_config.json            # Silver transform config
 ├── data/
 │   ├── raw/                          # downloaded JSON files (gitignored)
@@ -149,20 +161,8 @@ aviarium.columbarius/
 │   │           ├── gold/             # GoldStorage — Gold layer aggregation
 │   │           └── errors.py         # StorageError hierarchy
 │   ├── ml/                           # feature engineering, models, evaluation
-│   └── monitoring/                   # drift detection, retraining triggers
-└── tests/                            # mirrors src/ and app/ layout
-    └── data/
-        └── cards/
-            ├── sources/
-            │   ├── test_extractors.py
-            │   ├── test_http.py
-            │   ├── test_pipeline.py
-            │   └── test_registry.py
-            └── storage/
-                ├── test_base.py
-                ├── test_bronze.py
-                ├── test_silver.py
-                └── test_gold.py
+│   └── monitoring/                   # alerts, retraining triggers, serving check
+└── tests/                            # mirrors src/, app/ and scripts/
 ```
 
 ---
@@ -178,7 +178,7 @@ aviarium.columbarius/
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/jpolaczek/aviarium.columbarius
+git clone https://github.com/jedrzejpolaczek/aviarium.columbarius
 cd aviarium.columbarius
 
 # 2. Create the virtual environment and install all dependencies
@@ -196,7 +196,7 @@ make install-hooks
 | `make install-hooks` | Register git hooks from `scripts/` |
 | `make pipeline` | Run the daily ETL pipeline |
 | `make train` | Train the LightGBM model and log to MLflow |
-| `make monitor` | Run the drift/MAPE check and conditionally retrain |
+| `make monitor` | Record and score the served model, check return drift, retrain on a trigger |
 | `make lint` | Run `ruff check` |
 | `make format` | Run `ruff format` |
 | `make type-check` | Run `mypy` |
@@ -210,32 +210,38 @@ make install-hooks
 
 ## Configuration
 
-Source URLs and download flags live in `configs/data_sources.yaml`:
+Configuration has three levels ([ADR-007](docs/adr/ADR-007-three-level-configuration-hierarchy.md)). The entry point is `configs/data_sources.yaml`, which only holds storage locations and points at the per-tier configs:
 
 ```yaml
-sources:
-  - type: scryfall
-    url: "https://api.scryfall.com/bulk-data/all-cards"
-    path: "data/raw/scryfall_cards.json"
-    flag: false          # set true to re-download from the API
-
-  - type: mtgjson_cards
-    url: "https://mtgjson.com/api/v5/AllPrintings.json"
-    path: "data/raw/mtgjson_cards.json"
-    flag: false
-
-  - type: mtgjson_prices
-    url: "https://mtgjson.com/api/v5/AllPricesToday.json"
-    path: "data/raw/mtgjson_prices.json"
-    flag: false
-
 storage:
-  - bronze_duckdb_path: "data/bronze/cards.duckdb"
+  bronze_duckdb_path: "data/bronze/cards.duckdb"
+  silver_duckdb_path: "data/silver/cards.duckdb"
+  gold_duckdb_path: "data/gold/cards.duckdb"
+  silver_config_path: "configs/silver_config.json"
+  bronze_config_path: "configs/bronze_config.json"
+  bronze_config_seed_path: "configs/bronze_config_seed.json"
 ```
 
-Set `flag: true` for any source you want to download fresh from the API. Set `flag: false` to load from the existing local JSON file without hitting the network.
+Source URLs and download flags live in `configs/bronze_config.json` (daily runs) and `configs/bronze_config_seed.json` (initial load):
 
-Per-tier table and transformation rules are in `configs/bronze_config.json` and `configs/silver_config.json`.
+```json
+{
+  "sources": [
+    {
+      "type": "scryfall",
+      "url": "https://api.scryfall.com/bulk-data/all-cards",
+      "path": "data/raw/scryfall_cards.json",
+      "flag": true
+    }
+  ],
+  "format_staples": { "formats": ["commander", "modern"], "base_url": "https://www.mtggoldfish.com/format-staples/{format}/full/all" },
+  "tournament_results": { "formats": ["modern", "legacy"], "max_tournaments_per_format": 10 }
+}
+```
+
+(abridged — see the file for all sources and fields). `flag: true` downloads the source fresh; `flag: false` loads the existing local JSON at `path` without touching the network.
+
+Environment variables (model run id, admin token, alert webhook, heartbeat URL) are documented in [`.env.example`](.env.example).
 
 ---
 
@@ -243,16 +249,11 @@ Per-tier table and transformation rules are in `configs/bronze_config.json` and 
 
 **Initial load** (first run or full rebuild):
 
-```python
-# in scripts/run_pipeline.py — uncomment initial_pipeline:
-initial_pipeline(config_path)
-```
-
 ```bash
-uv run python -m scripts.run_pipeline
+uv run python -c "from src.data.cards.pipelines import initial_pipeline; initial_pipeline('configs/data_sources.yaml')"
 ```
 
-Drops and recreates all Bronze and Silver tables, then writes the first snapshot rows to history tables.
+Drops and recreates all Bronze tables, backfills about 90 days of MTGJson price history, and builds Silver and Gold on top.
 
 **Daily update** (subsequent runs):
 
@@ -321,7 +322,7 @@ Always pass `--backend-store-uri` explicitly (run from the project root). Withou
 uv run python -m scripts.train_model --db-path path/to/gold/cards.duckdb
 ```
 
-> **Data requirement:** Walk-forward CV needs at least 50 days of daily snapshots (≥ 3 folds of 30-day train + 7-day validation windows). If fewer snapshots are available, the script skips CV and trains a final model directly.
+> **Data requirement:** a walk-forward fold is usable only if its 7-day validation window holds a snapshot that also has a partner exactly 7 days later (the target). With uninterrupted daily snapshots that takes about 57 days; gaps in the history — such as the 2026-07-29 → 2026-09-02 ingestion outage — remove folds. With fewer than 3 usable folds CV raises `InsufficientDataError` and the final model is trained without CV, which also means automatic promotion has no metric to compare and refuses (runbook §4c).
 
 ---
 
@@ -341,19 +342,36 @@ Exploratory and confirmatory analysis behind the feature set and modelling choic
 
 ### Measured results
 
-Most recent *measured* run — not the most recent data. Taken at `gold_snapshot_date = 2026-07-02` over 36 daily snapshots, 78 692 training rows × 17 features; see the note below the table. MAE is on the `log1p` scale — comparable between models, not a percentage. Reported per tier, because the aggregate hides the interesting part:
+**Walk-forward cross-validation, 2026-09-30** — MLflow run `351ad6ef`, 3 folds (the project's minimum), validation snapshots 2026-07-08, 2026-07-15 and 2026-09-23, final model trained at `gold_snapshot_date = 2026-09-23`. MAE is on the `log1p` return scale — comparable between models, not a percentage. Naive predicts "no change" on the same folds:
 
-| Tier | Cards (test) | Naive | MA7d | LightGBM | LightGBM wins? |
-|---|---:|---:|---:|---:|---|
-| 1 (< €100) | 15 606 | 0.056128 | 0.056128 | **0.054001** | Yes |
-| 2 (€100–1000) | 111 | **0.031356** | 0.031356 | 0.033488 | **No — 7% worse** |
-| 3 (> €1000) | 22 | 0.053028 | 0.053028 | **0.052530** | Marginally |
+| Tier | Cards (per fold) | Naive | LightGBM | LightGBM vs naive |
+|---|---:|---:|---:|---|
+| 1 (< €100) | ~80 000 | **0.023985** | 0.025200 | 5% worse |
+| 2 (€100–1000) | ~530 | **0.010363** | 0.011839 | 14% worse |
+| 3 (> €1000) | ~140 | **0.006905** | 0.007608 | 10% worse |
 
-**The honest summary: LightGBM wins Tier 1, loses Tier 2, and ties Tier 3 within noise.** Seven-day card price movement is close to a random walk, and a gradient-boosted model on 17 features only modestly outperforms assuming no change at all. Tier 2 is the hardest to beat — the naive baseline already sits at the lowest MAE of any tier (0.031), and LightGBM does not catch it despite having the most features available. AR1 is the weakest baseline overall (0.0569).
+Per fold, Tier 1: LightGBM is 19% worse on fold 0 (0.025339 vs 0.021252), level on fold 1 (0.024447 vs 0.024424) and **1.8% better on fold 2** (0.025813 vs 0.026280). Fold 0 trains on the week of the July price-feed switch, when almost every price jumped at once, and the model learns that jump as if it were a pattern. Fold 2 is the only fold trained and validated entirely on the current feed.
 
-This is exactly why metrics are reported per tier rather than aggregated: a single global MAE would have shown LightGBM ahead and concealed the Tier 2 regression.
+**By price band** (same folds; LightGBM's MAE relative to naive, negative = LightGBM better):
 
-> **These numbers predate walk-forward cross-validation and should be re-measured.** They come from a single chronological train/test split taken at `gold_snapshot_date = 2026-07-02`, when the dataset spanned too few days for CV to run. That constraint has since lifted: the Gold layer now holds 67 snapshots spanning 2026-05-26 to 2026-09-24, which generates 13 folds. Re-running `walk_forward_cv_nb03` is the outstanding work needed to replace a single-split estimate with a cross-validated one — Tier 3 in particular rests on just 22 test cards in the split above.
+| Price band | Cards per fold | Unchanged after 7 days | Fold 0 (feed switch) | Fold 1 | Fold 2 (clean) |
+|---|---:|---:|---:|---:|---:|
+| < €1 | ~60 100 | 35% | +20.5% | 0.0% | **−0.8%** |
+| €1–10 | ~15 700 | 15% | +12.6% | +0.2% | **−2.9%** |
+| €10–100 | ~4 000 | 24% | +35.5% | +0.2% | **−1.3%** |
+| €100–1000 | ~530 | 77% | +31.1% | +0.5% | +5.6% |
+| ≥ €1000 | ~140 | 88% | +44.8% | +0.4% | +20.1% |
+
+The tier averages hide two opposite patterns. On the one clean fold, LightGBM beats naive in every band under €100, most clearly at €1–10, where prices move most often. It loses on cards above €100, most of which do not change price at all within a week, where any predicted move is an error. Fold 0 is poor everywhere, for the reason given above. (Recomputed 2026-10-01 with the same CV; fold-level MAE differs from the logged run in the fourth decimal because LightGBM is multi-threaded.)
+
+**The honest summary: under cross-validation LightGBM does not beat "the price will not change".** Seven-day card price movement is close to a random walk. The one clean fold hints at a small edge that three folds cannot establish. The next checkpoints are 6 folds (≈2026-10-21) and 14 folds (≈2026-12-16).
+
+These figures replace an earlier estimate that looked better, for two documented reasons:
+
+- **A single split, not CV.** At `gold_snapshot_date = 2026-07-02` one chronological split had LightGBM winning Tier 1 (0.054001 vs 0.056128), losing Tier 2 by 7% and tying Tier 3. A single split taken near the feed switch is not a reliable estimate. Naive and MA7d also agreed to six decimals there, because the feed was frozen until early July.
+- **An evaluation leak.** Until 2026-09-30, CV let early stopping choose the tree count on the validation fold it then scored. With that leak, Tier 1 showed LightGBM 0.6% *better* than naive; without it, 5% worse. The fix and a regression test are in `src/ml/training/trainer.py`.
+
+Metrics are reported per tier because an aggregate hides exactly these differences.
 
 Full write-up, including the earlier degenerate `MAE ≈ 0` result at 32 snapshots and why it resolved: [`notebooks/ml_models/ML_FINDINGS.md`](notebooks/ml_models/ML_FINDINGS.md).
 
@@ -361,7 +379,14 @@ Full write-up, including the earlier degenerate `MAE ≈ 0` result at 32 snapsho
 
 ## Monitoring & Scheduled Retraining
 
-`scripts/check_and_retrain.py` checks for a ban/unban event or a 3-day MAPE alert (see `src/monitoring/retraining.py` (`should_retrain`)) and only retrains when one fires. Run it once a day, after the ETL pipeline:
+`scripts/check_and_retrain.py` is the daily model check ([ADR-034](docs/adr/ADR-034-skill-vs-naive-and-return-drift-monitoring.md)). Each run:
+
+- **records** the served model's predictions for every card in a separate monitoring database (`data/monitoring/monitoring.duckdb`);
+- **scores** each prediction date once its prices a week later exist, against the naive "no change" forecast. The model being more than 5% worse than naive on 3 evaluated dates in a row alerts and triggers a retrain;
+- **checks drift** in the distribution of 7-day price returns. A shift alerts, for example on a price-feed incident, but does not retrain;
+- **retrains** on a ban/unban event or the degradation above, and promotes only a model that is not worse on cross-validation.
+
+The alarm is armed about 10 days after the first run, since predictions need a week to mature and the rule needs 3 scored dates. Run it once a day, after the ETL pipeline:
 
 ```bash
 make pipeline
@@ -487,20 +512,18 @@ Scoped to a single package (faster):
 uv run pytest tests/ml/ --cov=src/ml --cov-report=term-missing
 ```
 
-**Coverage report** (scoped to the sources package only):
+**Measured coverage** (2026-09-29, main suite with `--cov=src --cov=app --cov=scripts`; 1229 tests pass):
 
-Current coverage (`src/data/cards/sources/`):
+| Package | Coverage |
+|---|---:|
+| `src/data` | 96% |
+| `src/ml` | 95% |
+| `src/monitoring` | 98% |
+| `app` | 99% |
+| `scripts` | 77% |
+| **Total** | **93%** |
 
-| File | Statements | Cover | Missing lines |
-|---|---|---|---|
-| `__init__.py` | 5 | 100% | — |
-| `errors.py` | 8 | 100% | — |
-| `http.py` | 38 | 100% | — |
-| `extractors.py` | 97 | 96% | 162, 171, 225, 286 |
-| `pipeline.py` | 152 | 99% | 306–307 |
-| **Total** | **300** | **98%** | |
-
-The remaining gaps are defensive guards for near-impossible HTML states (empty `<div>` nodes, regex matches that can't fail given the earlier CSS selector, etc.) and one error branch for an individual deck-page download failure inside `_ingest_tournament_results`.
+`src/ml/training/tracking.py` shows lower than it is (69%), because its tests run in the separate process and the two coverage runs are not combined. The lowest real gap is `scripts/migrate_snapshot_date_to_date.py`, a one-off migration with no tests.
 
 All of the above covers the Python backend only. The `frontend/` app has its own Vitest suite — run it with `cd frontend && npm test`.
 
@@ -545,6 +568,7 @@ Design decisions are documented in `docs/adr/`:
 | [ADR-031](docs/adr/ADR-031-remote-alerting-channels.md) | Remote alerting channels — webhook + heartbeat |
 | [ADR-032](docs/adr/ADR-032-hot-model-reload-endpoint.md) | Hot model-reload endpoint |
 | [ADR-033](docs/adr/ADR-033-global-exception-handler.md) | Global API exception handler |
+| [ADR-034](docs/adr/ADR-034-skill-vs-naive-and-return-drift-monitoring.md) | Monitoring by skill against naive and by return drift |
 
 ---
 

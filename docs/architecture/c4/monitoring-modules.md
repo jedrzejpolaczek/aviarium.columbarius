@@ -1,14 +1,28 @@
 # C4 — Monitoring Modules Code
 
-The monitoring system detects prediction drift and ban events, triggering automatic retraining decisions via a priority-based logic that first checks for ban events (immediate retrain) and then evaluates rolling MAPE degradation over consecutive days.
+Module-level view of [ADR-034](../../adr/ADR-034-skill-vs-naive-and-return-drift-monitoring.md). *Revised 2026-09-30; `mape_tracker` and the Evidently-based drift report were removed.*
 
 ```mermaid
 classDiagram
-  class mape_tracker {
+  class prediction_tracker {
     <<module>>
-    save_predictions(conn, predictions_df, model_run_id, snapshot_date) None
-    compute_rolling_mape(conn) float
-    is_mape_alert(conn) bool
+    MONITORING_DB_PATH
+    SKILL_THRESHOLD = -0.05
+    CONSECUTIVE_DAYS = 3
+    save_predictions(mon_conn, predictions, snapshot_date, model_run_id) int
+    record_daily_predictions(gold_conn, mon_conn, model_run_id, snapshot_date) int
+    daily_skill(mon_conn, gold_conn) DataFrame
+    is_degraded(skill_df) bool
+    skill_status(skill_df) SkillStatus
+  }
+
+  class drift {
+    <<module>>
+    DRIFT_THRESHOLD = 0.15
+    fetch_returns(conn, start, end) Series
+    wasserstein_1d(u, v) float
+    drift_score(reference, current) float
+    return_drift(conn, latest_snapshot) DriftResult
   }
 
   class event_trigger {
@@ -17,48 +31,32 @@ classDiagram
     get_todays_events(conn) list
   }
 
-  class drift {
-    <<module>>
-    fetch_prices_for_period(conn, start_date, end_date) DataFrame
-    compute_drift_report(conn) dict
-  }
-
   class retraining {
     <<module>>
-    should_retrain(conn) tuple~bool, str~
-    retrain(conn) str
+    should_retrain(conn, skill_df) tuple~bool, str~
+    retrain(conn, snapshot_date) str
     promote_to_production(run_id) None
   }
 
-  retraining ..> mape_tracker : calls compute_rolling_mape,is_mape_alert
-  retraining ..> event_trigger : calls has_ban_event_today,get_todays_events
+  retraining ..> event_trigger
+  retraining ..> prediction_tracker : is_degraded
 ```
 
 ## Module Responsibilities
 
 | Module | Responsibility |
 |--------|-----------------|
-| `mape_tracker` | Persists predictions to gold_predictions and computes rolling 7-day MAPE against actual prices; emits MAPE alerts when threshold breached for consecutive days |
-| `event_trigger` | Queries gold_events table to detect ban/unban events occurring on a specific date |
-| `drift` | Fetches historical EUR prices and runs Evidently KS-test comparing reference (last 30 days) vs current (last 7 days) price distributions |
-| `retraining` | Orchestrates retraining decisions, executes LightGBM model training via walk-forward CV, logs to MLflow, and promotes winning models to production |
+| `prediction_tracker` | Stores the served model's daily predictions in the monitoring DB (one transaction per day and model, replacing reruns); scores matured dates against the naive forecast; decides degradation |
+| `drift` | 7-day log returns from `gold_price_features`; normalised Wasserstein distance between the current week and the previous four; implemented in numpy |
+| `event_trigger` | Ban/unban events in `gold_events` on a given date |
+| `retraining` | `should_retrain` (ban, then degradation); `retrain` (walk-forward CV, final model, MLflow); `_compare_and_promote` / `promote_to_production` |
 
-## Retraining Decision Logic
+## Data
 
-The `should_retrain()` function checks two independent signals in priority order:
+| Store | Table | Written by | Read by |
+|---|---|---|---|
+| Monitoring DB (`data/monitoring/monitoring.duckdb`) | `predictions(uuid, snapshot_date, eur, predicted_log_return, model_run_id, created_at)` | `save_predictions` | `daily_skill` |
+| Gold DB (read-only here) | `gold_price_features` | ETL | features, actual returns, drift |
+| Gold DB | `gold_events` | ETL | `event_trigger` |
 
-1. **Ban/unban event today** (queries gold_events) → immediate retrain signal
-2. **MAPE > 30% for 3 consecutive days** (via `compute_rolling_mape()` and `is_mape_alert()`) → drift-induced retrain signal
-
-If either signal fires, `retrain()` is invoked to build a fresh LightGBM model using walk-forward cross-validation on the snapshot and training on full historical data. The new model is logged to MLflow with a new `run_id`. 
-
-`promote_to_production(run_id)` only promotes a model if its CV MAPE is better than the currently registered Production model in MLflow Registry, ensuring quality gates are enforced.
-
-## Data Sources
-
-| Module | Reads From | Purpose |
-|--------|-----------|---------|
-| `mape_tracker` | gold_predictions, gold_price_features | Retrieve past predictions and 7-day actual prices for MAPE computation |
-| `event_trigger` | gold_events | Detect ban/unban events occurring today |
-| `drift` | gold_price_features | Fetch historical EUR prices for distribution analysis |
-| `retraining` | gold_events, gold_predictions, gold_price_features | Aggregate signals for retraining decision; source training data for model rebuild |
+The monitoring DB is included in `scripts/backup_data.py`: predictions are a record of what the model said on the day and cannot be regenerated.

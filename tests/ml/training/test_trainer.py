@@ -508,3 +508,38 @@ def test_generate_folds_unlock_date_accounts_for_target_horizon():
 
     # 2026-01-01 + (30-1 + 2*7 + 7 + 7) = 2026-02-27
     assert "2026-02-27" in str(exc.value)
+
+
+class _SpyModel(_ZeroModel):
+    """Records what fit() received, to check the validation fold stays unseen."""
+
+    def __init__(self):
+        self.fit_calls = []
+
+    def fit(self, X_train, y_train, X_val=None, y_val=None):
+        self.fit_calls.append((X_val, y_val))
+        return self
+
+
+def test_walk_forward_cv_never_shows_the_validation_fold_to_fit(
+    wfcv_conn, simple_folds, monkeypatch
+):
+    """Early stopping must not tune on the fold that is then scored.
+
+    Passing X_val/y_val to fit() let LightGBM pick its tree count on the
+    validation snapshot itself. On the Gold layer of 2026-09-30 that alone
+    turned Tier 1 from 5% worse than the naive baseline into 0.6% better.
+    """
+    import src.ml.training.trainer as t
+
+    monkeypatch.setattr(t, "build_lag_features", lambda conn, snap: pd.DataFrame())
+    monkeypatch.setattr(t, "build_target", lambda conn, snap: pd.DataFrame())
+    monkeypatch.setattr(t, "prepare_training_data", _mock_prepare)
+    monkeypatch.setattr(t, "build_feature_pipeline", _mock_pipeline_factory)
+    monkeypatch.setattr(t, "get_feature_names", _mock_feature_names)
+    model = _SpyModel()
+
+    walk_forward_cv(wfcv_conn, model, simple_folds)
+
+    assert model.fit_calls
+    assert all(X_val is None and y_val is None for X_val, y_val in model.fit_calls)

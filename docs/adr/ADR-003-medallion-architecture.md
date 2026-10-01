@@ -1,5 +1,8 @@
 # ADR-003: Medallion Architecture for Data Layers
 
+**Date:** 2026-06-19
+**Status:** Accepted — table lists and diagrams brought up to date 2026-09-29 (MTGJson prices go straight into `bronze_mtgjson_prices_history`, see ADR-025; Gold is built by `GoldStorage`, not by notebooks).
+
 ## Context
 
 Once data is validated and stored in DuckDB it needs to be transformed before it
@@ -31,7 +34,7 @@ shared file. Cross-layer queries are handled via DuckDB `ATTACH` in interactive 
 |---|---|---|---|
 | Bronze | `bronze_` | Raw validated data, close to source schema | `BronzeStorage.populate` / `BronzeStorage.daily_update` |
 | Silver | `silver_` | Flattened, cleaned, joined | `SilverStorage.populate` / `SilverStorage.update` |
-| Gold | `gold_` | ML-ready features, encoded categoricals | SQL transformation scripts / notebooks |
+| Gold | `gold_` | ML-ready features, signals and the training dataset | `GoldStorage.populate` / `GoldStorage.update` (SQL in `src/data/cards/storage/gold/sql/`) |
 
 ## Bronze Tables (implemented)
 
@@ -39,7 +42,6 @@ shared file. Cross-layer queries are handled via DuckDB `ATTACH` in interactive 
 |---|---|---|
 | `bronze_scryfall_cards` | full replace / upsert | All Scryfall card records |
 | `bronze_mtgjson_cards` | upsert | All MTGJson card printings |
-| `bronze_mtgjson_prices` | full replace | Current MTGJson prices per card UUID |
 | `bronze_scryfall_prices_history` | daily append | `id · snapshot_date · eur · eur_foil · usd · usd_foil · tix` (scalar FLOAT columns) |
 | `bronze_scryfall_meta_history` | daily append | `id · snapshot_date · legalities · edhrec_rank · reserved · promo_types · finishes` |
 | `bronze_mtgjson_prices_history` | daily append | EAV: `uuid · snapshot_date · retailer · tx_type · finish · price` — one row per price point (seeded from AllPrices.json, then daily from AllPricesToday.json) |
@@ -55,6 +57,14 @@ shared file. Cross-layer queries are handled via DuckDB `ATTACH` in interactive 
 | `silver_meta_history` | append (dedup on `id · snapshot_date`) | Scryfall legalities, EDHREC rank, reserved, promo_types, finishes snapshots |
 | `silver_format_staples_history` | append (dedup on `id · snapshot_date`) | MTGGoldfish `deck_pct` and `played` per format per day |
 | `silver_tournament_results_history` | append (dedup on `id · snapshot_date`) | Top-8 card appearances enriched with `oracle_id` and `scryfall_id` from `silver_cards` |
+
+## Gold Tables (implemented)
+
+Nine tables, all rebuilt in full on every run: `gold_card_features`, `gold_price_features`,
+`gold_ml_dataset`, `gold_events`, `gold_ban_price_impact`, `gold_demand_signals`,
+`gold_format_staples`, `gold_language_premiums`, `gold_tournament_signals`. Their design is
+recorded in [ADR-022](ADR-022-gold-layer-tables.md); column schemas are in
+[the data catalog](../architecture/data/table-schemas.md).
 
 ## Consequences
 
@@ -91,7 +101,6 @@ flowchart TD
         direction TB
         B1["bronze_scryfall_cards"]
         B2["bronze_mtgjson_cards"]
-        B3["bronze_mtgjson_prices"]
         BH1["bronze_scryfall_prices_history"]
         BH2["bronze_scryfall_meta_history"]
         BH3["bronze_mtgjson_prices_history"]
@@ -111,7 +120,6 @@ flowchart TD
 
     Bronze -->|"ATTACH + SELECT"| Silver
     Silver -->|"ATTACH + SELECT"| Gold
-    end
 
     subgraph ML["ML Pipeline"]
         NB["Jupyter Notebook\n/ training script"]
@@ -133,13 +141,12 @@ flowchart LR
 
     SF  --> B_SF["bronze_scryfall_cards"]
     MJC --> B_MJ["bronze_mtgjson_cards"]
-    MJP --> B_MJP["bronze_mtgjson_prices"]
     FMT --> B_FSH["bronze_format_staples_history"]
     T8  --> B_TR["bronze_tournament_results"]
 
     B_SF --> PH1["bronze_scryfall_prices_history\nid · snapshot_date · eur · eur_foil · usd · usd_foil · tix"]
     B_SF --> PH2["bronze_scryfall_meta_history\nid · snapshot_date · legalities · edhrec_rank · ..."]
-    B_MJP --> PH3["bronze_mtgjson_prices_history\nuuid · snapshot_date · retailer · tx_type · finish · price"]
+    MJP --> PH3["bronze_mtgjson_prices_history\nuuid · snapshot_date · retailer · tx_type · finish · price"]
 
     B_SF  --> S["silver_cards"]
     B_MJ  --> S

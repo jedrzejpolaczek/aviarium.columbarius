@@ -31,4 +31,4 @@ Silver = semantic selection).
   concept of which combinations matter.
 - Schema drift is detected post-pipeline by `_check_bronze_prices_schema_drift` (health.py),
   which produces WARN (not FAIL) when new or missing combinations are observed.
-- One-time migration via `scripts/migrate_bronze_prices.py` from `cards_copy.duckdb`.
+- One-time migration via `scripts/migrate_bronze_prices.py` from `cards_copy.duckdb` (run once, then deleted in commit `1b0d443`). <!-- doc-paths: historical -->

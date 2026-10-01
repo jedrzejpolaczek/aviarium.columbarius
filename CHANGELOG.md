@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Working model monitoring (ADR-034), replacing the MAPE tracker and Evidently drift report that never ran:
+  - `src/monitoring/prediction_tracker.py` — `check_and_retrain.py` records the served model's daily predictions in a separate monitoring DB (`MONITORING_DB_PATH`, backed up by `backup_data.py`) and scores each matured date against the naive forecast. The model being more than 5% worse on 3 evaluated dates alerts and triggers a retrain.
+  - `src/monitoring/drift.py` now measures drift in the 7-day return distribution rather than in price levels (normalised Wasserstein distance, threshold 0.15, alert only).
+  - Thresholds calibrated on the 2026-06..09 history; a failed monitoring step alerts and is recorded in the status file instead of being silent.
+  - Runbook §6–§6c for the new alerts.
+- `scripts/backtest_underpriced.py` — walk-forward, no-lookahead backtest of the `/underpriced` flag against the base rate; results in `notebooks/ml_models/underpriced_backtest.csv` and ADR-023 "Backtest".
+- `scripts/check_doc_paths.py` — fails CI when a document cites a repository file or directory that does not exist (it found 18).
+- `scripts/strip_notebook_paths.py` — redacts local absolute paths from notebook warning output while keeping the warnings; `--check` runs in CI.
+- `make docs-check`, and both checks in CI and the pre-push hook. CI now also runs on pushes and PRs to `dev`.
+- DATE-schema guard for the test suite (`tests/conftest.py`): any DuckDB table left by a test, or by the code under test, with a non-DATE `snapshot_date` / `tournament_date` fails the test. `tests/duckdb_helpers.create_table_from_df` builds fixture tables with the production types.
+- `.github/ISSUE_TEMPLATE/config.yml` routing security reports to `SECURITY.md`.
+
+### Changed
+- Production model: registry version 4, run `351ad6ef`, trained 2026-09-30 on `gold_snapshot_date = 2026-09-23` with the first honest walk-forward CV (3 folds). It replaces run `9c1ec7de`, which was trained across the July 2026 price-feed switch. README "Measured results" and `ML_FINDINGS.md` T7 carry its CV figures: it does not beat the naive baseline.
+- Runbook §4c: retrain with `train_model` (`check_and_retrain` only retrains on a trigger), and promote a refused run with `promote_to_production` (`rollback_model` cannot, as the run is unregistered).
+- The date-column rule lives in one place, `src/data/cards/storage/schema.py`, shared by `DuckDBWriter`, the migration script and the test guard.
+- README, CONTRIBUTING, `ML_FINDINGS.md` (now in English), ADR-001–024 (Date/Status added), and the C2–C4 architecture pages brought in line with the code. ADR-018, -020, -023 are marked Amended; ADR-008 and -021 Superseded.
+- `train_model.py` prints its instructions in English.
+
+### Fixed
+- Walk-forward CV let early stopping tune on the validation fold it then scored. On the three folds of 2026-09-30 that made LightGBM look 0.6% better than the naive baseline on Tier 1 when it was 5.1% worse; `walk_forward_cv` no longer passes the validation fold to `fit()`. No run in the registry carries `cv_mape_tier1` yet, so the first one logged after this fix is also the first honest baseline for promotion.
+- Repository URLs in README, CONTRIBUTING and `pyproject.toml` pointed at another GitHub account (404), breaking the CI badge and the clone command.
+- 95 tests ran against VARCHAR/INTEGER date columns that production has not had since 0.2.0 — the fixture drift that let the 2026-09-28 `TRIM(DATE)` failure through. All now use the production schema.
+- Silver no longer `TRIM()`s `snapshot_date`, which is DATE since the migration (broke the 2026-09-28 run).
+- `DuckDBWriter` narrows datetime64 to DATE on write, so a Gold rebuild no longer recreates date columns as TIMESTAMP; the migration script repairs TIMESTAMP columns too.
+- Desktop notifications are truncated to the length Windows accepts.
+
+### Removed
+- `src/monitoring/mape_tracker.py` and the `evidently` dependency (see ADR-034). This also removes the test that would have started failing on 2027-01-02.
+- The unverified claim "73% of flagged cards rose > 10% within 30 days" (ADR-023, `underpriced.py`), replaced by the measured backtest.
+
 ## [0.2.0] - 2026-09-26
 
 **Upgrading from 0.1.x requires one manual step.** Every `snapshot_date` and

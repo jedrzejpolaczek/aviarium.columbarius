@@ -11,11 +11,12 @@ STRATEGY PER TIER (from project pricing strategy and BAYESIAN_FINDINGS.md):
                           tier2_flag assignment.
 - Tier 3 (> 1000 EUR):    No ML flagging — too little data. Check Cardmarket manually.
 
-VALIDATION — BACKTEST (important for portfolio!):
-Check: did cards flagged 30 days ago actually appreciate?
-Historical data is in bronze_scryfall_prices_history.
-Backtest result: "73% of flagged cards rose > 10% within 30 days" —
-a concrete business metric.
+VALIDATION — BACKTEST (scripts/backtest_underpriced.py, ADR-023 "Backtest"):
+Measured 2026-09-30, 7-day horizon, no lookahead: on clean dates 55.6% of flagged
+cards rose > 10% in a week, against a 21.1% base rate for sub-€1 cards. Every flag
+was a sub-€1 card, most had just dipped, and the gain was ~€0.06 per flag before
+fees. The flag is statistically real but finds cent-level mean reversion in bulk
+cards, not investable underpricing.
 
 CONFIDENCE SCORE:
 confidence = predicted_eur / actual_eur

@@ -67,8 +67,9 @@ def _check_snapshot_date_today(
 ) -> CheckResult:
     """Assert that *table* gained rows for *today*.
 
-    Bronze stores snapshot_date as VARCHAR and Silver as DATE; DuckDB casts
-    either against the bound date parameter, so one query form serves both.
+    snapshot_date is DATE in every tier since 0.2.0. The bound date parameter
+    also matches an unmigrated VARCHAR column, since DuckDB casts it, so a
+    0.1.x database is still checked correctly.
     """
     if table not in get_tables(con):
         return CheckResult(

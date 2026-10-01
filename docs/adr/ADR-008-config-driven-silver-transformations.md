@@ -1,5 +1,8 @@
 # ADR-008: Config-Driven Silver Transformations
 
+**Date:** 2026-06-19
+**Status:** Superseded by [ADR-024](ADR-024-duckdb-compute-layer.md) — the pandas interpreter described here (`SilverTransforms`) was deleted on 2026-06-20 (commit `557fad6`). Silver transformations are now SQL in `src/data/cards/storage/silver/sql/`, and `configs/silver_config.json` is still loaded but no longer read (see the ADR-007 amendment). Kept for the reasoning, not as a description of current code.
+
 ## Context
 
 The Silver layer must transform multiple Bronze tables (cards, prices, history) using

@@ -1,5 +1,8 @@
 # ADR-021: DuckDB MAP Type for the `legalities` Column
 
+**Date:** 2026-06-19
+**Status:** Superseded in practice — `legalities` is stored as a JSON VARCHAR string (Option A), as recorded in [ADR-024](ADR-024-duckdb-compute-layer.md). The `column_types` MAP path described below no longer exists in `DuckDBWriter` (`src/data/cards/storage/base/writers.py`); read the column with `json_extract_string()`. Noted 2026-09-29.
+
 ## Context
 
 The `legalities` field (from Scryfall and MTGJson) is a Python dict mapping format names
@@ -25,7 +28,7 @@ Consumers read it as a Python dict directly without any parsing.
 Use **native MAP(VARCHAR, VARCHAR)** (Option B).
 
 This is implemented via the `column_types` parameter added to `DuckDBWriter.full_load()`,
-`upsert()`, and `append()` in `src/data/cards/storage/base.py`. When
+`upsert()`, and `append()` in `src/data/cards/storage/base.py` (since split into `base/`, without this parameter). When <!-- doc-paths: historical -->
 `column_types={"legalities": "MAP(VARCHAR, VARCHAR)"}` is passed, `_prepare_staging()`
 converts Python dicts to PyArrow MAP arrays before writing — bypassing the default JSON
 serialization path.

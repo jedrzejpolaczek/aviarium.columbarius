@@ -1,5 +1,8 @@
 # ADR-005: Two-Phase Pipeline Lifecycle
 
+**Date:** 2026-06-19
+**Status:** Accepted — details corrected 2026-09-29 (no `download` parameter; no script selects the initial phase).
+
 ## Context
 
 The data pipeline has two meaningfully different operational modes:
@@ -24,14 +27,17 @@ flag that branches internally.
 
 Use **two explicit top-level functions**: `initial_pipeline()` and `daily_pipeline()`.
 
-- `initial_pipeline` drops and recreates all tables. It accepts a `download` flag to
-  control whether source files are re-fetched.
+- `initial_pipeline(config_path)` drops and recreates all Bronze tables and reads
+  `configs/bronze_config_seed.json`, which backfills ~90 days of MTGJson price history.
+  Whether each source is re-fetched is controlled by the per-source `flag` in that
+  config, not by a function parameter.
 - `daily_pipeline` upserts card tables, appends snapshot rows, and rebuilds Silver/Gold
   incrementally.
 - Both delegate to per-tier functions (`initial_bronze_pipeline`, `daily_bronze_pipeline`,
   etc.) which in turn delegate to the storage layer.
 
-The entry point (`scripts/run_pipeline.py`) selects which phase to run.
+`scripts/run_pipeline.py` always runs `daily_pipeline`; the initial load is started
+directly (see README, "Usage").
 
 ## Consequences
 
@@ -41,8 +47,8 @@ The entry point (`scripts/run_pipeline.py`) selects which phase to run.
 - Daily runs are faster — they skip DROP/CREATE overhead and avoid re-downloading
   hundreds of MB of JSON.
 - Each phase can be tested independently with fixtures matching its preconditions.
-- Recovery paths are explicit: if Bronze is corrupt, run `initial_pipeline(download=False)`
-  to rebuild without re-downloading.
+- Recovery paths are explicit: if Bronze is corrupt, set `flag: false` in the seed config
+  and run `initial_pipeline` to rebuild from the files already in `data/raw/`.
 
 ### Negative
 - More code than a single idempotent function; some logic is duplicated between phases.

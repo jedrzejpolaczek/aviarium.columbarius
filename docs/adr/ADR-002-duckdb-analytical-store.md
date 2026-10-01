@@ -1,5 +1,8 @@
 # ADR-002: DuckDB as the Analytical Data Store
 
+**Date:** 2026-06-19
+**Status:** Accepted
+
 ## Context
 
 The project needs a persistent store for card data and price history that:

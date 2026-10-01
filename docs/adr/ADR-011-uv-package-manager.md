@@ -1,5 +1,8 @@
 # ADR-011: uv as the Python Package Manager
 
+**Date:** 2026-06-19
+**Status:** Accepted
+
 ## Context
 
 The project requires a reproducible Python environment across developer machines and

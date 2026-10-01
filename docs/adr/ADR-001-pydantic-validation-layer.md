@@ -1,5 +1,8 @@
 # ADR-001: Pydantic as the Data Validation Layer
 
+**Date:** 2026-06-19
+**Status:** Accepted
+
 ## Context
 
 The project ingests large JSON files from two external APIs — Scryfall and MTGJson.

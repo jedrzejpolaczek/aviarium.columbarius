@@ -7,4 +7,5 @@
 - [ ] `make check` passes locally (lint + format + type-check + test)
 - [ ] New behaviour is covered by tests
 - [ ] ADRs updated if an architectural decision was made
+- [ ] `CHANGELOG.md` updated under `[Unreleased]`
 - [ ] PR title is concise and describes the change

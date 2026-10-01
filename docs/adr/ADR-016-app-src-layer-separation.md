@@ -1,5 +1,8 @@
 # ADR-016: Separation of `app/` and `src/` Layers
 
+**Date:** 2026-06-19
+**Status:** Accepted
+
 ## Context
 
 The project has two top-level Python packages that could plausibly be merged:

@@ -40,34 +40,16 @@ from pathlib import Path
 import duckdb
 
 from src.data.cards.pipelines import load_config
+from src.data.cards.storage.schema import find_mistyped_date_columns
 from src.logger import get_logger, setup_logging
 
 logger = get_logger(__name__)
-
-# (tier config key, column name) → every table carrying a date-typed column.
-# Discovered by inspection rather than hard-coded blindly: the script re-checks
-# each table's current type and skips anything already migrated, so re-running
-# it is a no-op.
-_DATE_COLUMNS = ("snapshot_date", "tournament_date")
 
 _TIER_KEYS = (
     "bronze_duckdb_path",
     "silver_duckdb_path",
     "gold_duckdb_path",
 )
-
-
-def find_varchar_date_columns(
-    con: duckdb.DuckDBPyConnection,
-) -> list[tuple[str, str]]:
-    """Return (table, column) pairs still typed VARCHAR that should be DATE."""
-    found: list[tuple[str, str]] = []
-    tables = [r[0] for r in con.execute("SHOW TABLES").fetchall()]
-    for table in tables:
-        for name, dtype, *_ in con.execute(f"DESCRIBE {table}").fetchall():
-            if name in _DATE_COLUMNS and dtype == "VARCHAR":
-                found.append((table, name))
-    return found
 
 
 def unparseable_values(con: duckdb.DuckDBPyConnection, table: str, column: str) -> int:
@@ -92,12 +74,12 @@ def migrate_file(path: str, dry_run: bool) -> int:
     con = duckdb.connect(path, read_only=dry_run)
     changed = 0
     try:
-        targets = find_varchar_date_columns(con)
+        targets = find_mistyped_date_columns(con)
         if not targets:
             logger.info("%s — nothing to migrate", path)
             return 0
 
-        for table, column in targets:
+        for table, column, dtype in targets:
             bad = unparseable_values(con, table, column)
             if bad:
                 raise ValueError(
@@ -105,14 +87,20 @@ def migrate_file(path: str, dry_run: bool) -> int:
                     "parse as DATE — refusing to migrate. Inspect them first."
                 )
             if dry_run:
-                logger.info("[dry-run] would ALTER %s.%s VARCHAR → DATE", table, column)
+                logger.info(
+                    "[dry-run] would ALTER %s.%s %s → DATE", table, column, dtype
+                )
                 changed += 1
                 continue
 
             t0 = time.perf_counter()
             con.execute(f"ALTER TABLE {table} ALTER COLUMN {column} TYPE DATE")
             logger.info(
-                "ALTERed %s.%s → DATE in %.1fs", table, column, time.perf_counter() - t0
+                "ALTERed %s.%s %s → DATE in %.1fs",
+                table,
+                column,
+                dtype,
+                time.perf_counter() - t0,
             )
             changed += 1
     finally:

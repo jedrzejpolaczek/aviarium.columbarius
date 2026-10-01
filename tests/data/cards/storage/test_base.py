@@ -503,3 +503,46 @@ class TestDuckDBWriterDateColumns:
         df = pd.DataFrame({"id": ["a"], "released_at": ["2026-04-01"]})
         DuckDBWriter(mem_con).full_load(df, "tbl")
         assert self._type_of(mem_con, "tbl", "released_at") == "VARCHAR"
+
+
+class TestDuckDBWriterDateRoundTrip:
+    """A DATE column read from DuckDB and written back must stay DATE.
+
+    Regression guard for the 2026-09-29 Gold rebuild: DuckDB returns a DATE
+    column to pandas as datetime64[ns], and _serialize skipped conversion when
+    the column was "already a datetime". Writing that back widened it to
+    TIMESTAMP, so all five Gold tables regressed while Bronze and Silver — which
+    are appended to rather than recreated — stayed DATE.
+    """
+
+    def test_date_survives_a_duckdb_round_trip(self, mem_con):
+        w = DuckDBWriter(mem_con)
+        w.full_load(pd.DataFrame({"id": ["a"], "snapshot_date": ["2026-04-01"]}), "src")
+        assert {r[0]: r[1] for r in mem_con.execute("DESCRIBE src").fetchall()}[
+            "snapshot_date"
+        ] == "DATE"
+
+        # Read it back the way every Gold builder does, then write it out again.
+        round_tripped = mem_con.execute("SELECT * FROM src").df()
+        assert str(round_tripped["snapshot_date"].dtype).startswith("datetime64")
+
+        w.full_load(round_tripped, "dst")
+        assert {r[0]: r[1] for r in mem_con.execute("DESCRIBE dst").fetchall()}[
+            "snapshot_date"
+        ] == "DATE"
+
+    def test_values_are_unchanged_by_the_round_trip(self, mem_con):
+        from datetime import date
+
+        w = DuckDBWriter(mem_con)
+        w.full_load(
+            pd.DataFrame(
+                {"id": ["a", "b"], "snapshot_date": ["2026-04-01", "2026-04-02"]}
+            ),
+            "src",
+        )
+        w.full_load(mem_con.execute("SELECT * FROM src").df(), "dst")
+        got = {
+            r[0] for r in mem_con.execute("SELECT snapshot_date FROM dst").fetchall()
+        }
+        assert got == {date(2026, 4, 1), date(2026, 4, 2)}

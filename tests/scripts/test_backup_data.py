@@ -7,6 +7,14 @@ import pytest
 from scripts import backup_data
 
 
+@pytest.fixture(autouse=True)
+def _isolated_monitoring_db(tmp_path, monkeypatch):
+    """Absent unless a test creates it — never the real data/monitoring file."""
+    monkeypatch.setattr(
+        backup_data, "MONITORING_DB_PATH", str(tmp_path / "monitoring.duckdb")
+    )
+
+
 @pytest.fixture
 def fake_project(tmp_path, monkeypatch):
     """Build a fake project tree with real (minimal) Bronze/Silver/Gold
@@ -41,6 +49,23 @@ def fake_project(tmp_path, monkeypatch):
     monkeypatch.setattr(backup_data, "MLFLOW_DB_PATH", tmp_path / "mlflow.db")
     monkeypatch.setattr(backup_data, "MLRUNS_DIR", tmp_path / "mlruns")
     return tmp_path, config_path
+
+
+def test_run_backup_copies_the_monitoring_db_when_present(fake_project):
+    import duckdb
+
+    tmp_path, config_path = fake_project
+    conn = duckdb.connect(str(tmp_path / "monitoring.duckdb"))
+    conn.execute("CREATE TABLE predictions (uuid VARCHAR)")
+    conn.close()
+
+    snapshot_dir = backup_data.run_backup(
+        backup_dir=tmp_path / "backups", keep_last=7, config_path=str(config_path)
+    )
+
+    conn = duckdb.connect(str(snapshot_dir / "monitoring.duckdb"), read_only=True)
+    assert conn.execute("SHOW TABLES").fetchall() == [("predictions",)]
+    conn.close()
 
 
 def test_run_backup_returns_timestamped_snapshot_dir_under_backup_dir(fake_project):

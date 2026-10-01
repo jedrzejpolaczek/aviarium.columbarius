@@ -1,5 +1,8 @@
 # ADR-010: mypy Strict Mode as a Hard Quality Gate
 
+**Date:** 2026-06-19
+**Status:** Accepted
+
 ## Context
 
 The pipeline processes hundreds of thousands of records through a chain of

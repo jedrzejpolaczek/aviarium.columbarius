@@ -2,8 +2,9 @@
 
 Retraining workflow:
     1. :func:`should_retrain` checks two independent signals in priority order:
-       - Ban/unban event today → immediate retrain (don't wait for MAPE).
-       - MAPE > 30% for 3 consecutive days → drift-induced retrain.
+       - Ban/unban event today → immediate retrain.
+       - The served model worse than the naive "no change" forecast on the
+         latest evaluated prediction dates (``prediction_tracker``, ADR-034).
     2. :func:`retrain` builds a fresh LightGBM model via walk-forward CV,
        then trains a final model on the full latest snapshot, and logs
        everything to MLflow with the snapshot date as a lineage parameter.
@@ -30,7 +31,7 @@ import pandas as pd
 
 from src.logger import get_logger
 from src.monitoring.event_trigger import get_todays_events, has_ban_event_today
-from src.monitoring.mape_tracker import compute_rolling_mape, is_mape_alert
+from src.monitoring.prediction_tracker import is_degraded
 
 
 logger = get_logger(__name__)
@@ -38,21 +39,26 @@ logger = get_logger(__name__)
 MODEL_REGISTRY_NAME = "mtg_price_model"
 
 
-def should_retrain(conn: duckdb.DuckDBPyConnection) -> tuple[bool, str]:
+def should_retrain(
+    conn: duckdb.DuckDBPyConnection,
+    skill_df: pd.DataFrame | None = None,
+) -> tuple[bool, str]:
     """Decide whether retraining is needed and return the triggering reason.
 
     Checks two independent signals in priority order:
     1. Ban/unban event today → immediate retrain (format changes cause large
-       price drops within 24 hours; waiting for MAPE wastes two days).
-    2. MAPE > 30% for 3 consecutive days → accumulated prediction error.
+       price drops within 24 hours).
+    2. The served model scored worse than the naive forecast on the latest
+       evaluated prediction dates (:func:`prediction_tracker.is_degraded`).
 
     Args:
-        conn: Open DuckDB connection with ``gold_events`` and
-              ``gold_predictions`` / ``gold_price_features`` in scope.
+        conn:     Open DuckDB connection with ``gold_events`` in scope.
+        skill_df: Output of :func:`prediction_tracker.daily_skill`. ``None`` or
+                  empty skips the second check (nothing has matured yet).
 
     Returns:
         Tuple of ``(should_retrain: bool, reason: str)`` where ``reason`` is
-        one of ``"ban_event"``, ``"mape_threshold"``, or ``"no_trigger"``.
+        one of ``"ban_event"``, ``"model_worse_than_naive"``, or ``"no_trigger"``.
     """
     if has_ban_event_today(conn):
         events = get_todays_events(conn)
@@ -61,12 +67,12 @@ def should_retrain(conn: duckdb.DuckDBPyConnection) -> tuple[bool, str]:
         )
         return True, "ban_event"
 
-    mape_df = compute_rolling_mape(conn)
-    if is_mape_alert(mape_df):
+    if skill_df is not None and is_degraded(skill_df):
         logger.info(
-            "MAPE alert triggered. Last 3 days:\n%s", mape_df.tail(3).to_string()
+            "Served model worse than naive on the latest evaluated dates:\n%s",
+            skill_df.tail(3).to_string(),
         )
-        return True, "mape_threshold"
+        return True, "model_worse_than_naive"
 
     return False, "no_trigger"
 
@@ -95,7 +101,7 @@ def retrain(conn: duckdb.DuckDBPyConnection, snapshot_date: str) -> str:
                       (either no lag features or no t+7 targets available).
     """
     # Deferred: lightgbm/mlflow/sklearn are only needed when actually retraining,
-    # not for the lightweight should_retrain() drift/MAPE checks other monitoring
+    # not for the lightweight should_retrain() checks other monitoring
     # modules run continuously — keeps `import src.monitoring.retraining` cheap.
     from src.ml.features.lag import build_target
     from src.ml.features.pipeline import (

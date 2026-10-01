@@ -1,5 +1,8 @@
 # ADR-020: Monitoring and Automated Retraining Architecture
 
+**Date:** 2026-06-19
+**Status:** Superseded in part by [ADR-034](ADR-034-skill-vs-naive-and-return-drift-monitoring.md) (2026-09-30) — the MAPE and drift signals were replaced; the ban/unban trigger and the promotion strategy below still apply. See [Amendment](#amendment-2026-09-29-state-of-the-three-signals) for why.
+
 ## Context
 
 A deployed ML model degrades over time.  In the MTG price prediction domain
@@ -29,7 +32,7 @@ Use **Option B — Dual-signal monitoring** with four modules:
 
 | Module             | Responsibility                                        |
 |--------------------|-------------------------------------------------------|
-| `mape_tracker.py`  | Write predictions to `gold_predictions`; compute rolling MAPE |
+| `mape_tracker.py`  | Write predictions to `gold_predictions`; compute rolling MAPE (removed 2026-09-30, see ADR-034) | <!-- doc-paths: historical -->
 | `event_trigger.py` | Query `gold_events`; detect same-day bans/unbans       |
 | `drift.py`         | Evidently report on `eur`/`log_eur` distribution shift |
 | `retraining.py`    | Orchestrate: check signals → retrain → promote         |
@@ -111,3 +114,38 @@ alias reassignment, not a code deployment.
 - ``retrain()`` duplicates the feature preparation logic from ``app/main.py``
   and notebook 02.  This is intentional (the modules are independent by ADR-016)
   but is a maintenance surface if the feature set changes.
+
+## Amendment (2026-09-29): state of the three signals
+
+An investigation on 2026-09-29 found that only the ban/unban signal can trigger a
+retrain. The two other signals described above do not run:
+
+- **MAPE: never fed.** Nothing in `app/`, `scripts/` or the pipeline calls
+  `save_predictions`, and nothing has since the first commit. `gold_predictions` is
+  therefore always empty and `is_mape_alert` always returns `False`. Three further
+  defects would stop it even if predictions were saved:
+  - `gold_predictions` is missing from `GoldStorage._KNOWN_GOLD_TABLES`, so the nightly
+    Gold rebuild would drop it as an orphaned table before any prediction was 7 days old.
+  - `compute_rolling_mape` windows on `CURRENT_DATE - 7 days`. Only one prediction date in
+    that window can already have its t+7 actual price, but the alert needs 3 rows, so
+    the alert can never fire. A simulation with a model that is 50% wrong every day
+    confirms this.
+  - The 30% threshold is uncalibrated. Price-level error of the naive "no change"
+    forecast, which LightGBM barely beats, is 9–12% on normal days, driven by cards
+    under €1 (75% of the catalogue). It peaked at 28.5% during the July price-feed switch.
+    The absolute threshold measures market volatility, not model degradation.
+- **Drift: not called.** `compute_drift_report` has no production caller. Run on real
+  history, Evidently's normalised Wasserstein distance on the catalogue-wide `eur`
+  distribution stays at 0.000–0.005 against a 0.1 threshold, including across the July
+  feed switch. A ban moves a handful of cards out of ~80 000, which this statistic
+  cannot see.
+- **Ban/unban events: work as described**, with one caveat. `event_date` is the
+  first snapshot showing the legality change, and the check matches it against
+  `date.today()` exactly, so a day on which `check_and_retrain` does not run loses that
+  event.
+- **Alias as the single source of truth: superseded.** The API loads `MODEL_RUN_ID`, not
+  the `production` alias; `src/monitoring/serving_check.py` alerts when they diverge.
+
+Resolved 2026-09-30 by [ADR-034](ADR-034-skill-vs-naive-and-return-drift-monitoring.md): the MAPE
+signal became a skill-vs-naive check on recorded predictions, and drift now
+measures 7-day returns instead of price levels.

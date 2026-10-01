@@ -1,5 +1,8 @@
 # ADR-024: DuckDB as the Compute Layer for Large History Queries
 
+**Date:** 2026-06-20
+**Status:** Accepted
+
 ## Context
 
 ADR-002 established DuckDB as the data store and showed a `DuckDB → pandas → ML`

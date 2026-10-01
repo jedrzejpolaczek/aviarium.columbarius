@@ -79,7 +79,7 @@ doesn't re-flag them as missed work:
   formats into rows to collapse this into one expression, and rejected it:
   each format's block is single, self-contained SQL: the MTG format list
   changes rarely (the last addition predates this project), and an unpivot
-  would force `gold_events.sql` and `ml_dataset.py` — which consume these
+  would force `events.sql` and `ml_dataset.py` — which consume these
   columns in wide, per-format form — to pivot back, adding indirection for
   no safety gain. Same cost/benefit as the `silver_cards.sql` COALESCE
   precedent above.
@@ -87,7 +87,7 @@ doesn't re-flag them as missed work:
 ## Consequences
 
 ### Positive
-- A contributor (human or agent) writing a new storage tier, script, or SQL
+- A contributor writing a new storage tier, script, or SQL
   feature file has one table to check before writing a new guard
   clause/try-except/bootstrap from scratch.
 - Future audits can check this table first and skip re-investigating
@@ -101,4 +101,4 @@ doesn't re-flag them as missed work:
 
 ### Neutral
 - This ADR does not introduce any new abstraction itself; it only indexes
-  abstractions introduced by the round-3 remediation plan.
+  abstractions introduced by the 2026-07-08 maintainability refactoring.

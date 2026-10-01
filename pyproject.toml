@@ -17,7 +17,6 @@ classifiers = [
 ]
 dependencies = [
     "duckdb>=1.5.2",
-    "evidently>=0.4.36",
     "httpx>=0.28.0",
     "lightgbm>=4.6.0",
     "matplotlib>=3.10.9",
@@ -43,6 +42,9 @@ dependencies = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "legacy_date_schema: the test deliberately builds pre-0.2.0 VARCHAR date columns; skips the DATE schema guard in tests/conftest.py",
+]
 filterwarnings = [
     "ignore:.*httpx.*starlette.*deprecated",
     "ignore:Downcasting object dtype arrays:FutureWarning",
@@ -90,8 +92,6 @@ exclude = ["^_ADDONS/"]
 module = [
     "shap",
     "shap.*",
-    "evidently",
-    "evidently.*",
     "sklearn",
     "sklearn.*",
     "plyer",
@@ -115,8 +115,8 @@ disallow_subclassing_any = false
 
 
 [project.urls]
-Homepage = "https://github.com/jpolaczek/aviarium.columbarius"
-Repository = "https://github.com/jpolaczek/aviarium.columbarius"
+Homepage = "https://github.com/jedrzejpolaczek/aviarium.columbarius"
+Repository = "https://github.com/jedrzejpolaczek/aviarium.columbarius"
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -4,9 +4,8 @@ import json
 
 import duckdb
 import pandas as pd
-from pandas.api.types import is_datetime64_any_dtype
-
 from src.data.cards.storage.errors import StorageWriteError
+from src.data.cards.storage.schema import DATE_COLUMNS
 
 from src.logger import get_logger
 
@@ -30,8 +29,8 @@ class DuckDBWriter:
     def __init__(self, con: duckdb.DuckDBPyConnection) -> None:
         self._con = con
 
-    DATE_COLUMNS = ("snapshot_date", "tournament_date")
-    """Columns that must land as DATE, never VARCHAR.
+    DATE_COLUMNS = DATE_COLUMNS
+    """Columns that must land as DATE, never VARCHAR (see ``storage/schema.py``).
 
     Every one of these was VARCHAR in all three tiers until the 2026-09-26
     migration, because the ingestion side hands DuckDB ISO strings and
@@ -68,7 +67,14 @@ class DuckDBWriter:
             )
 
         for col in cls.DATE_COLUMNS:
-            if col in df.columns and not is_datetime64_any_dtype(df[col]):
+            if col in df.columns:
+                # Unconditional, including when the column is already
+                # datetime64: that is precisely the case that needs narrowing.
+                # DuckDB hands a DATE column back to pandas as datetime64[ns],
+                # and writing that straight back produces a TIMESTAMP column.
+                # Skipping it here (as an "already a date" optimisation) is how
+                # the 2026-09-29 Gold rebuild recreated all five of its tables
+                # as TIMESTAMP while Bronze and Silver stayed DATE.
                 df[col] = pd.to_datetime(df[col], errors="raise").dt.date
 
         return df

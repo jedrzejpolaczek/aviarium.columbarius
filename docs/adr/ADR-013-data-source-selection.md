@@ -1,5 +1,8 @@
 # ADR-013: Data Source Selection
 
+**Date:** 2026-06-19
+**Status:** Accepted
+
 ## Context
 
 The pipeline needs several categories of data to support card price prediction:
