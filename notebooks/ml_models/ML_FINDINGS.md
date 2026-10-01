@@ -70,6 +70,20 @@ MAE on the log1p return scale:
 | **Mean** | | **0.025200** | **0.023985** | 0.011839 (naive 0.010363) | 0.007608 (naive 0.006905) |
 
 - **LightGBM does not beat naive under CV:** 5% worse on Tier 1, 14% on Tier 2 and 10% on Tier 3.
+- **By price band** (recomputed 2026-10-01 with the same folds; LightGBM MAE vs naive):
+
+  | Band | Cards/fold | Flat after 7d | Fold 0 | Fold 1 | Fold 2 |
+  |---|---:|---:|---:|---:|---:|
+  | < €1 | ~60 100 | 35% | +20.5% | 0.0% | −0.8% |
+  | €1–10 | ~15 700 | 15% | +12.6% | +0.2% | −2.9% |
+  | €10–100 | ~4 000 | 24% | +35.5% | +0.2% | −1.3% |
+  | €100–1000 | ~530 | 77% | +31.1% | +0.5% | +5.6% |
+  | ≥ €1000 | ~140 | 88% | +44.8% | +0.4% | +20.1% |
+
+  On the clean fold the model adds a small edge where prices actually move (best at
+  €1–10) and loses where they almost never do (≥ €100), so any predicted move there is
+  error. A threshold below which the model abstains and returns "no change" for
+  expensive cards is worth testing.
 - **Fold 0 is the outlier.** Its training labels span the July price-feed switch. The only
   fold on clean data both ends (fold 2) has LightGBM 1.8% better on Tier 1, which three
   folds cannot establish.

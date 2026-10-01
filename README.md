@@ -352,6 +352,18 @@ Exploratory and confirmatory analysis behind the feature set and modelling choic
 
 Per fold, Tier 1: LightGBM is 19% worse on fold 0 (0.025339 vs 0.021252), level on fold 1 (0.024447 vs 0.024424) and **1.8% better on fold 2** (0.025813 vs 0.026280). Fold 0 trains on the week of the July price-feed switch, when almost every price jumped at once, and the model learns that jump as if it were a pattern. Fold 2 is the only fold trained and validated entirely on the current feed.
 
+**By price band** (same folds; LightGBM's MAE relative to naive, negative = LightGBM better):
+
+| Price band | Cards per fold | Unchanged after 7 days | Fold 0 (feed switch) | Fold 1 | Fold 2 (clean) |
+|---|---:|---:|---:|---:|---:|
+| < €1 | ~60 100 | 35% | +20.5% | 0.0% | **−0.8%** |
+| €1–10 | ~15 700 | 15% | +12.6% | +0.2% | **−2.9%** |
+| €10–100 | ~4 000 | 24% | +35.5% | +0.2% | **−1.3%** |
+| €100–1000 | ~530 | 77% | +31.1% | +0.5% | +5.6% |
+| ≥ €1000 | ~140 | 88% | +44.8% | +0.4% | +20.1% |
+
+The tier averages hide two opposite patterns. On the one clean fold, LightGBM beats naive in every band under €100, most clearly at €1–10, where prices move most often. It loses on cards above €100, most of which do not change price at all within a week, where any predicted move is an error. Fold 0 is poor everywhere, for the reason given above. (Recomputed 2026-10-01 with the same CV; fold-level MAE differs from the logged run in the fourth decimal because LightGBM is multi-threaded.)
+
 **The honest summary: under cross-validation LightGBM does not beat "the price will not change".** Seven-day card price movement is close to a random walk. The one clean fold hints at a small edge that three folds cannot establish. The next checkpoints are 6 folds (≈2026-10-21) and 14 folds (≈2026-12-16).
 
 These figures replace an earlier estimate that looked better, for two documented reasons:
